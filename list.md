@@ -57,7 +57,7 @@ not_doing:
   - No audio decoding, model loading, or GPU work.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The eval substrate that later real metrics plug into. Inputs: a stub synth input and a pluggable metric set. Bounds: the five fixed keys sim_o, wer, mos_proxy, ttfb_ms, rtf. Outputs: a metrics JSON object with all five keys present, finite numbers or explicit null. Errors/edges: an absent metric is null not omitted; a metric set missing a required key is a typed error, not a partial write. Invariant: the JSON schema (five keys, present-or-null) holds for every run. Done-check: the four criteria over the stub run and the missing-key path.
