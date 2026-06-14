@@ -194,7 +194,7 @@ The ethics gate that must precede any cloning ship. Inputs: the project's consen
 ### T-01.01  Normalize text
 id: T-01.01
 phase: 1
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -205,8 +205,12 @@ criteria:
 not_doing:
   - No number/date/currency expansion (that is T-01.02).
   - No language-specific transliteration or accent stripping.
-test_files: []
-criteria_map: {}
+test_files: [tests/golden/normalize/casing_preserved.expected, tests/golden/normalize/casing_preserved.in, tests/golden/normalize/nfc_accent.expected, tests/golden/normalize/nfc_accent.in, tests/golden/normalize/nfc_caps_preserved.expected, tests/golden/normalize/nfc_caps_preserved.in, tests/golden/normalize/ws_collapse.expected, tests/golden/normalize/ws_collapse.in, tests/golden/normalize/ws_internal_runs.expected, tests/golden/normalize/ws_internal_runs.in, tests/normalize.rs, tests/normalize_golden.rs]
+criteria_map:
+  C1: [nfc_composes_combining_acute_to_precomposed, nfc_handles_lone_combining_mark_without_panic]
+  C2: [collapses_whitespace_runs_and_trims_ends, collapsed_output_has_no_other_whitespace_or_runs, single_interior_space_is_preserved, all_whitespace_trims_to_empty]
+  C3: [golden_cases_match_expected_bytes, golden_corpus_is_non_empty]
+  C4: [preserves_intra_word_casing, does_not_lowercase_mixed_case]
 attempts: 1
 last_failure: ""
 ---
