@@ -1,7 +1,7 @@
 ### T-00.01  Scaffold the Cargo workspace
 id: T-00.01
 phase: 0
-status: pending
+status: done
 depends_on: []
 stack: rust
 criteria:
@@ -11,12 +11,13 @@ criteria:
 not_doing:
   - No crate internals beyond an empty lib/bin target each.
   - No dependency wiring beyond what empty crates need to build.
-test_files: []
-criteria_map: {}
+test_files: [tests/workspace_scaffold.rs]
+criteria_map:
+  C1: [test_root_cargo_declares_workspace_table, test_root_cargo_sets_resolver_two, test_member_crates_have_buildable_target]
+  C2: [test_workspace_lists_all_eleven_members, test_all_eleven_member_crates_have_manifests, test_workspace_has_exactly_eleven_members]
+  C3: [test_member_crates_define_no_unit_tests, test_member_crates_have_no_integration_test_dirs]
 attempts: 2
-last_failure: |
-  wrong red: tests fail to compile for a reason other than a missing symbol (test-authoring error):
-  error: could not find `Cargo.toml` in `/home/floofy/development/syrinx-build/.ratchet/worktrees/T-00.01` or any parent directory
+last_failure: ""
 ---
 The root surface every other task attaches to. Inputs: Cargo manifests only. Outputs: a compiling eleven-crate workspace and a green empty test run. Errors/edges: a manifest that fails to parse is the only failure, surfaced by cargo. Invariant: the workspace compiles from here forward. Done-check: the three cargo-observable criteria.
 
