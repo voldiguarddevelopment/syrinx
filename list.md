@@ -208,7 +208,7 @@ not_doing:
 test_files: []
 criteria_map: {}
 attempts: 1
-last_failure: ""
+last_failure: red phase produced no test files under `tests/`
 ---
 The deterministic entry point of the frontend. Inputs: an arbitrary `&str` of user text, bounded only by available memory. Outputs: a `String` in Unicode NFC with whitespace runs collapsed to single ASCII spaces and ends trimmed, casing untouched. Errors/edges: empty input returns the empty string; lone combining marks and mixed CR/LF/tab all normalize without panic. Invariant: `normalize` is idempotent — `normalize(normalize(x)) == normalize(x)`. Done-check: the four criteria, the golden suite, and the idempotence property test.
 
