@@ -194,21 +194,21 @@ The ethics gate that must precede any cloning ship. Inputs: the project's consen
 ### T-01.01  Normalize text
 id: T-01.01
 phase: 1
-status: blocked
+status: pending
 depends_on: [T-00.01]
 stack: rust
 criteria:
   - C1: `syrinx_frontend::normalize::normalize("Café\u{0301}")` returns "café" in NFC (the precomposed U+00E9), so the output byte length is 5 not 6 and `is_nfc` holds.
   - C2: `normalize("  Hello\tWorld \r\n")` collapses runs of whitespace to single U+0020 spaces and trims ends, returning exactly "Hello World" (no leading/trailing space, no tab, no CR/LF).
-  - C3: a golden suite under `crates/syrinx-frontend/tests/golden/normalize/` of (input,expected) pairs passes byte-for-byte; mutating any single expected file's bytes makes that case fail.
+  - C3: a repo-root integration test `tests/normalize_golden.rs` reads (input,expected) pairs from the repo-root `tests/golden/normalize/` and asserts `syrinx_frontend::normalize::normalize` reproduces each expected output byte-for-byte; mutating any single expected file's bytes makes that case fail.
   - C4: `normalize` preserves intra-word casing and does NOT lowercase, so `normalize("iPhone XR")` returns "iPhone XR" (casing folding is a separate, opt-in concern, off by default).
 not_doing:
   - No number/date/currency expansion (that is T-01.02).
   - No language-specific transliteration or accent stripping.
 test_files: []
 criteria_map: {}
-attempts: 3
-last_failure: red phase produced no test files under `tests/`
+attempts: 0
+last_failure: ""
 ---
 The deterministic entry point of the frontend. Inputs: an arbitrary `&str` of user text, bounded only by available memory. Outputs: a `String` in Unicode NFC with whitespace runs collapsed to single ASCII spaces and ends trimmed, casing untouched. Errors/edges: empty input returns the empty string; lone combining marks and mixed CR/LF/tab all normalize without panic. Invariant: `normalize` is idempotent — `normalize(normalize(x)) == normalize(x)`. Done-check: the four criteria, the golden suite, and the idempotence property test.
 
@@ -409,7 +409,7 @@ depends_on: [T-01.01, T-01.02, T-01.07]
 stack: rust
 criteria:
   - C1: `cargo test -p syrinx-frontend` runs the golden-file suite covering normalize, number-expansion, and SSML and exits 0 with all golden cases passing.
-  - C2: the suite is driven by golden files under `crates/syrinx-frontend/tests/golden/`; mutating any single golden INPUT file changes the produced output so its paired case fails, proving the goldens actually gate behaviour.
+  - C2: the suite is driven by golden files under the repo-root `tests/golden/`; mutating any single golden INPUT file changes the produced output so its paired case fails, proving the goldens actually gate behaviour.
   - C3: the suite enumerates every golden fixture directory automatically (a newly added (input,expected) pair is picked up without editing the test harness), and an input with no matching expected file fails the run rather than silently skipping.
 not_doing:
   - No CI/workflow YAML wiring (that is a Phase 0 concern).

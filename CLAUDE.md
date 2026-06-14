@@ -107,6 +107,25 @@ weight loading) are human-and-GPU territory — their tasks are blocked.
 
 ---
 
+## Where frozen tests live (read before every RED — this is load-bearing)
+
+The harness detects a test file **only** by the repo-root `tests/` prefix
+(`is_test_file` = path starts with `tests/`). A RED phase whose tests land
+ANYWHERE else (a workspace member's `crates/<crate>/tests/`, or unit tests inside
+`crates/<crate>/src/*.rs`) produces **"red phase produced no test files under
+`tests/`"** and the task stalls. So:
+
+- **Every frozen test file goes at the repo-root `tests/*.rs`** (e.g.
+  `tests/normalize_golden.rs`), and its golden data under the repo-root
+  `tests/golden/...`. NOT under `crates/*/tests/`.
+- A repo-root `tests/*.rs` calls into a member crate's API
+  (`use syrinx_frontend::normalize::normalize;`), so the GREEN phase adds that
+  member as a dependency of the root package. The root `Cargo.toml` is BOTH a
+  `[package]` (so `cargo test` runs the root `tests/`) AND a `[workspace]` — keep
+  it that way; do not turn it into a virtual (package-less) workspace.
+- The `COVERAGE:` line still maps each criterion to the test names you wrote in
+  those repo-root files.
+
 ## Passing the mutation gate (re-read every RED and GREEN phase)
 
 The mutation gate flips operators (`==`→`!=`, `>=`→`>`, `&&`→`||`, `+`→`-`, …) in

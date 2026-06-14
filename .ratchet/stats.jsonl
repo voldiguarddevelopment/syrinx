@@ -1,0 +1,1 @@
+{"run_id":"run-1781474453265","cost":14.163908000000001,"tasks_done":3,"tasks_escalated":0,"attempts":{"3":2,"4":1},"gate_failures":{"fail-right":1,"mutation":1},"gate_failures_by_stack":{"rust":{"fail-right":1,"mutation":1}},"wall_clock_secs":2813}
