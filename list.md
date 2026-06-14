@@ -13,7 +13,7 @@ not_doing:
   - No dependency wiring beyond what empty crates need to build.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The root surface every other task attaches to. Inputs: Cargo manifests only. Outputs: a compiling eleven-crate workspace and a green empty test run. Errors/edges: a manifest that fails to parse is the only failure, surfaced by cargo. Invariant: the workspace compiles from here forward. Done-check: the three cargo-observable criteria.
