@@ -29,3 +29,11 @@ members = [
     "crates/syrinx-eval",
     "crates/syrinx-cli",
 ]
+
+# Dev-deps for the frozen integration tests under tests/. `syrinx-eval` hosts the
+# eval-harness skeleton (T-00.03); `serde_json` is used by the tests to parse the
+# metrics JSON the harness writes. These appear on the root package only, so they
+# do not touch the [workspace]/members assertions the scaffold tests pin.
+[dev-dependencies]
+syrinx-eval = { path = "crates/syrinx-eval" }
+serde_json = "1"
