@@ -13,7 +13,7 @@ not_doing:
   - No dependency wiring beyond what empty crates need to build.
 test_files: []
 criteria_map: {}
-attempts: 1
+attempts: 2
 last_failure: |
   wrong red: tests fail to compile for a reason other than a missing symbol (test-authoring error):
   error: could not find `Cargo.toml` in `/home/floofy/development/syrinx-build/.ratchet/worktrees/T-00.01` or any parent directory
