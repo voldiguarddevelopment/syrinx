@@ -194,7 +194,7 @@ The ethics gate that must precede any cloning ship. Inputs: the project's consen
 ### T-01.01  Normalize text
 id: T-01.01
 phase: 1
-status: pending
+status: blocked
 depends_on: [T-00.01]
 stack: rust
 criteria:
