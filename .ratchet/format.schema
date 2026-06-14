@@ -1,0 +1,17 @@
+# .ratchet/format.schema — canonical task record (PLAN.md Part A, machine form)
+#
+# Each task is a fenced record: a `### T-<phase>.<seq> <title>` header, rigid
+# YAML-shaped fields, a `---` separator, then free prose (never parsed).
+#
+# Rigid fields (id through criteria_map):
+#   id            T-<phase>.<seq>[<split-suffix>]
+#   phase         integer, must equal the phase in the id
+#   status        pending | red | green | done | split | blocked   (list.md only)
+#   depends_on    [task ids]                                         resolvable
+#   stack         language/runtime
+#   criteria      list of `Cn: <falsifiable assertion>`             >= 1
+#   not_doing     list of scope exclusions
+#   test_files    [paths]                                           (list.md only)
+#   criteria_map  Cn: [test names]                                  (list.md only)
+#   attempts      integer                                           (list.md only)
+#   last_failure  string or | block                                 (list.md only)

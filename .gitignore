@@ -1,0 +1,30 @@
+# Rust build artifacts
+/target
+**/target
+Cargo.lock
+
+# Ratchet harness state (run-local; never committed)
+.ratchet/worktrees/
+.ratchet/runs/
+.ratchet/audit.key
+.ratchet/spend.json
+.ratchet/*.env
+
+# Local secrets / environment — NEVER commit
+.env
+.env*
+*.env
+
+# Model weights / corpora (large, licensed; tracked out-of-band)
+/weights/
+/corpus/
+*.safetensors
+*.gguf
+*.bin
+*.wav
+*.flac
+*.mp3
+
+# Scratch
+/scratch/
+*.tmp

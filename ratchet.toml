@@ -1,0 +1,32 @@
+# Syrinx — Ratchet harness config.
+# Run:  cd ~/development/syrinx-build && ratchet run
+# (loads the document trio, drives the test-first loop, serves the web dashboard).
+
+[project]
+stack = "rust"
+root  = "."
+
+[claude]
+model      = "claude-opus-4-8"
+extra_args = ["--dangerously-skip-permissions"]
+
+[budget]
+max_attempts_per_task = 6
+max_iterations        = 600
+
+# Web control panel: `ratchet run` serves the dashboard at http://localhost:7878.
+# operator + [web.allow] gate the run-control buttons (localhost-only anyway).
+[web]
+enabled  = true
+port     = 7878
+operator = true
+
+[web.allow]
+run    = true
+cancel = true
+verify = true
+
+# GitHub: public repo voldiguarddevelopment/syrinx. Token is env-only (CI_TOKEN),
+# never here. Remote gates can be enabled once the gate workflows are wired.
+[github]
+repo = "voldiguarddevelopment/syrinx"
