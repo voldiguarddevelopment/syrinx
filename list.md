@@ -232,7 +232,7 @@ not_doing:
   - No Roman-numeral or phone-number expansion.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Numeric verbalization over already-normalized text. Inputs: a `&str` that may contain currency, dates, decimals, ordinals, and cardinals. Outputs: a `String` with each numeric token replaced by its spoken English form, non-numeric spans passed through verbatim. Errors/edges: singular vs plural currency, date vs decimal disambiguation, and ordinal suffix selection are all pinned on both sides; an out-of-range date component yields the cardinal fallback rather than a panic. Invariant: tokens with no numeric content are byte-identical in the output. Done-check: the four concrete input→output criteria plus a passthrough case.
