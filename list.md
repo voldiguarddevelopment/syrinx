@@ -83,7 +83,7 @@ not_doing:
 test_files: []
 criteria_map: {}
 attempts: 1
-last_failure: ""
+last_failure: surviving mutant at crates/syrinx-eval/src/lib.rs:74 (cmp-eq-to-ne) — frozen tests do not kill it
 ---
 The immutability mechanism, not the audio set. Inputs: an eval-set directory of files. Bounds: SHA-256 per file, full-membership check. Outputs: a checksum manifest and a verify() verdict. Errors/edges: a tampered byte names the file in a typed error; a missing or extra file is a typed membership-mismatch naming the path; only a byte-identical, membership-identical set returns Ok. Invariant: verify() is Ok iff the set is byte-for-byte and membership-identical to the manifest. Done-check: the four criteria over clean, tampered, and membership-drift cases.
 
