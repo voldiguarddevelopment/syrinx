@@ -44,7 +44,7 @@ The merge gate over the whole workspace. Inputs: a PR against the GitHub repo. B
 ### T-00.03  Build the eval-harness skeleton
 id: T-00.03
 phase: 0
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -55,10 +55,14 @@ criteria:
 not_doing:
   - No real SIM-o/WER/MOS/latency computation — the stub input and stub metrics only.
   - No audio decoding, model loading, or GPU work.
-test_files: []
-criteria_map: {}
+test_files: [tests/eval_harness.rs]
+criteria_map:
+  C1: [test_default_run_writes_all_five_keys, test_default_run_writes_no_keys_beyond_the_five, test_required_keys_constant_is_exactly_the_five]
+  C2: [test_default_run_values_are_all_finite_numbers]
+  C3: [test_metric_yielding_none_is_serialized_as_null, test_metrics_with_results_are_not_null, test_null_metric_run_still_has_exactly_five_keys]
+  C4: [test_complete_set_does_not_error, test_missing_key_returns_typed_error_naming_it, test_missing_key_error_names_the_actual_omitted_key, test_missing_key_writes_no_partial_file]
 attempts: 3
-last_failure: red phase produced no test files under `tests/`
+last_failure: ""
 ---
 The eval substrate that later real metrics plug into. Inputs: a stub synth input and a pluggable metric set. Bounds: the five fixed keys sim_o, wer, mos_proxy, ttfb_ms, rtf. Outputs: a metrics JSON object with all five keys present, finite numbers or explicit null. Errors/edges: an absent metric is null not omitted; a metric set missing a required key is a typed error, not a partial write. Invariant: the JSON schema (five keys, present-or-null) holds for every run. Done-check: the four criteria over the stub run and the missing-key path.
 
