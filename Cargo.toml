@@ -37,3 +37,9 @@ members = [
 [dev-dependencies]
 syrinx-eval = { path = "crates/syrinx-eval" }
 serde_json = "1"
+# T-01.01 frontend frozen tests drive the deterministic text normalizer through
+# the root `tests/`. `unicode-normalization` lets the C1 test assert `is_nfc`
+# directly. RED: `syrinx-frontend` exposes no `normalize` module yet, so the test
+# target fails to build; GREEN adds it.
+syrinx-frontend = { path = "crates/syrinx-frontend" }
+unicode-normalization = "0.1"
