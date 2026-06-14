@@ -36,14 +36,14 @@ type Metric = Box<dyn Fn(&StubInput) -> Option<f64>>;
 /// A pluggable set of metrics keyed by name. [`run`] requires the set to cover
 /// every one of [`REQUIRED_KEYS`]; extra keys are never emitted.
 pub struct MetricSet {
-    entries: Vec<(String, Metric)>,
+    entries: BTreeMap<String, Metric>,
 }
 
 impl MetricSet {
     /// An empty set. Populate it with [`register`](MetricSet::register).
     pub fn new() -> Self {
         MetricSet {
-            entries: Vec::new(),
+            entries: BTreeMap::new(),
         }
     }
 
@@ -52,7 +52,7 @@ impl MetricSet {
     where
         F: Fn(&StubInput) -> Option<f64> + 'static,
     {
-        self.entries.push((key.to_string(), Box::new(metric)));
+        self.entries.insert(key.to_string(), Box::new(metric));
     }
 
     /// The default five-metric set: one stub metric per required key, each
@@ -69,10 +69,7 @@ impl MetricSet {
 
     /// The metric registered under `key`, if any.
     fn get(&self, key: &str) -> Option<&Metric> {
-        self.entries
-            .iter()
-            .find(|(k, _)| k.as_str() == key)
-            .map(|(_, metric)| metric)
+        self.entries.get(key)
     }
 }
 
