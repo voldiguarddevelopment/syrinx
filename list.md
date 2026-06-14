@@ -69,7 +69,7 @@ The eval substrate that later real metrics plug into. Inputs: a stub synth input
 ### T-00.04  Checksum the frozen eval set
 id: T-00.04
 phase: 0
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -80,10 +80,14 @@ criteria:
 not_doing:
   - No encryption, signing, or the eval audio clips/transcripts themselves.
   - No hashing of files outside the declared eval-set directory.
-test_files: []
-criteria_map: {}
+test_files: [tests/eval_manifest.rs]
+criteria_map:
+  C1: [test_manifest_has_exactly_one_entry_per_file, test_manifest_keys_are_the_relative_paths, test_manifest_digests_are_lowercase_hex_sha256, test_written_manifest_round_trips_through_disk]
+  C2: [test_verify_ok_on_unchanged_set, test_verify_ok_after_round_trip_through_disk]
+  C3: [test_tampered_byte_yields_digest_mismatch_naming_file, test_unchanged_set_is_not_a_digest_mismatch]
+  C4: [test_missing_file_yields_membership_mismatch_naming_path, test_extra_file_yields_membership_mismatch_naming_path, test_membership_drift_is_not_reported_as_ok, test_unchanged_set_is_not_a_membership_mismatch]
 attempts: 2
-last_failure: surviving mutant at crates/syrinx-eval/src/lib.rs:74 (cmp-eq-to-ne) — frozen tests do not kill it
+last_failure: ""
 ---
 The immutability mechanism, not the audio set. Inputs: an eval-set directory of files. Bounds: SHA-256 per file, full-membership check. Outputs: a checksum manifest and a verify() verdict. Errors/edges: a tampered byte names the file in a typed error; a missing or extra file is a typed membership-mismatch naming the path; only a byte-identical, membership-identical set returns Ok. Invariant: verify() is Ok iff the set is byte-for-byte and membership-identical to the manifest. Done-check: the four criteria over clean, tampered, and membership-drift cases.
 
