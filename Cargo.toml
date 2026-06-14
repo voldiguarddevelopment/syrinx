@@ -1,0 +1,31 @@
+# Workspace-scaffold test host — task T-00.01.
+#
+# RED phase: this is a plain package so the frozen scaffold tests in tests/
+# compile and run from the worktree root (where the gate invokes `cargo test`).
+# Those tests fail because the eleven-crate workspace does not exist yet.
+#
+# GREEN phase: turn this root into the workspace by adding a [workspace] table
+# with `resolver = "2"` and the eleven members under crates/, and creating each
+# empty member crate. This package stays the workspace root so the frozen tests
+# keep running. Do NOT edit the frozen test file.
+[package]
+name = "syrinx-workspace-scaffold-tests"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/syrinx-frontend",
+    "crates/syrinx-core",
+    "crates/syrinx-lm",
+    "crates/syrinx-speaker",
+    "crates/syrinx-acoustic",
+    "crates/syrinx-vocoder",
+    "crates/syrinx-prosody",
+    "crates/syrinx-stream",
+    "crates/syrinx-serve",
+    "crates/syrinx-eval",
+    "crates/syrinx-cli",
+]

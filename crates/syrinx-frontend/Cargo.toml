@@ -1,0 +1,5 @@
+[package]
+name = "syrinx-frontend"
+version = "0.0.0"
+edition = "2021"
+publish = false
