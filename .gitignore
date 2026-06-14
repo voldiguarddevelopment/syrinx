@@ -7,6 +7,8 @@ Cargo.lock
 .ratchet/worktrees/
 .ratchet/runs/
 .ratchet/audit.key
+.ratchet/audit.log
+.ratchet/web-audit.log
 .ratchet/spend.json
 .ratchet/*.env
 
