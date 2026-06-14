@@ -14,7 +14,9 @@ not_doing:
 test_files: []
 criteria_map: {}
 attempts: 1
-last_failure: ""
+last_failure: |
+  wrong red: tests fail to compile for a reason other than a missing symbol (test-authoring error):
+  error: could not find `Cargo.toml` in `/home/floofy/development/syrinx-build/.ratchet/worktrees/T-00.01` or any parent directory
 ---
 The root surface every other task attaches to. Inputs: Cargo manifests only. Outputs: a compiling eleven-crate workspace and a green empty test run. Errors/edges: a manifest that fails to parse is the only failure, surfaced by cargo. Invariant: the workspace compiles from here forward. Done-check: the three cargo-observable criteria.
 
