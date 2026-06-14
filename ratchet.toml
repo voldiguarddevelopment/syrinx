@@ -18,7 +18,7 @@ max_iterations        = 600
 # operator + [web.allow] gate the run-control buttons (localhost-only anyway).
 [web]
 enabled  = true
-port     = 7878
+port     = 7879
 operator = true
 
 [web.allow]
