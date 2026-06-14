@@ -3,3 +3,6 @@ name = "syrinx-frontend"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[dependencies]
+unicode-normalization = "0.1"
