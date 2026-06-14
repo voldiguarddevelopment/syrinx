@@ -1,2 +1,2 @@
-6ecea98262ba01d02e6f7929d0565ffab13f923150d82a87d2de52673959a294  criteria_map:T-00.01
-5406e6e98b5f83271cd51a57f1afbd5b92002e34acc294a77cce9cc9b3e050a9  tests/workspace_scaffold.rs
+69744d19d81ce9b222ea2361aef4c6dca98cd0fd5d86ccfd9dabe2a83eb1b7f8  criteria_map:T-00.03
+2077954592ec0f0e0cc60d379707b6d111dd2eadbc2df0fb9236fbd6d78f1ed1  tests/eval_harness.rs
