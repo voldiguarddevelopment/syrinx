@@ -13,3 +13,19 @@ name = "syrinx-workspace-scaffold-tests"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/syrinx-frontend",
+    "crates/syrinx-core",
+    "crates/syrinx-lm",
+    "crates/syrinx-speaker",
+    "crates/syrinx-acoustic",
+    "crates/syrinx-vocoder",
+    "crates/syrinx-prosody",
+    "crates/syrinx-stream",
+    "crates/syrinx-serve",
+    "crates/syrinx-eval",
+    "crates/syrinx-cli",
+]
