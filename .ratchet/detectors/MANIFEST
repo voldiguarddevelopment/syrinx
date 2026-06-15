@@ -1,2 +1,2 @@
-3cd2badd91fc79bda11a0fb81cf9f9b469e02be6cdf5966780a6048260550d00  criteria_map:T-02.02a
-04bcc246b541f9aa081a4603cf1ae480ca298a419346d07dd1211dacf6b1416b  tests/attention_prop.rs
+2ae8364ce2e5f8de2167c22432aeeddcdbf8841aea5d4d8c3a15158a0cf111b5  criteria_map:T-02.02b
+3ea27b918863dcc652aa3c7d32de1e040a472ab508498ed2cf57a187add67191  tests/block_prop.rs
