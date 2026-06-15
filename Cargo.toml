@@ -64,3 +64,10 @@ http-body = "1"
 # test target fails to build; GREEN adds them. `serde_json` (already a dev-dep
 # above) parses the goldens.
 syrinx-core = { path = "crates/syrinx-core" }
+# T-02.02a multi-head causal attention frozen tests drive `syrinx-lm::attention`
+# (which composes the `syrinx-core` primitives) through the root `tests/`. RED:
+# `syrinx-lm` exposes no `attention` yet, so `tests/attention_prop.rs` fails to
+# build; GREEN adds it. The test also uses `syrinx-core`'s `Tensor`/`linear`/
+# `rope`/`weights` (already a dep above) to build inputs and an independent
+# reference.
+syrinx-lm = { path = "crates/syrinx-lm" }
