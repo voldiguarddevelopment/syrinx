@@ -1,2 +1,2 @@
-b69b6f335c66c34e8be9501badb48418fff0ddbfb5276dacc3efde6c555e242e  criteria_map:T-08.01
-9d405080f3da0cf67ea349da8b927a5da67c678ec18ac2d579ce6e5cbfcfc646  tests/audio_server.rs
+960d0fbb82e544fb6941d13c9e52928c631042afcd52eaf2479ea3cc1ab649d5  criteria_map:T-08.02
+2d638c31a8b191e1a115709f826a054fd35257f2d2e08832713ca148fd2bb0f2  tests/health_endpoint.rs

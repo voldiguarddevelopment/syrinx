@@ -12,7 +12,7 @@ use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{header, StatusCode};
 use axum::response::Response;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::Router;
 use serde::{Deserialize, Serialize};
 
@@ -68,8 +68,16 @@ pub struct ApiErrorBody {
     pub kind: String,
 }
 
+/// The documented typed JSON health body. `status` is the literal health marker
+/// `"ok"`; `version` is a non-empty version string identifying the build.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Health {
+    pub status: String,
+    pub version: String,
+}
+
 /// Build the OpenAI-compatible audio router wired with the default silent-buffer
-/// synth. Registers `POST /v1/audio/speech` exactly once.
+/// synth. Registers `POST /v1/audio/speech` and `GET /v1/health` exactly once each.
 pub fn router() -> Router {
     router_with_synth(Arc::new(SilentSynth))
 }
@@ -79,7 +87,23 @@ pub fn router() -> Router {
 pub fn router_with_synth(synth: Arc<dyn Synth>) -> Router {
     Router::new()
         .route("/v1/audio/speech", post(speech))
+        .route("/v1/health", get(health))
         .with_state(synth)
+}
+
+/// Handle `GET /v1/health`: return 200 with the documented typed JSON health body
+/// reporting status `"ok"` and the crate's build version.
+async fn health() -> Response {
+    let body = Health {
+        status: "ok".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    let json = serde_json::to_vec(&body).expect("the typed health body must serialize");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json))
+        .expect("a health response must build")
 }
 
 /// Handle `POST /v1/audio/speech`: deserialize the typed request, run the
