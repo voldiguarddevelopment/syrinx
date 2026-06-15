@@ -265,6 +265,7 @@ last_failure: |
      |
   27 | use syrinx_frontend::lexicon::Lexicon;
      |                      ^^^^^^^ could not find `lexicon` in `syrinx_frontend`
+  
   For more information about this error, try `rustc --explain E0432`.
   error: could not compile `syrinx-workspace-scaffold-tests` (test "lexicon") due to 1 previous error
 ---
