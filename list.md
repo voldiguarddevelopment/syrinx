@@ -842,7 +842,7 @@ not_doing:
   - No model inference — pure deterministic DSP on a given buffer.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 A deterministic per-segment gain envelope over an f32 sample buffer. Inputs: an f32 sample buffer and a segment gain envelope. Outputs: a new buffer with per-sample gain applied. Errors/edges: flat 1.0 is identity; 0.5 halves exactly; segment boundaries interpolate (endpoints A and B, midpoint (A+B)/2); envelope length ≠ buffer length (both longer and shorter) → `EnvelopeError::LengthMismatch`, equal length applies. Invariant: output length equals input length and gain is applied sample-exact. Done-check: the four frozen criteria pinning identity, exact halving, boundary interpolation, and the length boundary.
