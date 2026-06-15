@@ -219,7 +219,7 @@ The deterministic entry point of the frontend. Inputs: an arbitrary `&str` of us
 ### T-01.02  Expand numbers
 id: T-01.02
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -230,8 +230,12 @@ criteria:
 not_doing:
   - No currency other than USD `$`; no localized number formats.
   - No Roman-numeral or phone-number expansion.
-test_files: []
-criteria_map: {}
+test_files: [tests/expand_numbers.rs]
+criteria_map:
+  C1: [currency_thousands_is_plural_dollars, currency_one_is_singular_dollar, currency_two_is_plural_dollars]
+  C2: [date_mdy_reads_month_ordinal_day_and_year, decimal_reads_digits_individually, decimal_integer_part_is_cardinal, out_of_range_date_falls_back_to_cardinal_without_panic]
+  C3: [ordinal_st_suffix, ordinal_nd_suffix, ordinal_rd_suffix_two_digit_hyphenated, ordinal_th_suffix]
+  C4: [bare_integer_is_hyphenated_cardinal, round_ten_cardinal_has_no_hyphen, non_numeric_text_passes_through_unchanged, empty_input_passes_through]
 attempts: 1
 last_failure: ""
 ---
