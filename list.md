@@ -257,7 +257,7 @@ not_doing:
   - No IPA validation of replacement strings (that is the G2P layer's concern).
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 A two-tier override table consulted before phonemization. Inputs: a default lexicon and an optional user lexicon, each a map of word→pronunciation, plus a query word. Outputs: `Option<String>` — the winning replacement or None. Errors/edges: user beats default on collision; missing keys return None; case folding applies to keys but never to values. Invariant: precedence is total and deterministic — user ∪ default with user winning every tie. Done-check: the precedence, fallthrough, miss, and case-fold criteria.
