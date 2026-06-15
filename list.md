@@ -664,7 +664,7 @@ The transformer block: SwiGLU FFN plus the pre-norm residual wiring. Inputs: `h[
 ### T-02.02c  Run the LM forward pass
 id: T-02.02c
 phase: 2
-status: pending
+status: blocked
 depends_on: [T-02.02a, T-02.02b, T-02.01c]
 stack: rust
 criteria:
@@ -680,7 +680,6 @@ test_files: []
 criteria_map: {}
 attempts: 6
 last_failure: |
-  
   running 6 tests
   test test_forward_final_norm_before_head ... ok
   test test_forward_matches_golden ... ok
@@ -688,22 +687,14 @@ last_failure: |
   test test_forward_lm_head_is_untied ... ok
   test test_forward_block_count_is_four ... FAILED
   test test_forward_output_shape_is_t_by_vocab ... ok
-  
   failures:
-  
   ---- test_forward_block_count_is_four stdout ----
-  
   thread 'test_forward_block_count_is_four' (806292) panicked at tests/lm_forward_parity.rs:277:5:
   a 3-block pipeline must diverge from the golden by more than tol
   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-  
-  
   failures:
       test_forward_block_count_is_four
-  
   test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s
-  
-  
       Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
        Running tests/lm_forward_parity.rs (target/debug/deps/lm_forward_parity-1118dec488a72056)
   error: test failed, to rerun pass `--test lm_forward_parity`
