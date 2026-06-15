@@ -407,7 +407,7 @@ not_doing:
   - No semantic relevance weighting; positional window only.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Assembly of a bounded conditioning window around a target sentence. Inputs: a slice of sentence strings, a current index, and a radius. Outputs: a typed `ContextWindow { before, current, after }` with `before`/`after` length ≤ radius. Errors/edges: window is clamped at both ends so it never indexes out of range; radius 0 yields only the current sentence. Invariant: `before.len() ≤ radius` and `after.len() ≤ radius` always hold. Done-check: the interior, both-end-clamp, over-radius-clamp, and zero-radius criteria.
