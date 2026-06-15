@@ -652,7 +652,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic SwiGLU + pre-norm-residual structure is in scope.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The transformer block: SwiGLU FFN plus the pre-norm residual wiring. Inputs: `h[T,dim]`, the two RMSNorm weights, and the attention/FFN weight sets. Bounds: shape `[T,dim]`; the SwiGLU gate/up/down roles and `gate*up` Hadamard pinned against wrong alternatives; the residual-adds-to-pre-norm-`h` order pinned by the zeroed-weights identity. Outputs: `[T,dim]`. Errors/edges: swapping w1/w3, using `+` instead of `*`, or residual-on-normed-tensor each fail a property. Invariant: exact transcription of `reference.py` §5.1 (block order) and §5.3 (SwiGLU). Done-check: the four properties — FFN shape/role, Hadamard structure, residual identity, and pre-norm residual target — gateable without a dedicated golden since end-to-end values are covered by T-02.02c.
