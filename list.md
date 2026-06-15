@@ -257,7 +257,7 @@ not_doing:
   - No IPA validation of replacement strings (that is the G2P layer's concern).
 test_files: []
 criteria_map: {}
-attempts: 2
+attempts: 3
 last_failure: |
      Compiling syrinx-workspace-scaffold-tests v0.0.0 (/home/floofy/development/syrinx-build/.ratchet/worktrees/T-01.03)
   error[E0432]: unresolved import `syrinx_frontend::lexicon`
@@ -265,7 +265,6 @@ last_failure: |
      |
   27 | use syrinx_frontend::lexicon::Lexicon;
      |                      ^^^^^^^ could not find `lexicon` in `syrinx_frontend`
-  
   For more information about this error, try `rustc --explain E0432`.
   error: could not compile `syrinx-workspace-scaffold-tests` (test "lexicon") due to 1 previous error
 ---
