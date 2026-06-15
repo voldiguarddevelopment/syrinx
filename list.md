@@ -829,7 +829,7 @@ Time-stretches rendered speech without pitch change. Inputs: a rendered sample b
 ### T-03.05  Apply volume automation curves
 id: T-03.05
 phase: 3
-status: pending
+status: done
 depends_on: [T-03.01]
 stack: rust
 criteria:
@@ -840,8 +840,12 @@ criteria:
 not_doing:
   - No pitch or duration changes — amplitude/gain only.
   - No model inference — pure deterministic DSP on a given buffer.
-test_files: []
-criteria_map: {}
+test_files: [tests/volume_envelope.rs]
+criteria_map:
+  C1: [test_flat_unity_is_bit_identical]
+  C2: [test_half_and_nonhalf_gain_scale_exactly]
+  C3: [test_segment_boundary_interpolates]
+  C4: [test_length_mismatch_both_directions_and_equal_applies]
 attempts: 1
 last_failure: ""
 ---
