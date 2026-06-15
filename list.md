@@ -282,7 +282,7 @@ not_doing:
   - No per-word IPA override (that is T-01.05) and no heteronym disambiguation (T-01.06).
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The grapheme-to-phoneme interface and a deterministic default backend. Inputs: a single word `&str`. Outputs: an IPA `String` drawn from a closed symbol set. Errors/edges: known words hit the labeled table exactly; OOV words take a fallback that always yields valid non-empty IPA; the empty string maps to empty, never panicking. Invariant: `phonemize` is total — every `&str` produces a defined IPA string. Done-check: the known-word golden set, the OOV non-empty/valid-symbol guarantee, and the empty boundary.
