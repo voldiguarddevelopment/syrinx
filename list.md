@@ -1714,7 +1714,7 @@ not_doing:
   - No metrics or telemetry endpoint.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Inputs: HTTP requests to the health/version path on the Axum router. Bounds: GET-only. Outputs: 200 with a typed JSON health body. Errors/edges: a non-GET method returns 405. Invariant: the route is registered once and the body matches the documented typed shape. Done-check: the 200-JSON-shape, 405-on-non-GET, and single-registration criteria.
