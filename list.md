@@ -307,7 +307,7 @@ not_doing:
   - No multi-word/phrase overrides; single-word keys only.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 A decorator over any `Phonemizer` that substitutes per-word IPA. Inputs: a base phonemizer, a word→IPA override map, and a query word. Outputs: the mapped IPA on a hit, else the base output. Errors/edges: hits replace exactly; misses delegate untouched; keys are case-folded; an empty map is a transparent passthrough. Invariant: output equals `map.get(fold(word)).unwrap_or_else(|| base.phonemize(word))`. Done-check: the replace, passthrough, case-fold, and empty-map criteria.
