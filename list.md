@@ -444,7 +444,7 @@ Deterministic insertion of breath markers by word interval and paragraph structu
 ### T-01.11  Assemble the frontend test suite
 id: T-01.11
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.01, T-01.02, T-01.07]
 stack: rust
 criteria:
@@ -454,8 +454,11 @@ criteria:
 not_doing:
   - No CI/workflow YAML wiring (that is a Phase 0 concern).
   - No coverage of crates other than syrinx-frontend.
-test_files: []
-criteria_map: {}
+test_files: [tests/frontend_suite.rs, tests/golden/frontend_suite/normalize/collapse.expected, tests/golden/frontend_suite/normalize/collapse.in, tests/golden/frontend_suite/normalize/one.expected, tests/golden/frontend_suite/normalize/one.in, tests/golden/frontend_suite/normalize/two.expected, tests/golden/frontend_suite/normalize/two.in, tests/golden/frontend_suite/numbers/cardinal.expected, tests/golden/frontend_suite/numbers/cardinal.in, tests/golden/frontend_suite/numbers/currency.expected, tests/golden/frontend_suite/numbers/currency.in, tests/golden/frontend_suite/numbers/date.expected, tests/golden/frontend_suite/numbers/date.in, tests/golden/frontend_suite/numbers/ordinal.expected, tests/golden/frontend_suite/numbers/ordinal.in, tests/golden/frontend_suite/ssml/break_tag.expected, tests/golden/frontend_suite/ssml/break_tag.in, tests/golden/frontend_suite/ssml/emphasis.expected, tests/golden/frontend_suite/ssml/emphasis.in, tests/golden/frontend_suite/ssml/error.expected, tests/golden/frontend_suite/ssml/error.in, tests/golden/frontend_suite/ssml/plain.expected, tests/golden/frontend_suite/ssml/plain.in]
+criteria_map:
+  C1: [c1_all_golden_cases_match_expected, c1_suite_covers_normalize_numbers_and_ssml]
+  C2: [c2_changed_input_breaks_its_case]
+  C3: [c3_new_pair_is_auto_discovered, c3_missing_expected_fails_rather_than_skips]
 attempts: 1
 last_failure: ""
 ---
