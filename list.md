@@ -806,7 +806,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (whether the overridden F0 sounds right on rendered output) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The pitch-override API on the typed plan at phoneme and word granularity. Inputs: a `ProsodyPlan` of N phonemes plus a per-phoneme (index, hz) override or a per-word (span, hz) override where a word maps to a contiguous phoneme span `[start, end)`. Outputs: a plan whose `pitch_hz` reflects exactly the requested change with `durations_ms` untouched. Errors/edges: a phoneme index ≥ N or a word span end > N → `PlanError::IndexOutOfRange`, mutating nothing; i == N-1 and a span ending at N-1 both apply; edits never bleed outside the targeted index or span. Invariant: only the targeted phoneme or span changes and only `pitch_hz` is touched. This is the deterministic typed-API edit on synthetic plans; whether the resulting F0 is perceptually correct on rendered audio is deferred to a later perceptual eval against the real model.
