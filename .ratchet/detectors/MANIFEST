@@ -1,2 +1,2 @@
-f650c2dcc5d1ff3573cdbb6a7c248ba980c74ad647e9631efcf37c5b1dff0a5e  criteria_map:T-03.03
-269c3ddddfad580b855a2288505baadbf3d486710550332faf1c197776a02465  tests/pitch_override.rs
+693dfc5625079733dc8b80b3e0bae13d370572a765e01ada2bb8f7594aac0387  criteria_map:T-02.01a
+be5592c252fc42446521d15d70fc4669a9ca37d0b6ce97cf415bd4341fea756f  tests/core_arith_parity.rs
