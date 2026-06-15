@@ -539,7 +539,7 @@ The arithmetic floor every other LM op stands on. Inputs: `Tensor` values built 
 ### T-02.01b  Implement the neural ops
 id: T-02.01b
 phase: 2
-status: pending
+status: done
 depends_on: [T-02.01a]
 stack: rust
 criteria:
@@ -551,27 +551,14 @@ not_doing:
   - No attention, FFN, block, or full forward (those are T-02.02a/b/c) and no weight generation (T-02.01c).
   - No fused kernels or in-place optimization beyond a direct reference transcription of `reference.py` §4.
   - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic numerical parity and the listed algebraic properties are in scope.
-test_files: []
-criteria_map: {}
+test_files: [tests/core_ops_parity.rs]
+criteria_map:
+  C1: [test_linear_parity, test_rmsnorm_parity, test_softmax_parity, test_c1_goldens_reject_one_element_corruption]
+  C2: [test_silu_parity, test_rope_parity, test_embed_parity]
+  C3: [test_causal_mask_pattern]
+  C4: [test_softmax_rows_sum_to_one_and_nonneg, test_rmsnorm_unit_rms_and_zero_row_finite, test_rope_preserves_pair_norm_and_identity_at_pos_zero, test_silu_zero_and_monotone_on_positive_samples]
 attempts: 5
-last_failure: |
-  surviving mutant at crates/syrinx-core/src/lib.rs:53 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:56 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:63 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:63 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:72 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:82 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:90 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:100 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:155 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:172 (cmp-gt-to-ge) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:219 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:219 (arith-add-to-sub) — frozen tests do not kill it
+last_failure: ""
 ---
 The seven neural primitives the LM composes. Inputs: each op's `input` arrays from its parity golden. Bounds: linear/rmsnorm/softmax/silu/rope/embed pinned at 1e-4 max-abs against their goldens and rejected on a one-element corruption; causal_mask pinned at the exact `0.0`/`-inf` pattern. Outputs: tensors whose shapes equal the golden `shape`. Errors/edges: `-inf` mask entries must survive into the score-add so softmax drives them to 0; `rope` at `pos 0` is identity. Invariant: every op transcribes `reference.py` §4 exactly (eps inside the sqrt; softmax max-subtract; interleaved RoPE pairing). Done-check: the four criteria — golden parity for six ops, exact-pattern for the mask, and the softmax-sum / rmsnorm-RMS / rope-norm / silu-zero properties that hold with no golden.
 
