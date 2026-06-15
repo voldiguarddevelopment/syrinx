@@ -565,7 +565,7 @@ The seven neural primitives the LM composes. Inputs: each op's `input` arrays fr
 ### T-02.01c  Generate weights by name
 id: T-02.01c
 phase: 2
-status: pending
+status: done
 depends_on: [T-02.01a]
 stack: rust
 criteria:
@@ -577,75 +577,14 @@ not_doing:
   - No tensor-name → shape mapping or full checkpoint assembly (that is consumed inside T-02.02c's forward) beyond the raw `weights(name,count)` generator.
   - No reading weights from any file — values are a pure function of the name per `reference.py` §2; no real pretrained checkpoint is loaded here.
   - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic byte-exact reproduction of the reference PRNG is in scope.
-test_files: []
-criteria_map: {}
+test_files: [tests/weights_parity.rs]
+criteria_map:
+  C1: [test_fnv1a_64_tok_embeddings_seed_pinned, test_fnv1a_64_single_flipped_byte_changes_seed]
+  C2: [test_xorshift64_first_emit_pinned, test_xorshift64_zero_seed_substitution]
+  C3: [test_weights_tok_embeddings_golden_parity, test_weights_golden_corruption_fails]
+  C4: [test_weights_count_is_stream_prefix, test_weights_first_value_is_name_seeded]
 attempts: 3
-last_failure: |
-  surviving mutant at crates/syrinx-core/src/lib.rs:59 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:62 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:67 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:67 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:67 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:67 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:67 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:69 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:69 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:78 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:88 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:96 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:106 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:130 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:133 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:133 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:133 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:133 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:138 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:167 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:175 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:175 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:176 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:179 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:179 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:181 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:181 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:181 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:181 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:181 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:199 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:202 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:202 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:202 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:207 (arith-sub-to-add) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:212 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:212 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:212 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:226 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:226 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:242 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:252 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:252 (arith-div-to-mul) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:253 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:256 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:257 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:257 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:258 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:258 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:258 (arith-sub-to-add) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:258 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:259 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:259 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:259 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:259 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:259 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:270 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:273 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:273 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:273 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:273 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:282 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:285 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:285 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:285 (cmp-le-to-lt) — frozen tests do not kill it
+last_failure: ""
 ---
 The deterministic weight source every forward draws from. Inputs: a tensor `name` string and a `count`. Bounds: FNV-1a seed, xorshift64 stream, and the f32 transform each pinned to the reference; `weights_sample.json` parity at 1e-4 and rejected on a one-value corruption. Outputs: a `Vec<f32>` of length `count`. Errors/edges: the `seed == 0` substitution is guarded though it cannot arise for these names; a flipped name byte or swapped shift order diverges. Invariant: `weights` is a pure, byte-exact port of `reference.py` §2 — these values feed every forward, so the documented `tok_embeddings` seed and first draw are reproduced exactly. Done-check: the four criteria — hash pin, stream pin, golden parity, and the prefix/name-sensitivity properties.
 
