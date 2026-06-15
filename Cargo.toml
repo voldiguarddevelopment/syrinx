@@ -57,3 +57,10 @@ axum = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 http-body = "1"
+# T-02.01a core-arith frozen tests drive `syrinx-core`'s `Tensor` plus the
+# `matmul`/`add`/`mul` reference path and its typed `ShapeError`, gated on the
+# parity goldens under `tests/golden/parity/`, through the root `tests/`. RED:
+# `syrinx-core` exposes no `Tensor`/`matmul`/`add`/`mul`/`ShapeError` yet, so the
+# test target fails to build; GREEN adds them. `serde_json` (already a dev-dep
+# above) parses the goldens.
+syrinx-core = { path = "crates/syrinx-core" }
