@@ -1690,7 +1690,7 @@ not_doing:
   - No health or version endpoint (that is T-08.02).
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Inputs: typed OpenAI-style speech requests over HTTP into the Axum router. Bounds: required fields model/input/voice/response_format. Outputs: 200 with audio content-type from the stub synth, or the streaming response shape. Errors/edges: a missing required field returns 422 with a typed error body. Invariant: the route is registered exactly once and the synth is a pluggable trait defaulting to a silent-buffer stub. Done-check: the 200-content-type, 422-typed-error, streaming-shape, and single-registration criteria.
