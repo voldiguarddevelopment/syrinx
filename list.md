@@ -369,7 +369,7 @@ A recursive-descent parser for the documented SSML subset into typed control eve
 ### T-01.08  Map punctuation to prosody
 id: T-01.08
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -380,8 +380,12 @@ criteria:
 not_doing:
   - No semicolon/colon/dash handling beyond period, comma, question, exclamation.
   - No acoustic realization of the hints; markers are typed metadata only.
-test_files: []
-criteria_map: {}
+test_files: [tests/punct.rs]
+criteria_map:
+  C1: [test_period_is_full_falling_boundary, test_period_count_invariant, test_period_marker_is_not_a_comma_break]
+  C2: [test_comma_is_short_break, test_comma_count_invariant, test_comma_period_distinction, test_mixed_punctuation_ordered_and_counted]
+  C3: [test_question_is_rising_boundary, test_exclamation_is_falling_exclamatory_boundary, test_question_count_invariant, test_exclamation_count_invariant, test_question_rising_vs_exclamation_falling, test_exclamation_distinct_from_period]
+  C4: [test_no_punctuation_yields_no_markers]
 attempts: 1
 last_failure: ""
 ---
