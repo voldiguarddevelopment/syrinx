@@ -555,35 +555,23 @@ test_files: []
 criteria_map: {}
 attempts: 2
 last_failure: |
-  running 12 tests
-  test test_c1_goldens_reject_one_element_corruption ... FAILED
-  test test_embed_parity ... ok
-  test test_linear_parity ... FAILED
-  test test_rmsnorm_unit_rms_and_zero_row_finite ... ok
-  test test_rmsnorm_parity ... ok
-  test test_rope_preserves_pair_norm_and_identity_at_pos_zero ... ok
-  test test_rope_parity ... ok
-  test test_causal_mask_pattern ... ok
-  test test_silu_parity ... ok
-  test test_silu_zero_and_monotone_on_positive_samples ... ok
-  test test_softmax_rows_sum_to_one_and_nonneg ... ok
-  test test_softmax_parity ... ok
-  failures:
-  ---- test_c1_goldens_reject_one_element_corruption stdout ----
-  thread 'test_c1_goldens_reject_one_element_corruption' (285016) panicked at tests/core_ops_parity.rs:161:9:
-  linear truth within tol
-  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-  ---- test_linear_parity stdout ----
-  thread 'test_linear_parity' (285019) panicked at tests/core_ops_parity.rs:112:5:
-  linear max-abs diff 2.1 exceeds tol 0.0001
-  failures:
-      test_c1_goldens_reject_one_element_corruption
-      test_linear_parity
-  test result: FAILED. 10 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-     Compiling syrinx-workspace-scaffold-tests v0.0.0 (/home/floofy/development/syrinx-build/.ratchet/worktrees/T-02.01b)
-      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
-       Running tests/core_ops_parity.rs (target/debug/deps/core_ops_parity-cb94c286747d9673)
-  error: test failed, to rerun pass `--test core_ops_parity`
+  surviving mutant at crates/syrinx-core/src/lib.rs:53 (cmp-ne-to-eq) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:56 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-add-to-sub) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-add-to-sub) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:63 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:63 (arith-add-to-sub) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:72 (cmp-ne-to-eq) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:82 (arith-add-to-sub) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:90 (cmp-ne-to-eq) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:100 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:155 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:172 (cmp-gt-to-ge) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:219 (arith-mul-to-div) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-core/src/lib.rs:219 (arith-add-to-sub) — frozen tests do not kill it
 ---
 The seven neural primitives the LM composes. Inputs: each op's `input` arrays from its parity golden. Bounds: linear/rmsnorm/softmax/silu/rope/embed pinned at 1e-4 max-abs against their goldens and rejected on a one-element corruption; causal_mask pinned at the exact `0.0`/`-inf` pattern. Outputs: tensors whose shapes equal the golden `shape`. Errors/edges: `-inf` mask entries must survive into the score-add so softmax drives them to 0; `rope` at `pos 0` is identity. Invariant: every op transcribes `reference.py` §4 exactly (eps inside the sqrt; softmax max-subtract; interleaved RoPE pairing). Done-check: the four criteria — golden parity for six ops, exact-pattern for the mask, and the softmax-sum / rmsnorm-RMS / rope-norm / silu-zero properties that hold with no golden.
 
