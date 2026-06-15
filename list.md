@@ -467,7 +467,7 @@ The aggregating golden-file harness for the deterministic frontend. Inputs: the 
 ### T-01.12  Version the frontend-LM contract
 id: T-01.12
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.04, T-01.07]
 stack: rust
 criteria:
@@ -478,8 +478,12 @@ criteria:
 not_doing:
   - No backward-compatibility migration between schema versions; mismatch is rejected.
   - No wire format other than JSON for this contract.
-test_files: []
-criteria_map: {}
+test_files: [tests/contract_version.rs]
+criteria_map:
+  C1: [test_schema_version_field_is_current_constant]
+  C2: [test_json_roundtrip_preserves_equality]
+  C3: [test_version_mismatch_is_typed_error]
+  C4: [test_missing_version_field_is_typed_error]
 attempts: 1
 last_failure: ""
 ---
