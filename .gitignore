@@ -30,3 +30,5 @@ Cargo.lock
 # Scratch
 /scratch/
 *.tmp
+.ratchet/stats.jsonl
+.ratchet/reports/
