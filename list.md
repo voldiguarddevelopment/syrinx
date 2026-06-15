@@ -1614,7 +1614,7 @@ Inputs: noisy reference clips into the speaker/cloning path. Bounds: a SIM-o / q
 ### T-07.06  Export the lip-sync timeline
 id: T-07.06
 phase: 7
-status: pending
+status: done
 depends_on: [T-01.04]
 stack: rust
 criteria:
@@ -1624,8 +1624,11 @@ criteria:
 not_doing:
   - No audio alignment from model output (input is a typed timestamp list).
   - No interpolation or smoothing between visemes.
-test_files: []
-criteria_map: {}
+test_files: [tests/lipsync_timeline.rs]
+criteria_map:
+  C1: [test_each_phoneme_maps_to_its_table_viseme, test_distinct_groups_map_to_distinct_visemes, test_timeline_segments_carry_mapped_viseme]
+  C2: [test_timeline_covers_span_contiguously, test_single_entry_spans_whole_input]
+  C3: [test_empty_input_yields_empty_timeline, test_unknown_phoneme_maps_to_rest, test_unknown_phoneme_in_timeline_is_rest_segment, test_viseme_segment_is_constructible_and_comparable]
 attempts: 1
 last_failure: ""
 ---
