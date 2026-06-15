@@ -678,9 +678,8 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; this gates only deterministic numerical parity against `lm_forward.json` (the trained weights swap in under a separate later task).
 test_files: []
 criteria_map: {}
-attempts: 3
+attempts: 4
 last_failure: |
-  
   running 6 tests
   test test_forward_lm_head_is_untied ... ok
   test test_forward_matches_golden ... ok
@@ -688,22 +687,14 @@ last_failure: |
   test test_forward_block_count_is_four ... FAILED
   test test_forward_rejects_single_logit_perturbation ... ok
   test test_forward_final_norm_before_head ... ok
-  
   failures:
-  
   ---- test_forward_block_count_is_four stdout ----
-  
   thread 'test_forward_block_count_is_four' (804097) panicked at tests/lm_forward_parity.rs:277:5:
   a 3-block pipeline must diverge from the golden by more than tol
   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-  
-  
   failures:
       test_forward_block_count_is_four
-  
   test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.07s
-  
-  
       Finished `test` profile [unoptimized + debuginfo] target(s) in 1.40s
        Running tests/lm_forward_parity.rs (target/debug/deps/lm_forward_parity-1118dec488a72056)
   error: test failed, to rerun pass `--test lm_forward_parity`
