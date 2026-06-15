@@ -394,7 +394,7 @@ A mapping from terminal/internal punctuation to typed prosody markers. Inputs: a
 ### T-01.09  Window cross-sentence context
 id: T-01.09
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -405,8 +405,12 @@ criteria:
 not_doing:
   - No tokenization or sentence splitting (input is a pre-split slice).
   - No semantic relevance weighting; positional window only.
-test_files: []
-criteria_map: {}
+test_files: [tests/context_window.rs]
+criteria_map:
+  C1: [test_interior_radius1_current_is_c, test_interior_radius1_before_is_b, test_interior_radius1_after_is_d, test_interior_radius1_lengths_within_radius]
+  C2: [test_first_index_before_empty, test_first_index_after_is_b, test_last_index_after_empty, test_last_index_before_is_c]
+  C3: [test_over_radius_before_clamped_to_one, test_over_radius_after_is_two, test_over_radius_current_is_b]
+  C4: [test_zero_radius_current_only]
 attempts: 1
 last_failure: ""
 ---
