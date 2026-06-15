@@ -555,23 +555,63 @@ test_files: []
 criteria_map: {}
 attempts: 3
 last_failure: |
-  surviving mutant at crates/syrinx-core/src/lib.rs:53 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:56 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:61 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:63 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:63 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:72 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:82 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:90 (cmp-ne-to-eq) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:100 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:155 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:172 (cmp-gt-to-ge) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:219 (arith-mul-to-div) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-core/src/lib.rs:219 (arith-add-to-sub) — frozen tests do not kill it
+  
+  running 12 tests
+  test test_embed_parity ... ok
+  test test_linear_parity ... ok
+  test test_c1_goldens_reject_one_element_corruption ... FAILED
+  test test_rmsnorm_unit_rms_and_zero_row_finite ... ok
+  test test_rmsnorm_parity ... ok
+  test test_causal_mask_pattern ... ok
+  test test_rope_preserves_pair_norm_and_identity_at_pos_zero ... FAILED
+  test test_rope_parity ... FAILED
+  test test_silu_zero_and_monotone_on_positive_samples ... ok
+  test test_silu_parity ... ok
+  test test_softmax_rows_sum_to_one_and_nonneg ... FAILED
+  test test_softmax_parity ... FAILED
+  
+  failures:
+  
+  ---- test_c1_goldens_reject_one_element_corruption stdout ----
+  
+  thread 'test_c1_goldens_reject_one_element_corruption' (469279) panicked at crates/syrinx-core/src/lib.rs:184:18:
+  attempt to subtract with overflow
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+  ---- test_rope_preserves_pair_norm_and_identity_at_pos_zero stdout ----
+  
+  thread 'test_rope_preserves_pair_norm_and_identity_at_pos_zero' (469286) panicked at crates/syrinx-core/src/lib.rs:228:22:
+  attempt to subtract with overflow
+  
+  ---- test_rope_parity stdout ----
+  
+  thread 'test_rope_parity' (469285) panicked at crates/syrinx-core/src/lib.rs:228:22:
+  attempt to subtract with overflow
+  
+  ---- test_softmax_rows_sum_to_one_and_nonneg stdout ----
+  
+  thread 'test_softmax_rows_sum_to_one_and_nonneg' (469290) panicked at crates/syrinx-core/src/lib.rs:184:18:
+  attempt to subtract with overflow
+  
+  ---- test_softmax_parity stdout ----
+  
+  thread 'test_softmax_parity' (469289) panicked at crates/syrinx-core/src/lib.rs:184:18:
+  attempt to subtract with overflow
+  
+  
+  failures:
+      test_c1_goldens_reject_one_element_corruption
+      test_rope_parity
+      test_rope_preserves_pair_norm_and_identity_at_pos_zero
+      test_softmax_parity
+      test_softmax_rows_sum_to_one_and_nonneg
+  
+  test result: FAILED. 7 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+  
+  
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+       Running tests/core_ops_parity.rs (target/debug/deps/core_ops_parity-cb94c286747d9673)
+  error: test failed, to rerun pass `--test core_ops_parity`
 ---
 The seven neural primitives the LM composes. Inputs: each op's `input` arrays from its parity golden. Bounds: linear/rmsnorm/softmax/silu/rope/embed pinned at 1e-4 max-abs against their goldens and rejected on a one-element corruption; causal_mask pinned at the exact `0.0`/`-inf` pattern. Outputs: tensors whose shapes equal the golden `shape`. Errors/edges: `-inf` mask entries must survive into the score-add so softmax drives them to 0; `rope` at `pos 0` is identity. Invariant: every op transcribes `reference.py` §4 exactly (eps inside the sqrt; softmax max-subtract; interleaved RoPE pairing). Done-check: the four criteria — golden parity for six ops, exact-pattern for the mask, and the softmax-sum / rmsnorm-RMS / rope-norm / silu-zero properties that hold with no golden.
 
