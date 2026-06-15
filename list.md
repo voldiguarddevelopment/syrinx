@@ -244,7 +244,7 @@ Numeric verbalization over already-normalized text. Inputs: a `&str` that may co
 ### T-01.03  Override pronunciations via lexicon
 id: T-01.03
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -255,8 +255,12 @@ criteria:
 not_doing:
   - No fuzzy/stemmed matching; exact case-folded key only.
   - No IPA validation of replacement strings (that is the G2P layer's concern).
-test_files: []
-criteria_map: {}
+test_files: [tests/lexicon.rs]
+criteria_map:
+  C1: [user_overrides_default_on_collision, default_value_wins_when_no_user_override]
+  C2: [default_only_key_falls_through, missing_key_returns_none, missing_key_with_empty_user_returns_none]
+  C3: [lookup_is_case_folded_on_key, default_key_lookup_is_case_folded, stored_value_casing_is_returned_unaltered]
+  C4: [empty_user_keeps_defaults_reachable, empty_user_keeps_all_defaults_reachable]
 attempts: 1
 last_failure: ""
 ---
