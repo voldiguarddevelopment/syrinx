@@ -4,7 +4,14 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[lib]
+# `lib.rs` (T-02.02a `attention`) is kept byte-identical to its freeze base, so
+# the crate root lives in `root.rs`, which wires `lib.rs` together with the
+# isolated `block.rs` (T-02.02b SwiGLU FFN + pre-norm residual block).
+path = "src/root.rs"
+
 [dependencies]
 # T-02.02a attention composes the `syrinx-core` reference primitives
-# (`linear`/`rope`) over the `Tensor` contract.
+# (`linear`/`rope`) over the `Tensor` contract; T-02.02b's block/FFN add
+# `silu`/`mul`/`add`/`rmsnorm`.
 syrinx-core = { path = "../syrinx-core" }
