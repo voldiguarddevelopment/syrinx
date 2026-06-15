@@ -553,7 +553,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic numerical parity and the listed algebraic properties are in scope.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The seven neural primitives the LM composes. Inputs: each op's `input` arrays from its parity golden. Bounds: linear/rmsnorm/softmax/silu/rope/embed pinned at 1e-4 max-abs against their goldens and rejected on a one-element corruption; causal_mask pinned at the exact `0.0`/`-inf` pattern. Outputs: tensors whose shapes equal the golden `shape`. Errors/edges: `-inf` mask entries must survive into the score-add so softmax drives them to 0; `rope` at `pos 0` is identity. Invariant: every op transcribes `reference.py` §4 exactly (eps inside the sqrt; softmax max-subtract; interleaved RoPE pairing). Done-check: the four criteria — golden parity for six ops, exact-pattern for the mask, and the softmax-sum / rmsnorm-RMS / rope-norm / silu-zero properties that hold with no golden.
