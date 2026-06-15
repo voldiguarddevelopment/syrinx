@@ -1,2 +1,2 @@
-509a64869f738ca4183bfc1d292ce9c264e7c77d713d8ca8fb0edb5f57520061  criteria_map:T-03.02
-15c4b3fee6fc37c4ef8e3a2029c3a78f32f165e1114abdb66ac9d88e9a7830f5  tests/duration_override.rs
+f650c2dcc5d1ff3573cdbb6a7c248ba980c74ad647e9631efcf37c5b1dff0a5e  criteria_map:T-03.03
+269c3ddddfad580b855a2288505baadbf3d486710550332faf1c197776a02465  tests/pitch_override.rs

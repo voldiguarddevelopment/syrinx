@@ -2,5 +2,6 @@
 
 pub mod duration;
 pub mod lipsync;
+pub mod pitch;
 pub mod plan;
 pub mod volume;
