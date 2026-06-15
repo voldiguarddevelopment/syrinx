@@ -3,3 +3,6 @@ name = "syrinx-core"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[lib]
+path = "src/root.rs"
