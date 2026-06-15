@@ -527,7 +527,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; this task is purely deterministic numerical parity against the Python reference goldens.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The arithmetic floor every other LM op stands on. Inputs: `Tensor` values built from the parity goldens' `input` arrays. Bounds: matmul/add/mul pinned at 1e-4 max-abs against `matmul.json`/`add.json`/`mul.json`, rejected at a one-element corruption; output shape pinned `[m,n]` for matmul and equal-shape for add/mul. Outputs: a `Tensor` with the contract `data.len() == prod(shape)`. Errors/edges: an inner-dim mismatch in matmul and any shape disagreement in add/mul are typed `ShapeError`s naming the dims, never a panic. Invariant: matmul sums over the shared inner dim `k` row-major (`reference.py` §4.1) and add/mul are elementwise `f32`. Done-check: the four criteria — three golden-parity, one typed-error boundary.
