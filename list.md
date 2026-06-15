@@ -480,7 +480,7 @@ not_doing:
   - No wire format other than JSON for this contract.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The typed, versioned hand-off struct from the frontend to `syrinx-lm`. Inputs: phoneme/token entries plus control events produced upstream. Outputs: a serializable `FrontendOutput` with an explicit `schema_version`. Errors/edges: serialize→deserialize round-trips to an equal value; a version mismatch or absent version field yields a typed `ContractError`, never a silent accept or panic. Invariant: the schema version is an explicit, checked field on every payload. Done-check: the version-field, round-trip, mismatch-rejection, and missing-field criteria.
