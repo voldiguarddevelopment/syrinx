@@ -757,7 +757,7 @@ not_doing:
   - No audio rendering or DSP — this is the data model only.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The typed editable plan every control task edits. Inputs: a phoneme count N plus equal-length `durations_ms: Vec<f32>` and `pitch_hz: Vec<f32>` arrays and a `schema_version`. Outputs: a `ProsodyPlan` that serializes to JSON and round-trips byte-identically. Errors/edges: mismatched array lengths → `PlanError::LengthMismatch`; index access at i == N → `PlanError::IndexOutOfRange` (boundary at i == N-1 still `Ok`); JSON without `schema_version` → deserialize error; N == 0 is a valid empty plan. Invariant: `durations_ms.len() == pitch_hz.len() == N` always holds, and no index access ever panics. Done-check: the four frozen criteria over serialize/round-trip, length agreement, index boundary, and schema presence.
