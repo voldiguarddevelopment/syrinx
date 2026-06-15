@@ -678,7 +678,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; this gates only deterministic numerical parity against `lm_forward.json` (the trained weights swap in under a separate later task).
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The end-to-end semantic LM forward. Inputs: `token_ids` (the fixed `[1,5,9,2,0]`), all weights name-generated via T-02.01c. Bounds: shape `[5,512]`; logits pinned at 1e-3 max-abs against `lm_forward.json` and rejected at 2e-3; block count, norm position, and head untying each pinned against a wrong alternative. Outputs: `logits[T, vocab=512]`. Errors/edges: a 3-block run, a post-lm_head final norm, or a tied head all diverge past tolerance. Invariant: exact transcription of `reference.py` §5 — `embed → 4× block → final rmsnorm → untied lm_head`, no randomness, weights a pure function of names. Done-check: the four criteria — golden parity plus the block-count / norm-order / untied-head boundary pins.
