@@ -8,4 +8,5 @@ pub mod g2p;
 pub mod hetero;
 pub mod lexicon;
 pub mod normalize;
+pub mod punct;
 pub mod ssml;
