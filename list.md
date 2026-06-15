@@ -679,7 +679,34 @@ not_doing:
 test_files: []
 criteria_map: {}
 attempts: 1
-last_failure: ""
+last_failure: |
+  
+  running 6 tests
+  test test_forward_matches_golden ... ok
+  test test_forward_final_norm_before_head ... ok
+  test test_forward_block_count_is_four ... FAILED
+  test test_forward_lm_head_is_untied ... ok
+  test test_forward_rejects_single_logit_perturbation ... ok
+  test test_forward_output_shape_is_t_by_vocab ... ok
+  
+  failures:
+  
+  ---- test_forward_block_count_is_four stdout ----
+  
+  thread 'test_forward_block_count_is_four' (802695) panicked at tests/lm_forward_parity.rs:277:5:
+  a 3-block pipeline must diverge from the golden by more than tol
+  note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+  
+  
+  failures:
+      test_forward_block_count_is_four
+  
+  test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s
+  
+  
+      Finished `test` profile [unoptimized + debuginfo] target(s) in 0.44s
+       Running tests/lm_forward_parity.rs (target/debug/deps/lm_forward_parity-1118dec488a72056)
+  error: test failed, to rerun pass `--test lm_forward_parity`
 ---
 The end-to-end semantic LM forward. Inputs: `token_ids` (the fixed `[1,5,9,2,0]`), all weights name-generated via T-02.01c. Bounds: shape `[5,512]`; logits pinned at 1e-3 max-abs against `lm_forward.json` and rejected at 2e-3; block count, norm position, and head untying each pinned against a wrong alternative. Outputs: `logits[T, vocab=512]`. Errors/edges: a 3-block run, a post-lm_head final norm, or a tied head all diverge past tolerance. Invariant: exact transcription of `reference.py` §5 — `embed → 4× block → final rmsnorm → untied lm_head`, no randomness, weights a pure function of names. Done-check: the four criteria — golden parity plus the block-count / norm-order / untied-head boundary pins.
 
