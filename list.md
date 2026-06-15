@@ -612,7 +612,7 @@ Inputs: the loaded base weights and a fixed tokenized prompt with paralinguistic
 ### T-02.02a  Compute multi-head causal attention
 id: T-02.02a
 phase: 2
-status: pending
+status: done
 depends_on: [T-02.01b, T-02.01c]
 stack: rust
 criteria:
@@ -624,10 +624,14 @@ not_doing:
   - No FFN, block residual wiring, or full forward (those are T-02.02b/T-02.02c).
   - No KV-cache, no flash/streaming attention — a single deterministic dense forward only.
   - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic attention math (RoPE+scale+causal-mask+softmax+output-proj) is in scope.
-test_files: []
-criteria_map: {}
+test_files: [tests/attention_prop.rs]
+criteria_map:
+  C1: [test_output_shape_is_t_by_dim, test_attention_matches_reference_dense]
+  C2: [test_causal_future_independence]
+  C3: [test_scale_is_inv_sqrt_head_dim]
+  C4: [test_head_split_is_contiguous]
 attempts: 2
-last_failure: surviving mutant at crates/syrinx-lm/src/lib.rs:95 (arith-sub-to-add) — frozen tests do not kill it
+last_failure: ""
 ---
 The causal self-attention sub-block. Inputs: `x[T,dim]`, the four projection weight tensors (drawn via T-02.01c), and `positions`. Bounds: causal independence of future positions pinned at ± 1e-5; `1/sqrt(head_dim)` scaling and contiguous head split each pinned against a wrong alternative. Outputs: `[T,dim]` context after the `wo` projection. Errors/edges: dropping the mask leaks future keys and fails the causal test; a wrong scale or interleaved head split fails. Invariant: attention is the exact transcription of `reference.py` §5.2 — RoPE on Q/K only, scale-before-mask, softmax over keys, contiguous heads. Done-check: the four properties — shape, causality, scaling, head split — gateable without a dedicated golden since the forward golden (T-02.02c) covers end-to-end values.
 
