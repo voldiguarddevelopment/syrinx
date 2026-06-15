@@ -830,7 +830,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (whether the time-scaled speech sounds right / pitch is truly unshifted on rendered output) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The utterance-level rate scaler over the typed plan. Inputs: a `ProsodyPlan` and a positive rate factor R. Outputs: a plan whose every `durations_ms` entry is multiplied by R (so total duration scales by R and per-phoneme proportions are preserved) with `pitch_hz` left bit-identical. Errors/edges: R == 1.0 is duration-identity; R ≤ 0 → `PlanError::InvalidRate` with no plan produced; the positive boundary is pinned at R and just past zero; nothing panics. Invariant: rate scaling is a uniform multiply of `durations_ms` that never alters `pitch_hz`. This is the deterministic DSP-on-plan transform on synthetic input; whether the time-scaled audio is perceptually correct and pitch-preserved is deferred to a later perceptual eval against the real model.
