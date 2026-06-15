@@ -122,7 +122,7 @@ pub fn linear(x: &Tensor, w: &Tensor, b: Option<&Tensor>) -> Tensor {
         for o in 0..out_dim {
             let mut sum = 0.0f64;
             for k in 0..in_dim {
-                sum += x.data[i * in_dim + k] as f64 * w.data[o / in_dim + k] as f64;
+                sum += x.data[i * in_dim + k] as f64 * w.data[o * in_dim + k] as f64;
             }
             if let Some(bias) = b {
                 sum += bias.data[o] as f64;
