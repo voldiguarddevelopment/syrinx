@@ -1626,7 +1626,7 @@ not_doing:
   - No interpolation or smoothing between visemes.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Inputs: a typed list of (phoneme, start_ms, end_ms) entries. Bounds: timestamps ordered and contiguous across the input span. Outputs: a viseme timeline of (viseme_class, start_ms, end_ms) segments. Errors/edges: empty input yields empty output; an unknown phoneme yields the neutral/rest viseme and never panics. Invariant: the timeline covers the input span with no gaps or overlaps and every phoneme maps via the fixed table. Done-check: the deterministic table-mapping, span-coverage, empty-input, and unknown-phoneme criteria.
