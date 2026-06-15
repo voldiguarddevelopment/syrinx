@@ -553,9 +553,8 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic numerical parity and the listed algebraic properties are in scope.
 test_files: []
 criteria_map: {}
-attempts: 1
+attempts: 2
 last_failure: |
-  
   running 12 tests
   test test_c1_goldens_reject_one_element_corruption ... FAILED
   test test_embed_parity ... ok
@@ -569,28 +568,18 @@ last_failure: |
   test test_silu_zero_and_monotone_on_positive_samples ... ok
   test test_softmax_rows_sum_to_one_and_nonneg ... ok
   test test_softmax_parity ... ok
-  
   failures:
-  
   ---- test_c1_goldens_reject_one_element_corruption stdout ----
-  
   thread 'test_c1_goldens_reject_one_element_corruption' (285016) panicked at tests/core_ops_parity.rs:161:9:
   linear truth within tol
   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-  
   ---- test_linear_parity stdout ----
-  
   thread 'test_linear_parity' (285019) panicked at tests/core_ops_parity.rs:112:5:
   linear max-abs diff 2.1 exceeds tol 0.0001
-  
-  
   failures:
       test_c1_goldens_reject_one_element_corruption
       test_linear_parity
-  
   test result: FAILED. 10 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-  
-  
      Compiling syrinx-workspace-scaffold-tests v0.0.0 (/home/floofy/development/syrinx-build/.ratchet/worktrees/T-02.01b)
       Finished `test` profile [unoptimized + debuginfo] target(s) in 0.77s
        Running tests/core_ops_parity.rs (target/debug/deps/core_ops_parity-cb94c286747d9673)
