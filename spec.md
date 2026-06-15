@@ -342,6 +342,57 @@ not_doing:
 ---
 Inputs: the chosen base checkpoint plus its Python-reference tensor dump. Bounds: keys, shapes, dtypes, and values pinned at both equality and just-past corruption. Outputs: an in-memory `syrinx-core` tensor map. Errors/edges: missing key, extra key, transposed axis, dtype cast, 1e-5 value drift all fail. Invariant: the Rust map is bit-faithful to the reference within 1e-6. Done-check: the four parity criteria against the reference dump. BLOCKED: needs the real base model weights and a Python reference tensor dump to compare against, neither of which exists until a human ports the chosen base.
 
+### T-02.01a  Define core tensors and arithmetic
+id: T-02.01a
+phase: 2
+depends_on: [T-00.01]
+stack: rust
+criteria:
+  - C1: `syrinx-core` exposes a `Tensor { data: Vec<f32>, shape: Vec<usize> }` whose constructor accepts a flat row-major `data` and a `shape`, and `tensor.shape()` returns the declared dims while `tensor.data().len()` equals the product of `shape`.
+  - C2: a repo-root integration test `tests/core_arith_parity.rs` loads `tests/golden/parity/matmul.json`, runs `syrinx_core::matmul` on `input.A`×`input.B`, and asserts max-abs elementwise difference to `data` ≤ `tol` (1e-4); the produced shape equals `[m, n]` = `[2, 2]`-style `[A.rows, B.cols]` and equals the golden `shape` exactly.
+  - C3: `tests/core_arith_parity.rs` loads `tests/golden/parity/add.json` and `tests/golden/parity/mul.json`, runs `syrinx_core::add` and `syrinx_core::mul` elementwise on the equal-shaped `input.A`/`input.B`, and asserts max-abs difference to each `data` ≤ `tol` (1e-4); a one-element corruption of either golden makes that case fail.
+  - C4: `matmul` on `A[m,k]`×`B[p,n]` with `k != p`, and `add`/`mul` on two tensors of unequal shape, each return a typed `ShapeError` (not a panic, not a truncated result) that names the two mismatched dimensions; the matching-shape call on the same path returns `Ok`.
+not_doing:
+  - No neural ops (linear/rmsnorm/softmax/silu/rope/embed/causal_mask are T-02.01b) and no weight generation (T-02.01c).
+  - No SIMD, no BLAS, no device/quantization concerns — a single host-memory f32 reference path only.
+  - No real pretrained-weight quality or SIM-o/cloning concern; this task is purely deterministic numerical parity against the Python reference goldens.
+---
+The arithmetic floor every other LM op stands on. Inputs: `Tensor` values built from the parity goldens' `input` arrays. Bounds: matmul/add/mul pinned at 1e-4 max-abs against `matmul.json`/`add.json`/`mul.json`, rejected at a one-element corruption; output shape pinned `[m,n]` for matmul and equal-shape for add/mul. Outputs: a `Tensor` with the contract `data.len() == prod(shape)`. Errors/edges: an inner-dim mismatch in matmul and any shape disagreement in add/mul are typed `ShapeError`s naming the dims, never a panic. Invariant: matmul sums over the shared inner dim `k` row-major (`reference.py` §4.1) and add/mul are elementwise `f32`. Done-check: the four criteria — three golden-parity, one typed-error boundary.
+
+### T-02.01b  Implement the neural ops
+id: T-02.01b
+phase: 2
+depends_on: [T-02.01a]
+stack: rust
+criteria:
+  - C1: a repo-root integration test `tests/core_ops_parity.rs` loads `tests/golden/parity/linear.json`, runs `syrinx_core::linear(x, W[out,in], Some(b))`, and asserts max-abs difference to `data` ≤ `tol` (1e-4); the same test loads `tests/golden/parity/rmsnorm.json` (eps `1e-5` inside the sqrt) and `tests/golden/parity/softmax.json` (last-axis, max-subtracted) and asserts each ≤ 1e-4; corrupting any one of the three goldens fails its case.
+  - C2: `tests/core_ops_parity.rs` loads `tests/golden/parity/silu.json` (`v*sigmoid(v)`), `tests/golden/parity/rope.json` (interleaved pairs `(2i,2i+1)`, `theta=10000`, positions `[0,1]`), and `tests/golden/parity/embed.json` (row copy by id) and asserts each op's output is ≤ 1e-4 max-abs from `data`; the produced shapes equal the golden `shape` (`[2,4]`, `[2,1,4]`, `[4,3]` respectively).
+  - C3: `tests/core_ops_parity.rs` loads `tests/golden/parity/causal_mask.json` for `T=3` and asserts `causal_mask(3)` is `0.0` for `j <= i` and `f32::NEG_INFINITY` for `j > i` at every `(i,j)`, matching the golden (where `-inf` is encoded as the string `"-inf"`); a flipped inequality (mask on `j < i`) fails.
+  - C4: property tests in the same file pin the math without a golden — `softmax` rows sum to `1.0 ± 1e-6` and are all ≥ 0; `rmsnorm` output RMS over the last axis is `1.0 ± 1e-3` when `w` is all-ones; `rope` preserves each rotated pair's L2 norm to ± 1e-5 and is the identity at `pos == 0`; `silu(0.0) == 0.0` and `silu` is monotone-checkable at the pinned sample points.
+not_doing:
+  - No attention, FFN, block, or full forward (those are T-02.02a/b/c) and no weight generation (T-02.01c).
+  - No fused kernels or in-place optimization beyond a direct reference transcription of `reference.py` §4.
+  - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic numerical parity and the listed algebraic properties are in scope.
+---
+The seven neural primitives the LM composes. Inputs: each op's `input` arrays from its parity golden. Bounds: linear/rmsnorm/softmax/silu/rope/embed pinned at 1e-4 max-abs against their goldens and rejected on a one-element corruption; causal_mask pinned at the exact `0.0`/`-inf` pattern. Outputs: tensors whose shapes equal the golden `shape`. Errors/edges: `-inf` mask entries must survive into the score-add so softmax drives them to 0; `rope` at `pos 0` is identity. Invariant: every op transcribes `reference.py` §4 exactly (eps inside the sqrt; softmax max-subtract; interleaved RoPE pairing). Done-check: the four criteria — golden parity for six ops, exact-pattern for the mask, and the softmax-sum / rmsnorm-RMS / rope-norm / silu-zero properties that hold with no golden.
+
+### T-02.01c  Generate weights by name
+id: T-02.01c
+phase: 2
+depends_on: [T-02.01a]
+stack: rust
+criteria:
+  - C1: `syrinx_core::fnv1a_64(name)` implements unsalted FNV-1a-64 over the name's UTF-8 bytes (offset basis `0xCBF29CE484222325`, prime `0x00000100000001B3`, XOR-then-multiply mod 2^64); a unit assertion pins the seed for the literal string `"tok_embeddings"` to its reference value and a single flipped byte of the name changes the seed.
+  - C2: `syrinx_core` advances an xorshift64 stream as state `x ^= x<<13; x ^= x>>7; x ^= x<<17` (all wrapping mod 2^64), emitting the post-update state, and substitutes `0x9E3779B97F4A7C15` when the seed is `0`; the first emitted `u64` for the `tok_embeddings` seed is pinned and a swapped shift order fails.
+  - C3: the `u64 → f32` transform is `((x >> 11) as f64 * (1.0/2^53)) * 2.0 - 1.0` then `* 0.02` cast to `f32`, exactly per `reference.py` §2.3; a repo-root integration test `tests/weights_parity.rs` loads `tests/golden/parity/weights_sample.json` and asserts `weights("tok_embeddings", 8)` matches its `data` within `tol` (1e-4), and corrupting any of the 8 values fails the case.
+  - C4: `weights(name, count)` returns exactly `count` values that are the first `count` draws of the stream seeded by `fnv1a_64(name)`, so `weights(name, 8)` equals the length-8 prefix of `weights(name, 16)` element-for-element; requesting a different `name` yields a different first value (the stream is name-seeded, not constant).
+not_doing:
+  - No tensor-name → shape mapping or full checkpoint assembly (that is consumed inside T-02.02c's forward) beyond the raw `weights(name,count)` generator.
+  - No reading weights from any file — values are a pure function of the name per `reference.py` §2; no real pretrained checkpoint is loaded here.
+  - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic byte-exact reproduction of the reference PRNG is in scope.
+---
+The deterministic weight source every forward draws from. Inputs: a tensor `name` string and a `count`. Bounds: FNV-1a seed, xorshift64 stream, and the f32 transform each pinned to the reference; `weights_sample.json` parity at 1e-4 and rejected on a one-value corruption. Outputs: a `Vec<f32>` of length `count`. Errors/edges: the `seed == 0` substitution is guarded though it cannot arise for these names; a flipped name byte or swapped shift order diverges. Invariant: `weights` is a pure, byte-exact port of `reference.py` §2 — these values feed every forward, so the documented `tok_embeddings` seed and first draw are reproduced exactly. Done-check: the four criteria — hash pin, stream pin, golden parity, and the prefix/name-sensitivity properties.
+
 ### T-02.02  Run the semantic LM forward pass
 id: T-02.02
 phase: 2
@@ -357,6 +408,57 @@ not_doing:
   - No acoustic or vocoder stages; LM logits only.
 ---
 Inputs: the loaded base weights and a fixed tokenized prompt with paralinguistic tokens. Bounds: logits pinned at 1e-3 and rejected at 2e-3; argmax pinned per position. Outputs: per-position logits over the LM vocabulary. Errors/edges: shape mismatch, >1e-3 drift, argmax divergence, vocab offset all fail. Invariant: Rust logits equal the Python reference within tolerance. Done-check: the four parity criteria. BLOCKED: needs the ported weights, a GPU, and a Python reference forward pass to produce comparison logits — none gateable without the real model.
+
+### T-02.02a  Compute multi-head causal attention
+id: T-02.02a
+phase: 2
+depends_on: [T-02.01b, T-02.01c]
+stack: rust
+criteria:
+  - C1: `syrinx_lm::attention(x[T,dim], wq, wk, wv, wo, positions)` projects Q/K/V bias-free, splits each `[T,dim]` into `n_heads=4` contiguous head slices of `head_dim=32` (head `hi` owns columns `hi*head_dim..(hi+1)*head_dim`), applies RoPE to Q and K only (not V), and returns `[T,dim]`; a repo-root integration test `tests/attention_prop.rs` asserts the output shape equals `[T, dim]` for `T=4`.
+  - C2: `tests/attention_prop.rs` pins the causal property — recomputing attention after arbitrarily changing the input rows at positions `> i` leaves the output row at position `i` unchanged to ± 1e-5 for every `i`; removing the mask add (so a future key leaks in) changes some row and fails the assertion.
+  - C3: the score scaling is exactly `1/sqrt(head_dim)` applied to the Q·K dot product *before* the causal-mask add; `tests/attention_prop.rs` pins this by comparing the position-0 single-key output against a hand-derived `softmax([q·k * (1/sqrt(32))]) · v`, and a scale of `1/head_dim` or `1/sqrt(dim)` fails.
+  - C4: `tests/attention_prop.rs` asserts the per-head split is contiguous and head-local — a permutation of which columns a head reads (e.g. interleaved instead of contiguous head_dim blocks) changes the output, pinning the `hi*head_dim` column ownership from `reference.py` §5.2.
+not_doing:
+  - No FFN, block residual wiring, or full forward (those are T-02.02b/T-02.02c).
+  - No KV-cache, no flash/streaming attention — a single deterministic dense forward only.
+  - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic attention math (RoPE+scale+causal-mask+softmax+output-proj) is in scope.
+---
+The causal self-attention sub-block. Inputs: `x[T,dim]`, the four projection weight tensors (drawn via T-02.01c), and `positions`. Bounds: causal independence of future positions pinned at ± 1e-5; `1/sqrt(head_dim)` scaling and contiguous head split each pinned against a wrong alternative. Outputs: `[T,dim]` context after the `wo` projection. Errors/edges: dropping the mask leaks future keys and fails the causal test; a wrong scale or interleaved head split fails. Invariant: attention is the exact transcription of `reference.py` §5.2 — RoPE on Q/K only, scale-before-mask, softmax over keys, contiguous heads. Done-check: the four properties — shape, causality, scaling, head split — gateable without a dedicated golden since the forward golden (T-02.02c) covers end-to-end values.
+
+### T-02.02b  Compute the SwiGLU transformer block
+id: T-02.02b
+phase: 2
+depends_on: [T-02.01b]
+stack: rust
+criteria:
+  - C1: `syrinx_lm::swiglu_ffn(x[T,dim], w1, w3, w2)` computes `gate = silu(linear(x, w1))`, `up = linear(x, w3)`, `out = linear(gate * up, w2)` — `w1` is the gate `[ffn_hidden,dim]`, `w3` the up `[ffn_hidden,dim]`, `w2` the down `[dim,ffn_hidden]` — and returns `[T,dim]`; a repo-root integration test `tests/block_prop.rs` asserts the output shape is `[T, dim]` and that swapping `w1` with `w3` (so silu wraps the up instead of the gate) changes the output.
+  - C2: `tests/block_prop.rs` pins the SwiGLU elementwise structure — replacing the `gate * up` Hadamard product with `gate + up` changes the FFN output, and zeroing `w3` (the up path) drives the FFN output to all-zeros, both falsifiable from the formula in `reference.py` §5.3.
+  - C3: `syrinx_lm::block(h[T,dim], attn_norm_w, ffn_norm_w, attn_weights, ffn_weights, positions)` applies the pre-RMSNorm residual order of `reference.py` §5.1 — `h = h + attention(rmsnorm(h, attn_norm_w))` then `h = h + swiglu_ffn(rmsnorm(h, ffn_norm_w))`, each residual adding the sub-block output to the PRE-norm `h`; `tests/block_prop.rs` pins this by asserting that with both sub-block weights zeroed the block is the identity (`block(h) == h` to ± 1e-6), which holds only if the residual adds to the un-normed input.
+  - C4: `tests/block_prop.rs` asserts the residual targets the pre-norm tensor, not the normed one — substituting `h = rmsnorm(h) + sub_block(...)` (residual on the normed value) breaks the zeroed-weights identity from C3 and fails, pinning the §5.1 order.
+not_doing:
+  - No attention internals (that is T-02.02a; this task may call a trivial/zeroed attention for the block-order tests) and no full multi-layer forward (T-02.02c).
+  - No fused FFN kernel or activation approximation — a direct transcription of `reference.py` §5.3 and §5.1.
+  - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic SwiGLU + pre-norm-residual structure is in scope.
+---
+The transformer block: SwiGLU FFN plus the pre-norm residual wiring. Inputs: `h[T,dim]`, the two RMSNorm weights, and the attention/FFN weight sets. Bounds: shape `[T,dim]`; the SwiGLU gate/up/down roles and `gate*up` Hadamard pinned against wrong alternatives; the residual-adds-to-pre-norm-`h` order pinned by the zeroed-weights identity. Outputs: `[T,dim]`. Errors/edges: swapping w1/w3, using `+` instead of `*`, or residual-on-normed-tensor each fail a property. Invariant: exact transcription of `reference.py` §5.1 (block order) and §5.3 (SwiGLU). Done-check: the four properties — FFN shape/role, Hadamard structure, residual identity, and pre-norm residual target — gateable without a dedicated golden since end-to-end values are covered by T-02.02c.
+
+### T-02.02c  Run the LM forward pass
+id: T-02.02c
+phase: 2
+depends_on: [T-02.02a, T-02.02b, T-02.01c]
+stack: rust
+criteria:
+  - C1: `syrinx_lm::forward(token_ids)` runs `embed → 4 blocks → final rmsnorm(norm.weight, eps=1e-5) → linear(output.weight)` with `positions = [0..T-1]`, drawing every named weight from T-02.01c with the literal names of `reference.py` §3, and returns logits of shape `[T, 512]`; a repo-root integration test `tests/lm_forward_parity.rs` asserts the output shape equals `[5, 512]` for the input `[1,5,9,2,0]`.
+  - C2: `tests/lm_forward_parity.rs` loads `tests/golden/parity/lm_forward.json` and asserts the `forward([1,5,9,2,0])` logits match its `data` within `tol` (1e-3) max-abs over all `5*512` elements; a `2e-3` perturbation of any single logit fails the assertion.
+  - C3: `tests/lm_forward_parity.rs` pins the block count and order — running `forward` with `3` blocks instead of `4`, or applying the final RMSNorm after the lm_head instead of before, drives the max-abs difference above `1e-3` and fails; the correct `4`-block, norm-then-lm_head order passes.
+  - C4: `tests/lm_forward_parity.rs` pins the untied lm_head — using `tok_embeddings` as the output projection instead of the separate `output.weight` changes the logits and fails the parity assertion, confirming the head is untied per `reference.py` §3.
+not_doing:
+  - No sampling, greedy decoding loop, beam search, or KV-cache — a single deterministic forward producing logits only.
+  - No acoustic/vocoder/speaker stages and no real pretrained checkpoint — weights come from the deterministic name-seeded generator (T-02.01c).
+  - No real pretrained-weight quality or SIM-o/cloning concern; this gates only deterministic numerical parity against `lm_forward.json` (the trained weights swap in under a separate later task).
+---
+The end-to-end semantic LM forward. Inputs: `token_ids` (the fixed `[1,5,9,2,0]`), all weights name-generated via T-02.01c. Bounds: shape `[5,512]`; logits pinned at 1e-3 max-abs against `lm_forward.json` and rejected at 2e-3; block count, norm position, and head untying each pinned against a wrong alternative. Outputs: `logits[T, vocab=512]`. Errors/edges: a 3-block run, a post-lm_head final norm, or a tied head all diverge past tolerance. Invariant: exact transcription of `reference.py` §5 — `embed → 4× block → final rmsnorm → untied lm_head`, no randomness, weights a pure function of names. Done-check: the four criteria — golden parity plus the block-count / norm-order / untied-head boundary pins.
 
 ### T-02.03  Run the speaker encoder forward
 id: T-02.03
