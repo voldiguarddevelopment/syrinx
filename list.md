@@ -382,7 +382,7 @@ not_doing:
   - No acoustic realization of the hints; markers are typed metadata only.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 A mapping from terminal/internal punctuation to typed prosody markers. Inputs: a normalized `&str`. Outputs: an ordered list of `ProsodyHint` markers keyed to punctuation positions. Errors/edges: period→full falling boundary, comma→short break, `?`→rising, `!`→falling exclamatory are each pinned against one another; unpunctuated text yields no markers. Invariant: the marker count equals the count of recognized punctuation marks. Done-check: the period, comma, question, exclamation, and empty criteria.
