@@ -4,6 +4,7 @@
 //! subset parsing).
 
 pub mod context;
+pub mod contract;
 pub mod expand;
 pub mod g2p;
 pub mod hetero;
