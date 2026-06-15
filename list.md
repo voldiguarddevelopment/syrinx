@@ -432,7 +432,7 @@ not_doing:
   - No language-specific breathing models; uniform word-interval policy.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Deterministic insertion of breath markers by word interval and paragraph structure. Inputs: paragraph text and a words-per-breath interval. Outputs: an ordered list of breath-marker positions. Errors/edges: markers fall strictly after each completed interval (boundary pinned at `>` not `>=`); every paragraph break forces a marker regardless of length. Invariant: identical input yields identical marker positions on every call. Done-check: the interior-interval, off-by-one boundary, determinism, and paragraph-break criteria.
