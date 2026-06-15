@@ -87,12 +87,11 @@ pub fn attention(
                 }
                 scores[j] = dot * scale; // scale BEFORE the (implicit) mask add
             }
-            // softmax over keys (max-subtracted for stability).
-            let m = scores.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            // softmax over keys (future keys carry -inf -> exp = 0).
             let mut s = 0.0f64;
             let mut e = vec![0.0f64; t];
             for j in 0..t {
-                e[j] = (scores[j] - m).exp();
+                e[j] = scores[j].exp();
                 s += e[j];
             }
             // value-weighted context, scattered back to head `hi`'s columns.
