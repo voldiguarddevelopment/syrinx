@@ -319,7 +319,7 @@ A decorator over any `Phonemizer` that substitutes per-word IPA. Inputs: a base 
 ### T-01.06  Resolve heteronyms
 id: T-01.06
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.04]
 stack: rust
 criteria:
@@ -330,8 +330,12 @@ criteria:
 not_doing:
   - No statistical/ML POS tagging; rule-based context disambiguation only.
   - No coverage beyond the fixed heteronym test set (read/lead/bow and the listed words).
-test_files: []
-criteria_map: {}
+test_files: [tests/hetero.rs]
+criteria_map:
+  C1: [read_past_tense_selects_red, read_present_tense_selects_reed, read_two_contexts_differ]
+  C2: [lead_verb_selects_liid, lead_noun_selects_led, lead_two_contexts_differ]
+  C3: [bow_take_selects_bau, bow_violin_selects_bou, bow_two_contexts_differ, resolution_is_deterministic]
+  C4: [no_heteronym_leaves_cat_as_base, no_heteronym_passthrough_full_sequence]
 attempts: 1
 last_failure: ""
 ---
