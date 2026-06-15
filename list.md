@@ -553,9 +553,8 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic numerical parity and the listed algebraic properties are in scope.
 test_files: []
 criteria_map: {}
-attempts: 3
+attempts: 4
 last_failure: |
-  
   running 12 tests
   test test_embed_parity ... ok
   test test_linear_parity ... ok
@@ -569,46 +568,30 @@ last_failure: |
   test test_silu_parity ... ok
   test test_softmax_rows_sum_to_one_and_nonneg ... FAILED
   test test_softmax_parity ... FAILED
-  
   failures:
-  
   ---- test_c1_goldens_reject_one_element_corruption stdout ----
-  
   thread 'test_c1_goldens_reject_one_element_corruption' (469279) panicked at crates/syrinx-core/src/lib.rs:184:18:
   attempt to subtract with overflow
   note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-  
   ---- test_rope_preserves_pair_norm_and_identity_at_pos_zero stdout ----
-  
   thread 'test_rope_preserves_pair_norm_and_identity_at_pos_zero' (469286) panicked at crates/syrinx-core/src/lib.rs:228:22:
   attempt to subtract with overflow
-  
   ---- test_rope_parity stdout ----
-  
   thread 'test_rope_parity' (469285) panicked at crates/syrinx-core/src/lib.rs:228:22:
   attempt to subtract with overflow
-  
   ---- test_softmax_rows_sum_to_one_and_nonneg stdout ----
-  
   thread 'test_softmax_rows_sum_to_one_and_nonneg' (469290) panicked at crates/syrinx-core/src/lib.rs:184:18:
   attempt to subtract with overflow
-  
   ---- test_softmax_parity stdout ----
-  
   thread 'test_softmax_parity' (469289) panicked at crates/syrinx-core/src/lib.rs:184:18:
   attempt to subtract with overflow
-  
-  
   failures:
       test_c1_goldens_reject_one_element_corruption
       test_rope_parity
       test_rope_preserves_pair_norm_and_identity_at_pos_zero
       test_softmax_parity
       test_softmax_rows_sum_to_one_and_nonneg
-  
   test result: FAILED. 7 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
-  
-  
       Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
        Running tests/core_ops_parity.rs (target/debug/deps/core_ops_parity-cb94c286747d9673)
   error: test failed, to rerun pass `--test core_ops_parity`
