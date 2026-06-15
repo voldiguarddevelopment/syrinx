@@ -534,50 +534,53 @@ not_doing:
 ---
 The typed editable plan every control task edits. Inputs: a phoneme count N plus equal-length `durations_ms: Vec<f32>` and `pitch_hz: Vec<f32>` arrays and a `schema_version`. Outputs: a `ProsodyPlan` that serializes to JSON and round-trips byte-identically. Errors/edges: mismatched array lengths → `PlanError::LengthMismatch`; index access at i == N → `PlanError::IndexOutOfRange` (boundary at i == N-1 still `Ok`); JSON without `schema_version` → deserialize error; N == 0 is a valid empty plan. Invariant: `durations_ms.len() == pitch_hz.len() == N` always holds, and no index access ever panics. Done-check: the four frozen criteria over serialize/round-trip, length agreement, index boundary, and schema presence.
 
-### T-03.02  Expose the duration predictor override
+### T-03.02  Override phoneme durations
 id: T-03.02
 phase: 3
 depends_on: [T-03.01]
 stack: rust
 criteria:
-  - C1: with the trained duration predictor loaded, predicting durations for a fixed phoneme sequence at a pinned seed yields per-phoneme `durations_ms` matching the reference predictor within tolerance, and the count equals the phoneme count.
-  - C2: overriding phoneme i's duration to a value V and re-rendering produces a segment whose measured duration equals V within tolerance, while phonemes other than i are unchanged within tolerance.
-  - C3: a duration override at index i == N returns `Err(PlanError::IndexOutOfRange)` and renders nothing, while i == N-1 applies.
+  - C1: in `syrinx-prosody`, `plan.set_duration(i, v)` on a plan of N phonemes sets `durations_ms[i] == v` exactly, leaves every other duration entry and the entire `pitch_hz` array unchanged, and asserting a second distinct value V2 ≠ V at i pins the write to that index.
+  - C2: `plan.override_durations(new)` replaces the whole `durations_ms` array iff `new.len() == N`, returning `Ok` with `durations_ms == new`; a `new` whose length is N+1 (and one of N-1) returns `Err(PlanError::LengthMismatch)` and leaves the plan's durations unchanged, not a panic and not a partial write.
+  - C3: `plan.set_duration(i, v)` at i == N-1 returns `Ok` and applies, while i == N (one past the last) returns `Err(PlanError::IndexOutOfRange)` and mutates nothing; no usize index panics.
 not_doing:
-  - No pitch or volume control — duration timing only.
-  - No re-training of the predictor — exposure and override only.
+  - No pitch, volume, or rate control — duration-array editing only.
+  - No prediction or defaults — values are caller-supplied per T-03.01.
+  - The PERCEPTUAL/AUDIO eval (whether the overridden timing sounds right on rendered output) is deferred to a later eval task against the real model.
 ---
-Surfaces predicted per-phoneme durations on the plan and lets a caller override any entry. Inputs: a phoneme sequence and the trained duration predictor; optional per-index duration overrides. Outputs: a `ProsodyPlan` whose `durations_ms` reflect predictions plus overrides, and rendered timing honoring them. Errors/edges: override index at N → `IndexOutOfRange` (N-1 applies); non-overridden phonemes must stay fixed. Invariant: only the overridden indices change the rendered timing. Done-check: prediction parity, override-changes-timing-predictably, and the index boundary, measured on rendered audio. BLOCKED: requires the trained duration predictor and the acoustic renderer (human-and-GPU work, DESIGN §12 / CLAUDE THE BUILD SCOPE) before predicted durations or rendered-timing tolerances exist to gate against.
+The duration-override API on the typed prosody plan. Inputs: a `ProsodyPlan` of N phonemes plus a single (index, value) override or a full-array replacement. Outputs: a plan whose `durations_ms` reflects exactly the requested change with `pitch_hz` untouched. Errors/edges: a single-index write past N-1 → `PlanError::IndexOutOfRange`; a bulk replacement whose length ≠ N → `PlanError::LengthMismatch`; both leave the plan unchanged and never panic; i == N-1 still applies. Invariant: a single override changes exactly one duration entry and nothing else; a bulk override either replaces all N or rejects atomically. This is the deterministic typed-API edit on synthetic plans; whether the resulting timing is perceptually correct on rendered audio is deferred to a later perceptual eval against the real model.
 
-### T-03.03  Expose the pitch predictor override
+### T-03.03  Override phoneme pitch
 id: T-03.03
 phase: 3
 depends_on: [T-03.01]
 stack: rust
 criteria:
-  - C1: with the trained F0 predictor loaded, predicting the pitch contour for a fixed phoneme sequence at a pinned seed yields `pitch_hz` matching the reference within tolerance, one entry per phoneme.
-  - C2: a per-phoneme pitch override at index i changes the measured F0 of segment i toward the target within tolerance while other phonemes' F0 stay unchanged within tolerance.
-  - C3: a per-word pitch edit spanning the word's phoneme span shifts the measured F0 across exactly that span and leaves phonemes outside the span unchanged within tolerance.
+  - C1: in `syrinx-prosody`, `plan.set_pitch(i, hz)` sets `pitch_hz[i] == hz` exactly, leaves every other pitch entry and the whole `durations_ms` array unchanged, and a second distinct value HZ2 ≠ HZ at i pins the write to that index.
+  - C2: `plan.set_word_pitch(word_span, hz)` for a word mapping to the phoneme span `[start, end)` sets `pitch_hz[k] == hz` for every k in the span and leaves all entries outside the span unchanged; a span of width 1 and a span of width 3 both apply across exactly their indices.
+  - C3: a per-phoneme override at i == N returns `Err(PlanError::IndexOutOfRange)` (i == N-1 applies), and a word span whose end exceeds N returns `Err(PlanError::IndexOutOfRange)`; both mutate nothing and never panic.
 not_doing:
-  - No duration or volume control — pitch/F0 only.
+  - No duration, volume, or rate control — pitch-array editing only.
   - No intonation presets — those build on this in T-03.07.
+  - The PERCEPTUAL/AUDIO eval (whether the overridden F0 sounds right on rendered output) is deferred to a later eval task against the real model.
 ---
-Surfaces the predicted F0 contour and lets a caller override pitch at word and phoneme granularity. Inputs: a phoneme sequence, the trained F0 predictor, and per-word or per-phoneme pitch edits. Outputs: a `ProsodyPlan` whose `pitch_hz` reflects predictions plus edits, audibly applied on render. Errors/edges: edits outside a word's phoneme span must not bleed; out-of-range indices error per the plan model. Invariant: only edited phonemes/spans change measured F0. Done-check: contour parity plus per-phoneme and per-word edits verified on rendered audio. BLOCKED: requires the trained F0 predictor and the acoustic renderer to measure F0 against; until a human ports the model these tolerances and contours do not exist (CLAUDE THE BUILD SCOPE).
+The pitch-override API on the typed plan at phoneme and word granularity. Inputs: a `ProsodyPlan` of N phonemes plus a per-phoneme (index, hz) override or a per-word (span, hz) override where a word maps to a contiguous phoneme span `[start, end)`. Outputs: a plan whose `pitch_hz` reflects exactly the requested change with `durations_ms` untouched. Errors/edges: a phoneme index ≥ N or a word span end > N → `PlanError::IndexOutOfRange`, mutating nothing; i == N-1 and a span ending at N-1 both apply; edits never bleed outside the targeted index or span. Invariant: only the targeted phoneme or span changes and only `pitch_hz` is touched. This is the deterministic typed-API edit on synthetic plans; whether the resulting F0 is perceptually correct on rendered audio is deferred to a later perceptual eval against the real model.
 
-### T-03.04  Stretch the speech rate
+### T-03.04  Scale speech rate
 id: T-03.04
 phase: 3
 depends_on: [T-03.01]
 stack: rust
 criteria:
-  - C1: applying a rate factor R to rendered model output yields total duration equal to the original divided by R within tolerance (R == 2.0 halves, R == 0.5 doubles).
-  - C2: the measured fundamental frequency of the rate-stretched audio equals the original F0 within tolerance — rate scaling does not shift pitch.
-  - C3: a rate factor R == 1.0 returns audio equal to the input within tolerance, and a non-positive R returns a typed error.
+  - C1: in `syrinx-prosody`, `plan.scale_rate(2.0)` returns a plan whose summed `durations_ms` equals exactly twice the original sum and whose every per-phoneme duration is exactly 2.0× the original, while `scale_rate(0.5)` yields exactly half; asserting a third factor 3.0 ≠ {2.0, 0.5} kills scale mutants.
+  - C2: `scale_rate(R)` leaves `pitch_hz` element-for-element identical to the input for R == 2.0 and R == 0.5 — rate scaling does not touch pitch — and `scale_rate(1.0)` returns durations element-for-element equal to the input (identity).
+  - C3: `scale_rate(0.0)` and `scale_rate(-1.0)` each return `Err(PlanError::InvalidRate)` and produce no scaled plan, while any R > 0 (e.g. 0.001) returns `Ok`, pinning the positive-factor boundary; no input panics.
 not_doing:
-  - No pitch shifting — rate only, pitch preserved.
-  - No per-phoneme rate; this is an utterance-level stretch.
+  - No pitch shifting — rate scales durations only, pitch preserved.
+  - No per-phoneme rate — this is a whole-plan duration scale.
+  - The PERCEPTUAL/AUDIO eval (whether the time-scaled speech sounds right / pitch is truly unshifted on rendered output) is deferred to a later eval task against the real model.
 ---
-Time-stretches rendered speech without pitch change. Inputs: a rendered sample buffer (model output) and a positive rate factor R. Outputs: a buffer whose duration scales by 1/R with F0 preserved. Errors/edges: R == 1.0 is identity; R <= 0 is a typed error; boundary behavior pinned at R and just past it. Invariant: pitch is invariant under rate change. Done-check: duration-scales, pitch-unchanged, and identity/error edges, measured on stretched audio. BLOCKED: the audio DSP operates on the acoustic decoder's model output, which does not exist until a human ports/trains the renderer (CLAUDE THE BUILD SCOPE) — there is nothing to stretch or to measure F0 on yet.
+The utterance-level rate scaler over the typed plan. Inputs: a `ProsodyPlan` and a positive rate factor R. Outputs: a plan whose every `durations_ms` entry is multiplied by R (so total duration scales by R and per-phoneme proportions are preserved) with `pitch_hz` left bit-identical. Errors/edges: R == 1.0 is duration-identity; R ≤ 0 → `PlanError::InvalidRate` with no plan produced; the positive boundary is pinned at R and just past zero; nothing panics. Invariant: rate scaling is a uniform multiply of `durations_ms` that never alters `pitch_hz`. This is the deterministic DSP-on-plan transform on synthetic input; whether the time-scaled audio is perceptually correct and pitch-preserved is deferred to a later perceptual eval against the real model.
 
 ### T-03.05  Apply volume automation curves
 id: T-03.05
@@ -610,20 +613,21 @@ not_doing:
 ---
 Text-prompted emotion with a monotonic intensity scale. Inputs: text, an emotion prompt, and an intensity in [0,1]. Outputs: rendered audio carrying the intended emotion scaled by intensity. Errors/edges: intensity 0 collapses to neutral; intensity is monotonic. Invariant: intended emotion identifiable and intensity ordering preserved. Done-check: A/B emotion identification and monotonic-intensity panel results. BLOCKED: the gate is a perceptual A/B + intensity-monotonicity judgment requiring the trained model and human listeners (CLAUDE THE BUILD SCOPE) — it cannot be expressed as a frozen-test + mutation gate.
 
-### T-03.07  Manipulate the intonation contour
+### T-03.07  Apply intonation contours
 id: T-03.07
 phase: 3
-depends_on: [T-03.03]
+depends_on: [T-03.01, T-03.03]
 stack: rust
 criteria:
-  - C1: applying a named intonation preset (e.g. rising question contour) to a fixed utterance produces the preset's specified F0 shape, with terminal F0 rising versus the neutral baseline within tolerance.
-  - C2: a manually supplied F0 curve is honored point-for-point — measured F0 tracks the supplied curve within tolerance across the utterance.
-  - C3: the falling-contour preset produces a terminal F0 below the neutral baseline within tolerance, distinguishing it from the rising preset to pin contour direction on both sides.
+  - C1: in `syrinx-prosody`, applying the `Contour::Rising` preset to a plan transforms `pitch_hz` so the last entry is strictly greater than the first by the preset's specified delta within tolerance, and applying `Contour::Falling` makes the last entry strictly less than the first — pinning contour direction on both sides — while `Contour::Flat` leaves every `pitch_hz` entry unchanged.
+  - C2: applying a manual curve of length N (one target Hz per phoneme) sets `pitch_hz` element-for-element equal to the supplied curve, and a manual curve whose length ≠ N returns `Err(PlanError::LengthMismatch)` with the plan unchanged.
+  - C3: applying any preset or manual curve to an empty plan (N == 0) is a no-op that returns `Ok` with an unchanged empty `pitch_hz`, and `durations_ms` is left untouched by every contour application.
 not_doing:
-  - No emotion semantics — contour shape only.
-  - No per-phoneme pitch API — that is T-03.03.
+  - No emotion semantics — contour shape over the pitch array only.
+  - No per-phoneme/per-word pitch API — that is T-03.03.
+  - The PERCEPTUAL/AUDIO eval (whether the contour sounds like the intended intonation on rendered output) is deferred to a later eval task against the real model.
 ---
-Contour presets plus manual F0 curves over an utterance. Inputs: an utterance plan and either a named preset or a manual F0 curve. Outputs: rendered audio whose measured F0 follows the chosen contour. Errors/edges: rising vs falling presets pinned in opposite directions; manual curve tracked point-for-point. Invariant: the applied contour governs measured F0. Done-check: preset-direction and manual-curve tracking on rendered audio. BLOCKED: depends on the F0 predictor exposure (T-03.03) and the renderer to measure contours against, both human-and-GPU prerequisites (CLAUDE THE BUILD SCOPE); no measurable F0 exists until then.
+Named contour presets and manual curves applied deterministically to the plan's pitch array. Inputs: a `ProsodyPlan` and either a named preset (`Rising`/`Falling`/`Flat`) or a manual per-phoneme F0 curve. Outputs: a plan whose `pitch_hz` is transformed by the chosen contour with `durations_ms` untouched. Errors/edges: rising vs falling pinned in opposite directions and flat pinned as identity; a manual curve of wrong length → `PlanError::LengthMismatch`; an empty plan is a no-op `Ok`; nothing panics. Invariant: a preset transforms `pitch_hz` deterministically and an N-length manual curve is honored point-for-point. This is the deterministic typed transform on synthetic plans; whether the applied contour is perceptually the intended intonation on rendered audio is deferred to a later perceptual eval against the real model.
 
 ### T-03.08  Control the sarcasm inflection
 id: T-03.08
@@ -640,35 +644,37 @@ not_doing:
 ---
 Composes emotion steering and intonation into a sarcasm/irony toggle. Inputs: an utterance plus a sarcasm toggle/level. Outputs: rendered audio with the irony contour signature when on. Errors/edges: off equals the sincere baseline; on shifts the contour as specified. Invariant: the toggle's effect is present only when enabled. Done-check: eval-measured contour shift plus a blind perceptual rating. BLOCKED: builds on emotion steering (T-03.06) and intonation (T-03.07) and is judged perceptually with the trained model and human listeners (CLAUDE THE BUILD SCOPE) — not frozen-test gateable.
 
-### T-03.09  Edit the phoneme-level plan
+### T-03.09  Edit a phoneme in the plan
 id: T-03.09
 phase: 3
 depends_on: [T-03.02, T-03.03]
 stack: rust
 criteria:
-  - C1: editing phoneme i's duration in the plan and rendering produces segment i with the edited duration within tolerance, with neighboring phonemes' durations unchanged within tolerance.
-  - C2: editing phoneme i's pitch in the plan and rendering produces segment i with the edited F0 within tolerance, with neighboring phonemes' F0 unchanged within tolerance.
-  - C3: the renderer honors a simultaneous duration and pitch edit on the same phoneme, with both edits reflected within tolerance in the rendered segment.
+  - C1: in `syrinx-prosody`, `plan.edit_phoneme(i, PhonemeEdit { duration_ms, pitch_hz })` returns a plan whose `durations_ms[i]` and `pitch_hz[i]` equal exactly the edited values, with every other index of both arrays bit-identical to the original — the returned plan reflects exactly that edit and nothing else.
+  - C2: a duration-only edit changes `durations_ms[i]` while leaving `pitch_hz[i]` equal to the original, and a pitch-only edit changes `pitch_hz[i]` while leaving `durations_ms[i]` equal to the original, pinning that each field is written independently.
+  - C3: `edit_phoneme(N-1, ..)` returns `Ok` and applies, while `edit_phoneme(N, ..)` returns `Err(PlanError::IndexOutOfRange)` and mutates nothing; no usize index panics.
 not_doing:
   - No volume editing in this API — duration and pitch only.
   - No batch/scripted edit language — single-phoneme edits.
+  - The PERCEPTUAL/AUDIO eval (whether a renderer audibly honors the edit) is deferred to a later eval task against the real model.
 ---
-The plan editor: edit any phoneme's duration and pitch and have the renderer honor it. Inputs: a `ProsodyPlan` and per-phoneme duration/pitch edits. Outputs: rendered audio in which the edited phoneme reflects the edit and neighbors do not change. Errors/edges: edits are local to the targeted phoneme; combined dur+pitch edits both apply. Invariant: only the edited phoneme's rendered segment changes. Done-check: rendered duration, pitch, and combined edits verified per phoneme. BLOCKED: requires the duration (T-03.02) and pitch (T-03.03) predictor exposure plus the acoustic renderer to honor edits, all human-and-GPU prerequisites (CLAUDE THE BUILD SCOPE).
+The unified single-phoneme plan editor over the typed plan. Inputs: a `ProsodyPlan` of N phonemes and a `PhonemeEdit` carrying an optional new duration and/or pitch for one index i. Outputs: a new plan in which index i carries exactly the edited values and every other entry of both arrays is unchanged. Errors/edges: an edit at i == N → `PlanError::IndexOutOfRange` (i == N-1 applies) mutating nothing; duration and pitch fields are written independently; nothing panics. Invariant: only the edited phoneme's targeted fields change and the returned plan equals the original everywhere else. This is the deterministic typed-API edit on synthetic plans; whether a renderer audibly honors the edit is deferred to a later perceptual eval against the real model.
 
-### T-03.10  Round-trip the edited plan
+### T-03.10  Round-trip an edited plan
 id: T-03.10
 phase: 3
 depends_on: [T-03.09]
 stack: rust
 criteria:
-  - C1: serializing an edited plan, deserializing it, and rendering at a pinned seed yields audio bit-equivalent (within the deterministic tolerance) to rendering the in-memory edited plan.
-  - C2: the rendered audio reflects the applied edit — the edited phoneme's measured duration/pitch matches the edit, distinguishing it from the unedited-plan render.
-  - C3: re-rendering the same serialized edited plan twice at the same seed produces identical audio, confirming determinism.
+  - C1: in `syrinx-prosody`, taking an edited `ProsodyPlan` (via T-03.09), `serde_json::to_vec` then `from_slice`, then `to_vec` again yields bytes byte-identical to the first serialization — the edited plan round-trips byte-stably.
+  - C2: the deserialized plan equals the in-memory edited plan under `PartialEq` (`deser == edited`), and it is NOT equal to the pre-edit plan, distinguishing a round-tripped edit from the unedited original.
+  - C3: deserializing the edited plan's JSON twice yields two values that are equal under `PartialEq` (round-trip is deterministic), and JSON whose `schema_version` is absent fails to deserialize with an error rather than silently defaulting.
 not_doing:
-  - No new edit operations — exercises T-03.09's edits end to end.
-  - No perceptual quality scoring — determinism and edit-fidelity only.
+  - No new edit operations — exercises T-03.09's edit end to end.
+  - No wire format other than JSON for this round-trip.
+  - The PERCEPTUAL/AUDIO eval (whether the round-tripped plan renders to audio matching the edit) is deferred to a later eval task against the real model.
 ---
-End-to-end determinism: an edited plan survives serialize→deserialize→render and the audio matches the edit. Inputs: an edited `ProsodyPlan`. Outputs: rendered audio matching both the edit and a repeat render. Errors/edges: round-tripped render must equal the in-memory render; repeat renders must be identical. Invariant: rendering is a deterministic function of the (serialized) edited plan and seed. Done-check: round-trip equivalence, edit-fidelity, and render determinism. BLOCKED: needs the renderer and the phoneme-edit API (T-03.09) to produce audio to compare; both require the ported model and GPU (CLAUDE THE BUILD SCOPE).
+End-to-end serialization fidelity of an edited plan. Inputs: a `ProsodyPlan` carrying a T-03.09 edit. Outputs: a JSON encoding that round-trips byte-identically and deserializes to a value equal to the edited plan under `PartialEq`. Errors/edges: the round-tripped plan equals the edited plan and differs from the pre-edit plan; repeat deserialization is deterministic; missing `schema_version` is a typed deserialize error, never a silent default; nothing panics. Invariant: an edited plan is a byte-stable, `PartialEq`-stable JSON round-trip. This is the deterministic serialize/round-trip check on synthetic edited plans; whether the round-tripped plan renders to audio matching the edit is deferred to a later perceptual eval against the real model.
 
 ### T-03.11  Evaluate the prosody prediction quality
 id: T-03.11
@@ -1090,20 +1096,21 @@ not_doing:
 ---
 Inputs: the disentanglement and per-axis eval results. Bounds: an honest, fully-sourced per-axis independence writeup. Outputs: a disentanglement metrics report with partial-result labeling. Errors/edges: an unsourced or optimistically rounded metric fails review. Invariant: every number traces to a named run. Done-check: per-axis scores sourced and partials labeled. BLOCKED: requires the upstream perceptual and training evals (T-06.03 through T-06.06) to have produced real human/GPU results before they can be aggregated, so it is not autonomously gateable.
 
-### T-07.01  Stream the packet path
+### T-07.01  Buffer streaming audio packets
 id: T-07.01
 phase: 7
-depends_on: [T-02.06]
+depends_on: [T-00.01]
 stack: rust
 criteria:
-  - C1: `syrinx-stream` emits chunked audio packets through a ring buffer to a `cpal` output with no buffer underruns across a sustained synthesis run.
-  - C2: the ring buffer never reports an underrun event while the producer keeps pace, and reports exactly one underrun event the first time the consumer outpaces the producer.
-  - C3: packet ordering is monotonic and lossless: every emitted packet index is delivered to the sink exactly once, in order.
+  - C1: in `syrinx-stream`, pushing N f32 samples into a ring buffer of capacity C (with N ≤ C) then popping N yields the samples in FIFO order element-for-element, and asserting a reordered expectation fails — pinning order, not just membership.
+  - C2: with capacity C, pushing then popping across more than C total samples (interleaved so the live count never exceeds C) returns every sample in order, proving the ring wraps correctly at the capacity boundary rather than overwriting live data.
+  - C3: popping from an empty buffer returns `None`, and pushing into a full buffer (live count == C) returns `Err(BufferError::Backpressure)` (i.e. reports backpressure) without overwriting; a push at live count == C-1 still succeeds, pinning the full boundary; neither path panics.
 not_doing:
-  - No TTFB latency tuning (that is T-07.02).
-  - No telephony or 8kHz resampling path.
+  - No `cpal` device output or real audio sink — buffer/packetizer logic only.
+  - No TTFB latency tuning (that is T-07.02) and no telephony/8kHz path.
+  - The PERCEPTUAL/AUDIO eval ("no underruns under load" on a live device stream) is deferred to a later eval task against the real model.
 ---
-Inputs: a live stream of decoded audio chunks from the chunk-aware decoder. Bounds: producer/consumer rates set by real-time playback. Outputs: a continuous `cpal` audio stream with a ring buffer between produce and consume. Errors/edges: consumer outpacing producer must surface an underrun event, not silently corrupt. Invariant: packets are delivered in order, exactly once, with no underruns under nominal rate. Done-check: a live no-underrun playback run on the running model. BLOCKED: requires the trained model running on a GPU to produce a real-time decoded-chunk stream; no-underrun behaviour is only observable against live synthesis, so it is not frozen-test gateable.
+A deterministic ring buffer plus packetizer over an in-memory f32 sample stream. Inputs: f32 samples pushed by a producer and popped by a consumer against a fixed capacity C. Outputs: samples delivered in FIFO order with explicit empty and full signals. Errors/edges: pop on empty → `None`; push on full (live count == C) → `Err(BufferError::Backpressure)` with no overwrite; the ring wraps at C; the full boundary is pinned at C-1 vs C; nothing panics. Invariant: samples come out in the order they went in and a full buffer applies backpressure rather than corrupting live data. This is the deterministic in-memory buffer/packetizer on synthetic samples; the "no underruns under load" behavior on a live `cpal` device stream is deferred to a later audio eval against the real model.
 
 ### T-07.02  Tune the time-to-first-byte path
 id: T-07.02
@@ -1135,20 +1142,21 @@ not_doing:
 ---
 Inputs: the full inference pipeline on one 4090 with fusion/batching toggles. Bounds: the RTF target on a single 4090. Outputs: a fused/batched path meeting RTF. Errors/edges: fusion that changes numerics beyond tolerance is a regression. Invariant: RTF <= target with output parity preserved. Done-check: a measured RTF under target on a 4090. BLOCKED: requires the trained model and a physical RTX 4090; RTF is a wall-clock throughput measurement of GPU inference and is not frozen-test gateable.
 
-### T-07.04  Synthesize the telephony path
+### T-07.04  Resample audio to 8 kHz telephony
 id: T-07.04
 phase: 7
-depends_on: []
+depends_on: [T-00.01]
 stack: rust
 criteria:
-  - C1: `syrinx-vocoder` produces a validated 8kHz narrowband output via resample plus band-limit plus codec from the full-band synthesis.
-  - C2: the band-limited output retains energy only within the narrowband passband and is attenuated above the cutoff, verified against a measured spectral bound.
-  - C3: the 8kHz output remains intelligible over a narrowband channel as judged against the perceptual intelligibility bar.
+  - C1: in `syrinx-stream` (using `syrinx-vocoder`'s band-limit), downsampling a 48kHz f32 buffer of length L to 8kHz yields an output buffer whose length equals `L * 8000 / 48000` within ±1 sample, across at least two distinct L values to pin the ratio rather than a single constant.
+  - C2: a DC (constant-valued) 48kHz input downsamples to an output whose every sample equals that constant within tolerance — a flat signal stays flat through resample plus band-limit.
+  - C3: a synthetic tone above the 4kHz narrowband Nyquist is attenuated in the output below the declared anti-alias bound (its post-resample energy is a fraction of a same-amplitude in-band tone's energy), and an in-band tone is NOT attenuated past that bound — pinning the anti-alias filter on both sides; nothing panics.
 not_doing:
-  - No 48kHz full-band path changes.
+  - No 48kHz full-band path changes and no codec encoding — resample plus band-limit only.
   - No echo cancellation or network jitter handling.
+  - The PERCEPTUAL/AUDIO eval (narrowband intelligibility over a real telephony channel) is deferred to a later eval task against the real model.
 ---
-Inputs: full-band synthesized waveform from the running vocoder. Bounds: 8kHz narrowband telephony band. Outputs: a resampled, band-limited, codec-encoded 8kHz stream. Errors/edges: aliasing on downsample or out-of-band energy fails the path. Invariant: output is narrowband-valid and intelligible. Done-check: validated 8kHz output judged intelligible. BLOCKED: requires the trained model producing real waveform output, and narrowband intelligibility is a perceptual judgment; neither is frozen-test gateable.
+A deterministic 48kHz→8kHz downsampler with an anti-alias band-limit over an f32 buffer. Inputs: a 48kHz f32 sample buffer. Outputs: an 8kHz f32 buffer of length `L * 8000 / 48000` (±1) with above-Nyquist energy attenuated. Errors/edges: output length pinned by the ratio across multiple L; a DC input stays constant; an above-Nyquist tone is attenuated below the anti-alias bound while an in-band tone passes; nothing panics. Invariant: the output is band-limited to the narrowband passband and length-correct for the rate ratio. This is the deterministic DSP on synthetic f32 input; narrowband intelligibility over a real telephony channel is deferred to a later perceptual eval against the real model.
 
 ### T-07.05  Harden noise robustness
 id: T-07.05
