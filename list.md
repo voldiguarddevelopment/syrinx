@@ -769,7 +769,7 @@ The typed editable plan every control task edits. Inputs: a phoneme count N plus
 ### T-03.02  Override phoneme durations
 id: T-03.02
 phase: 3
-status: pending
+status: done
 depends_on: [T-03.01]
 stack: rust
 criteria:
@@ -780,12 +780,13 @@ not_doing:
   - No pitch, volume, or rate control — duration-array editing only.
   - No prediction or defaults — values are caller-supplied per T-03.01.
   - The PERCEPTUAL/AUDIO eval (whether the overridden timing sounds right on rendered output) is deferred to a later eval task against the real model.
-test_files: []
-criteria_map: {}
+test_files: [tests/duration_override.rs]
+criteria_map:
+  C1: [test_set_duration_writes_exact_index_only, test_set_duration_writes_first_index]
+  C2: [test_override_durations_replaces_when_len_equals_n, test_override_durations_too_long_rejects_atomically, test_override_durations_too_short_rejects_atomically]
+  C3: [test_set_duration_at_last_index_applies, test_set_duration_past_end_errors_and_mutates_nothing, test_set_duration_never_panics_on_any_index]
 attempts: 2
-last_failure: |
-  surviving mutant at crates/syrinx-prosody/src/plan.rs:59 (bool-or-to-and) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-prosody/src/plan.rs:74 (cmp-ge-to-gt) — frozen tests do not kill it
+last_failure: ""
 ---
 The duration-override API on the typed prosody plan. Inputs: a `ProsodyPlan` of N phonemes plus a single (index, value) override or a full-array replacement. Outputs: a plan whose `durations_ms` reflects exactly the requested change with `pitch_hz` untouched. Errors/edges: a single-index write past N-1 → `PlanError::IndexOutOfRange`; a bulk replacement whose length ≠ N → `PlanError::LengthMismatch`; both leave the plan unchanged and never panic; i == N-1 still applies. Invariant: a single override changes exactly one duration entry and nothing else; a bulk override either replaces all N or rejects atomically. This is the deterministic typed-API edit on synthetic plans; whether the resulting timing is perceptually correct on rendered audio is deferred to a later perceptual eval against the real model.
 
