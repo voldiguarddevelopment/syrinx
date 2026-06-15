@@ -553,7 +553,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic numerical parity and the listed algebraic properties are in scope.
 test_files: []
 criteria_map: {}
-attempts: 2
+attempts: 3
 last_failure: |
   surviving mutant at crates/syrinx-core/src/lib.rs:53 (cmp-ne-to-eq) — frozen tests do not kill it
   surviving mutant at crates/syrinx-core/src/lib.rs:56 (arith-mul-to-div) — frozen tests do not kill it
