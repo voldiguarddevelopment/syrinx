@@ -579,7 +579,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic byte-exact reproduction of the reference PRNG is in scope.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The deterministic weight source every forward draws from. Inputs: a tensor `name` string and a `count`. Bounds: FNV-1a seed, xorshift64 stream, and the f32 transform each pinned to the reference; `weights_sample.json` parity at 1e-4 and rejected on a one-value corruption. Outputs: a `Vec<f32>` of length `count`. Errors/edges: the `seed == 0` substitution is guarded though it cannot arise for these names; a flipped name byte or swapped shift order diverges. Invariant: `weights` is a pure, byte-exact port of `reference.py` §2 — these values feed every forward, so the documented `tok_embeddings` seed and first draw are reproduced exactly. Done-check: the four criteria — hash pin, stream pin, golden parity, and the prefix/name-sensitivity properties.
