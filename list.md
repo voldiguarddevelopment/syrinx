@@ -626,7 +626,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic attention math (RoPE+scale+causal-mask+softmax+output-proj) is in scope.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The causal self-attention sub-block. Inputs: `x[T,dim]`, the four projection weight tensors (drawn via T-02.01c), and `positions`. Bounds: causal independence of future positions pinned at ± 1e-5; `1/sqrt(head_dim)` scaling and contiguous head split each pinned against a wrong alternative. Outputs: `[T,dim]` context after the `wo` projection. Errors/edges: dropping the mask leaks future keys and fails the causal test; a wrong scale or interleaved head split fails. Invariant: attention is the exact transcription of `reference.py` §5.2 — RoPE on Q/K only, scale-before-mask, softmax over keys, contiguous heads. Done-check: the four properties — shape, causality, scaling, head split — gateable without a dedicated golden since the forward golden (T-02.02c) covers end-to-end values.
