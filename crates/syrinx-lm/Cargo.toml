@@ -3,3 +3,8 @@ name = "syrinx-lm"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[dependencies]
+# T-02.02a attention composes the `syrinx-core` reference primitives
+# (`linear`/`rope`) over the `Tensor` contract.
+syrinx-core = { path = "../syrinx-core" }
