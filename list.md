@@ -1677,7 +1677,7 @@ Inputs: noisy reference clips at enrollment time into the speaker encoder. Bound
 ### T-08.01  Scaffold the audio server
 id: T-08.01
 phase: 8
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -1688,8 +1688,12 @@ criteria:
 not_doing:
   - No real synthesis behind the trait (default stub returns a silent buffer).
   - No health or version endpoint (that is T-08.02).
-test_files: []
-criteria_map: {}
+test_files: [tests/audio_server.rs]
+criteria_map:
+  C1: [test_default_stub_returns_fixed_silent_buffer, test_handler_calls_pluggable_synth_trait]
+  C2: [test_well_formed_post_returns_200_audio, test_missing_required_field_returns_422_typed_error]
+  C3: [test_streaming_format_returns_streaming_shape]
+  C4: [test_speech_route_registered_exactly_once]
 attempts: 1
 last_failure: ""
 ---
