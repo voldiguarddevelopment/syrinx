@@ -638,7 +638,7 @@ The causal self-attention sub-block. Inputs: `x[T,dim]`, the four projection wei
 ### T-02.02b  Compute the SwiGLU transformer block
 id: T-02.02b
 phase: 2
-status: pending
+status: done
 depends_on: [T-02.01b]
 stack: rust
 criteria:
@@ -650,8 +650,12 @@ not_doing:
   - No attention internals (that is T-02.02a; this task may call a trivial/zeroed attention for the block-order tests) and no full multi-layer forward (T-02.02c).
   - No fused FFN kernel or activation approximation — a direct transcription of `reference.py` §5.3 and §5.1.
   - No real pretrained-weight quality or SIM-o/cloning concern; only the deterministic SwiGLU + pre-norm-residual structure is in scope.
-test_files: []
-criteria_map: {}
+test_files: [tests/block_prop.rs]
+criteria_map:
+  C1: [test_swiglu_output_shape_is_t_by_dim, test_swiglu_gate_up_roles_and_swap]
+  C2: [test_swiglu_hadamard_not_sum, test_swiglu_zero_up_drives_output_zero]
+  C3: [test_block_zeroed_weights_is_identity]
+  C4: [test_block_residual_targets_prenorm_not_normed]
 attempts: 1
 last_failure: ""
 ---
