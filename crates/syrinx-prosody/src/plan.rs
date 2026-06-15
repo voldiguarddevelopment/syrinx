@@ -79,4 +79,32 @@ impl ProsodyPlan {
             pitch_hz: self.pitch_hz[i],
         })
     }
+
+    /// Write a single phoneme's duration at index `i`.
+    ///
+    /// On success `durations_ms[i] == v` and nothing else changes — every other
+    /// `durations_ms` entry and the entire `pitch_hz` array are untouched. `i` at
+    /// or past `N` yields [`PlanError::IndexOutOfRange`] and mutates nothing; this
+    /// never panics on any `usize`.
+    pub fn set_duration(&mut self, i: usize, v: f32) -> Result<(), PlanError> {
+        if i >= self.durations_ms.len() {
+            return Err(PlanError::IndexOutOfRange);
+        }
+        self.durations_ms[i] = v;
+        Ok(())
+    }
+
+    /// Replace the whole `durations_ms` array.
+    ///
+    /// Succeeds iff `new.len() == N`, after which `durations_ms == new` and
+    /// `pitch_hz` is untouched. Any other length yields
+    /// [`PlanError::LengthMismatch`] and leaves the plan unchanged — atomic, no
+    /// partial write, never a panic.
+    pub fn override_durations(&mut self, new: Vec<f32>) -> Result<(), PlanError> {
+        if new.len() != self.durations_ms.len() {
+            return Err(PlanError::LengthMismatch);
+        }
+        self.durations_ms = new;
+        Ok(())
+    }
 }
