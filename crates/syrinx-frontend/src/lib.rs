@@ -3,6 +3,7 @@
 //! custom pronunciation overrides; T-01.06 heteronym resolution; T-01.07 SSML
 //! subset parsing).
 
+pub mod context;
 pub mod expand;
 pub mod g2p;
 pub mod hetero;
