@@ -61,6 +61,45 @@ fn known_word(word: &str) -> Option<&'static str> {
     }
 }
 
+/// A decorator over any [`Phonemizer`] that substitutes per-word IPA from an
+/// override map (T-01.05). On a hit it returns the mapped IPA exactly, replacing
+/// whatever the base would produce; on a miss it delegates to the base untouched.
+///
+/// Matching is case-folded: keys are lowercased at construction and the query is
+/// lowercased at lookup, so an override registered under "Syrinx" matches the
+/// query "syrinx" and vice versa. An empty override map is a transparent
+/// passthrough — the decorator behaves identically to its base for every input.
+/// Out of scope: no validation that override values are well-formed IPA;
+/// single-word keys only, no multi-word/phrase overrides.
+pub struct OverridingPhonemizer<P: Phonemizer> {
+    base: P,
+    overrides: std::collections::HashMap<String, String>,
+}
+
+impl<P: Phonemizer> OverridingPhonemizer<P> {
+    /// Construct the decorator from a base phonemizer and a `word -> IPA` override
+    /// map. Keys are case-folded (lowercased) so lookup is case-insensitive.
+    pub fn new(
+        base: P,
+        map: std::collections::HashMap<String, String>,
+    ) -> OverridingPhonemizer<P> {
+        let overrides = map
+            .into_iter()
+            .map(|(k, v)| (k.to_lowercase(), v))
+            .collect();
+        OverridingPhonemizer { base, overrides }
+    }
+}
+
+impl<P: Phonemizer> Phonemizer for OverridingPhonemizer<P> {
+    fn phonemize(&self, word: &str) -> String {
+        match self.overrides.get(&word.to_lowercase()) {
+            Some(ipa) => ipa.clone(),
+            None => self.base.phonemize(word),
+        }
+    }
+}
+
 /// The out-of-vocabulary fallback: map each character of `word` to a defined IPA
 /// symbol. A non-empty word yields a non-empty valid-symbol string; the empty
 /// word yields the empty string. Never panics.
