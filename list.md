@@ -456,7 +456,7 @@ not_doing:
   - No coverage of crates other than syrinx-frontend.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The aggregating golden-file harness for the deterministic frontend. Inputs: the golden fixture tree of (input,expected) pairs. Outputs: a pass/fail test run over every fixture. Errors/edges: a changed input perturbs output and fails its case; a missing expected file fails rather than skips. Invariant: every fixture directory is auto-discovered, so adding a pair needs no harness edit. Done-check: the green run, the changed-input-fails property, and the auto-enumeration criterion.
