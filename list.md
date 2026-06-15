@@ -1702,7 +1702,7 @@ Inputs: typed OpenAI-style speech requests over HTTP into the Axum router. Bound
 ### T-08.02  Add the parity health endpoint
 id: T-08.02
 phase: 8
-status: pending
+status: done
 depends_on: [T-08.01]
 stack: rust
 criteria:
@@ -1712,8 +1712,11 @@ criteria:
 not_doing:
   - No liveness/readiness orchestration or dependency probing.
   - No metrics or telemetry endpoint.
-test_files: []
-criteria_map: {}
+test_files: [tests/health_endpoint.rs]
+criteria_map:
+  C1: [test_health_returns_200_typed_json_body]
+  C2: [test_health_get_returns_200_documented_shape, test_health_non_get_method_returns_405]
+  C3: [test_health_route_registered_exactly_once, test_health_body_deserializes_into_typed_struct]
 attempts: 1
 last_failure: ""
 ---
