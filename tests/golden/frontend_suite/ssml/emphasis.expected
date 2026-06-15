@@ -1,0 +1,1 @@
+Ok([Emphasis { level: Strong }, Text("hi"), EmphasisEnd])
