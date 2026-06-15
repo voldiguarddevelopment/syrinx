@@ -332,7 +332,7 @@ not_doing:
   - No coverage beyond the fixed heteronym test set (read/lead/bow and the listed words).
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Context-sensitive selection among a word's candidate pronunciations. Inputs: a sentence `&str` containing zero or more heteronyms. Outputs: a per-word IPA sequence with each heteronym resolved by surrounding rule/POS context. Errors/edges: both readings of read, lead, and bow are pinned; a non-heteronym sentence passes through unchanged. Invariant: resolution is a pure deterministic function of the sentence — identical input yields identical output every call. Done-check: the three heteronym pairs plus the no-heteronym passthrough.
