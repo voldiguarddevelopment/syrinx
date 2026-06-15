@@ -783,7 +783,9 @@ not_doing:
 test_files: []
 criteria_map: {}
 attempts: 1
-last_failure: ""
+last_failure: |
+  surviving mutant at crates/syrinx-prosody/src/plan.rs:59 (bool-or-to-and) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-prosody/src/plan.rs:74 (cmp-ge-to-gt) — frozen tests do not kill it
 ---
 The duration-override API on the typed prosody plan. Inputs: a `ProsodyPlan` of N phonemes plus a single (index, value) override or a full-array replacement. Outputs: a plan whose `durations_ms` reflects exactly the requested change with `pitch_hz` untouched. Errors/edges: a single-index write past N-1 → `PlanError::IndexOutOfRange`; a bulk replacement whose length ≠ N → `PlanError::LengthMismatch`; both leave the plan unchanged and never panic; i == N-1 still applies. Invariant: a single override changes exactly one duration entry and nothing else; a bulk override either replaces all N or rejects atomically. This is the deterministic typed-API edit on synthetic plans; whether the resulting timing is perceptually correct on rendered audio is deferred to a later perceptual eval against the real model.
 
