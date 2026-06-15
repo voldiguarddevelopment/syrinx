@@ -244,7 +244,7 @@ Numeric verbalization over already-normalized text. Inputs: a `&str` that may co
 ### T-01.03  Override pronunciations via lexicon
 id: T-01.03
 phase: 1
-status: blocked
+status: pending
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -257,16 +257,8 @@ not_doing:
   - No IPA validation of replacement strings (that is the G2P layer's concern).
 test_files: []
 criteria_map: {}
-attempts: 3
-last_failure: |
-     Compiling syrinx-workspace-scaffold-tests v0.0.0 (/home/floofy/development/syrinx-build/.ratchet/worktrees/T-01.03)
-  error[E0432]: unresolved import `syrinx_frontend::lexicon`
-    --> tests/lexicon.rs:27:22
-     |
-  27 | use syrinx_frontend::lexicon::Lexicon;
-     |                      ^^^^^^^ could not find `lexicon` in `syrinx_frontend`
-  For more information about this error, try `rustc --explain E0432`.
-  error: could not compile `syrinx-workspace-scaffold-tests` (test "lexicon") due to 1 previous error
+attempts: 0
+last_failure: ""
 ---
 A two-tier override table consulted before phonemization. Inputs: a default lexicon and an optional user lexicon, each a map of word→pronunciation, plus a query word. Outputs: `Option<String>` — the winning replacement or None. Errors/edges: user beats default on collision; missing keys return None; case folding applies to keys but never to values. Invariant: precedence is total and deterministic — user ∪ default with user winning every tie. Done-check: the precedence, fallthrough, miss, and case-fold criteria.
 
