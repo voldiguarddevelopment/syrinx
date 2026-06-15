@@ -244,7 +244,7 @@ Numeric verbalization over already-normalized text. Inputs: a `&str` that may co
 ### T-01.03  Override pronunciations via lexicon
 id: T-01.03
 phase: 1
-status: pending
+status: blocked
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -265,7 +265,6 @@ last_failure: |
      |
   27 | use syrinx_frontend::lexicon::Lexicon;
      |                      ^^^^^^^ could not find `lexicon` in `syrinx_frontend`
-  
   For more information about this error, try `rustc --explain E0432`.
   error: could not compile `syrinx-workspace-scaffold-tests` (test "lexicon") due to 1 previous error
 ---
