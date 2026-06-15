@@ -513,7 +513,7 @@ Inputs: the chosen base checkpoint plus its Python-reference tensor dump. Bounds
 ### T-02.01a  Define core tensors and arithmetic
 id: T-02.01a
 phase: 2
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -525,8 +525,12 @@ not_doing:
   - No neural ops (linear/rmsnorm/softmax/silu/rope/embed/causal_mask are T-02.01b) and no weight generation (T-02.01c).
   - No SIMD, no BLAS, no device/quantization concerns — a single host-memory f32 reference path only.
   - No real pretrained-weight quality or SIM-o/cloning concern; this task is purely deterministic numerical parity against the Python reference goldens.
-test_files: []
-criteria_map: {}
+test_files: [tests/core_arith_parity.rs]
+criteria_map:
+  C1: [test_tensor_shape_and_data_contract]
+  C2: [test_matmul_parity]
+  C3: [test_add_parity, test_mul_parity, test_add_corruption_fails, test_mul_corruption_fails]
+  C4: [test_matmul_inner_dim_mismatch, test_add_shape_mismatch, test_mul_shape_mismatch]
 attempts: 1
 last_failure: ""
 ---
