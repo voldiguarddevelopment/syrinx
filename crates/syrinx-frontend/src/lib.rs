@@ -2,4 +2,5 @@
 //! normalize; T-01.02 numeric expansion).
 
 pub mod expand;
+pub mod lexicon;
 pub mod normalize;
