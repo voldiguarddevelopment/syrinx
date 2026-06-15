@@ -744,7 +744,7 @@ Inputs: the loaded 4-bit (and fp16-fallback) model on one 4090-class GPU. Bounds
 ### T-03.01  Define the prosody plan model
 id: T-03.01
 phase: 3
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -755,8 +755,12 @@ criteria:
 not_doing:
   - No prosody prediction, defaults, or model inference — values are caller-supplied.
   - No audio rendering or DSP — this is the data model only.
-test_files: []
-criteria_map: {}
+test_files: [tests/prosody_plan.rs]
+criteria_map:
+  C1: [test_json_roundtrip_byte_identical]
+  C2: [test_lengths_agree_for_empty_and_three, test_mismatched_lengths_error]
+  C3: [test_phoneme_index_boundary, test_phoneme_never_panics_on_any_index]
+  C4: [test_schema_version_matches_constant, test_missing_schema_version_fails]
 attempts: 1
 last_failure: ""
 ---
