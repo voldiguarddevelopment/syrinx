@@ -793,7 +793,7 @@ The duration-override API on the typed prosody plan. Inputs: a `ProsodyPlan` of 
 ### T-03.03  Override phoneme pitch
 id: T-03.03
 phase: 3
-status: pending
+status: done
 depends_on: [T-03.01]
 stack: rust
 criteria:
@@ -804,8 +804,11 @@ not_doing:
   - No duration, volume, or rate control — pitch-array editing only.
   - No intonation presets — those build on this in T-03.07.
   - The PERCEPTUAL/AUDIO eval (whether the overridden F0 sounds right on rendered output) is deferred to a later eval task against the real model.
-test_files: []
-criteria_map: {}
+test_files: [tests/pitch_override.rs]
+criteria_map:
+  C1: [test_set_pitch_writes_exact_index_only, test_set_pitch_writes_first_index]
+  C2: [test_set_word_pitch_width_one_applies_to_single_index, test_set_word_pitch_width_three_applies_across_span]
+  C3: [test_set_pitch_at_last_index_applies, test_set_pitch_past_end_errors_and_mutates_nothing, test_set_pitch_never_panics_on_any_index, test_set_word_pitch_end_at_n_applies, test_set_word_pitch_end_past_n_errors_and_mutates_nothing]
 attempts: 1
 last_failure: ""
 ---
