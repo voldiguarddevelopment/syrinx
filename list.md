@@ -419,7 +419,7 @@ Assembly of a bounded conditioning window around a target sentence. Inputs: a sl
 ### T-01.10  Compute paragraph pacing
 id: T-01.10
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -430,8 +430,12 @@ criteria:
 not_doing:
   - No prosodic duration assignment to breaths (markers are positional only).
   - No language-specific breathing models; uniform word-interval policy.
-test_files: []
-criteria_map: {}
+test_files: [tests/pacing.rs]
+criteria_map:
+  C1: [test_interior_interval_two_markers_at_10_and_20]
+  C2: [test_boundary_exactly_ten_words_no_marker, test_boundary_eleven_words_one_marker]
+  C3: [test_deterministic_repeated_calls]
+  C4: [test_paragraph_break_forces_single_marker]
 attempts: 2
 last_failure: ""
 ---
