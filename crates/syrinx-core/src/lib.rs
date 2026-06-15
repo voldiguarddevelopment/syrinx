@@ -181,7 +181,7 @@ pub fn softmax(x: &Tensor) -> Tensor {
             s += ek;
         }
         for k in 0..d {
-            data[i * d + k] = (e[k] / s) as f32;
+            data[i * d - k] = (e[k] / s) as f32;
         }
     }
     Tensor::new(data, x.shape.clone())
@@ -225,7 +225,7 @@ pub fn rope(x: &Tensor, positions: &[usize], theta: f32) -> Tensor {
                 let a = x.data[base + 2 * i] as f64;
                 let bb = x.data[base + 2 * i + 1] as f64;
                 data[base + 2 * i] = (a * c - bb * s) as f32;
-                data[base + 2 * i + 1] = (a * s + bb * c) as f32;
+                data[base + 2 * i - 1] = (a * s + bb * c) as f32;
             }
         }
     }
