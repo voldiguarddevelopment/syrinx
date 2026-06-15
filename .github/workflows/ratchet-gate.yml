@@ -1,0 +1,80 @@
+# Ratchet remote gate runner (F8).
+#
+# Drop this into a target repo's `.github/workflows/` to let `ratchet` offload the
+# heavy mutation gate here instead of running it on the local box. Ratchet
+# dispatches this workflow for the exact commit under test; it runs the SAME
+# `ratchet gate mutation` binary the local cascade would run, then publishes a
+# structured report to a per-commit ref (`refs/ratchet/reports/<sha>`) that
+# Ratchet fetches back. The report — not this job's pass/fail — is the verdict
+# source, and Ratchet recomputes the verdict locally against its trusted
+# allow-list, so this runner can never mint a green it didn't earn.
+name: ratchet-gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      gate:
+        description: "Gate to run (currently: mutation)"
+        required: true
+        default: mutation
+      sha:
+        description: "Commit SHA under test"
+        required: true
+      targets:
+        description: "Comma-separated source files to mutate"
+        required: true
+
+# The report is published by pushing a ref, which needs write access to contents.
+permissions:
+  contents: write
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact commit under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache both the target repo's build and the ratchet build, keyed on the
+      # toolchain + lockfiles, so per-mutant `cargo test` runs are warm.
+      - name: Cache cargo + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ratchet-gate
+
+      - name: Install ratchet
+        run: cargo install --git https://x-access-token:${{ secrets.RATCHET_INSTALL_TOKEN }}@github.com/voldiguarddevelopment/Ratchet --locked ratchet
+
+      # Run the gate. It exits 1 when a mutant survives; we capture that AFTER
+      # publishing the report so the report is always available to Ratchet, then
+      # mirror the verdict into this job's conclusion for human readers.
+      - name: Run mutation gate
+        id: gate
+        continue-on-error: true
+        run: |
+          set +e
+          ratchet gate mutation --targets "${{ inputs.targets }}" --report report.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Publish report to refs/ratchet/reports/<sha>
+        run: |
+          set -euo pipefail
+          test -f report.json || { echo "no report.json produced"; exit 1; }
+          # git commit-tree needs an identity; CI runners have none configured.
+          git config user.email "ratchet-gate@users.noreply.github.com"
+          git config user.name "ratchet-gate"
+          # Build an orphan commit containing only report.json (no working-tree
+          # churn) and push it to the per-commit results ref Ratchet reads back.
+          blob=$(git hash-object -w report.json)
+          tree=$(printf '100644 blob %s\treport.json\n' "$blob" | git mktree)
+          commit=$(git commit-tree "$tree" -m "ratchet gate report for ${{ inputs.sha }}")
+          git push origin --force "$commit:refs/ratchet/reports/${{ inputs.sha }}"
+
+      - name: Reflect the gate verdict in the job status
+        run: exit ${{ steps.gate.outputs.exit_code }}

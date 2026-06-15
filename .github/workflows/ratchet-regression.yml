@@ -1,0 +1,120 @@
+# Ratchet remote regression matrix.
+#
+# Drop this into a target repo's `.github/workflows/` to let `ratchet` offload the
+# cross-run frozen-test regression check here. The orchestrator dispatches this
+# workflow for the exact base commit under test, with the list of `done` tasks'
+# owned frozen-test stems. ONE matrix job per stem runs the SAME deterministic
+# `ratchet gate regression --stem <stem>` the local serial backstop would run, so
+# a CI result is byte-faithful to local. Each job publishes a small per-stem,
+# per-commit report (`refs/ratchet/reports/<sha>/regression/<stem>`) that the
+# orchestrator fetches back and from which it RECOMPUTES the verdict.
+#
+# Anti-forgery / fail-safe contract (mirrors ratchet-gate.yml):
+#   * COMMIT-BOUND — each report records the runner's own checked-out HEAD, and
+#     the ref name embeds the sha; a report for any other sha is ignored.
+#   * Per-stem refs — a separate ref per stem so matrix jobs never race a single
+#     shared ref.
+#   * CI is a remote EXECUTOR, never a judge: it runs the deterministic test and
+#     reports per-stem pass/fail; the orchestrator recomputes the regression
+#     verdict and, on ANY dispatch/poll/fetch/parse failure, falls back to its
+#     local serial check. CI can change speed, never correctness — it can never
+#     skip a real regression because a runner was flaky.
+name: ratchet-regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Base commit SHA under test"
+        required: true
+      stems:
+        description: "Comma-separated list of test stems to re-verify"
+        required: true
+
+# Reports are published by pushing refs, which needs write access to contents.
+permissions:
+  contents: write
+
+jobs:
+  # Turn the comma-separated `stems` input into a JSON array the matrix can fan
+  # out over. Done in its own job so the matrix `strategy` can `fromJSON` it.
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      stems: ${{ steps.split.outputs.stems }}
+    steps:
+      - name: Split the comma list into a JSON array
+        id: split
+        run: |
+          set -euo pipefail
+          # Trim blanks and empty entries; emit a compact JSON array of strings.
+          json=$(python3 - "$STEMS" <<'PY'
+          import json, sys
+          raw = sys.argv[1]
+          stems = [s.strip() for s in raw.split(",")]
+          stems = [s for s in stems if s]
+          print(json.dumps(stems))
+          PY
+          )
+          echo "stems=$json" >> "$GITHUB_OUTPUT"
+          echo "matrix stems: $json"
+        env:
+          STEMS: ${{ inputs.stems }}
+
+  test:
+    needs: prepare
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        stem: ${{ fromJSON(needs.prepare.outputs.stems) }}
+    steps:
+      - name: Check out the exact base commit under test
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Cache the target repo's build + the ratchet build. A shared key keeps the
+      # matrix jobs warm against one another's first build.
+      - name: Cache cargo + build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ratchet-regression
+
+      - name: Install ratchet
+        run: cargo install --git https://x-access-token:${{ secrets.RATCHET_INSTALL_TOKEN }}@github.com/voldiguarddevelopment/Ratchet --locked ratchet
+
+      # Run the ONE stem. `continue-on-error` so the report is ALWAYS published
+      # even when the stem fails (exit 1) or could not run (exit 3); the verdict
+      # is recomputed by the orchestrator from the report, and the reflect step
+      # mirrors the code into the job status for humans.
+      - name: Run regression gate for this stem
+        id: gate
+        continue-on-error: true
+        run: |
+          set +e
+          ratchet gate regression --stem "${{ matrix.stem }}" --report report.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Publish report to a per-stem, per-commit ref
+        run: |
+          set -euo pipefail
+          test -f report.json || { echo "no report.json produced"; exit 1; }
+          # git commit-tree needs an identity; CI runners have none configured.
+          git config user.email "ratchet-gate@users.noreply.github.com"
+          git config user.name "ratchet-gate"
+          # Build an orphan commit holding only report.json (no working-tree
+          # churn) and push it to the PER-STEM, per-commit ref. A distinct ref per
+          # stem means matrix jobs never race a single shared ref.
+          blob=$(git hash-object -w report.json)
+          tree=$(printf '100644 blob %s\treport.json\n' "$blob" | git mktree)
+          commit=$(git commit-tree "$tree" -m "ratchet regression report ${{ inputs.sha }} / ${{ matrix.stem }}")
+          git push origin --force \
+            "$commit:refs/ratchet/reports/${{ inputs.sha }}/regression/${{ matrix.stem }}"
+
+      - name: Reflect the gate verdict in the job status
+        run: exit ${{ steps.gate.outputs.exit_code }}

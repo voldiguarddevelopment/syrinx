@@ -344,7 +344,7 @@ Context-sensitive selection among a word's candidate pronunciations. Inputs: a s
 ### T-01.07  Parse the SSML subset
 id: T-01.07
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.01]
 stack: rust
 criteria:
@@ -355,8 +355,12 @@ criteria:
 not_doing:
   - Only the subset prosody/break/emphasis/say-as/phoneme/sub; any other SSML tag is an error, not silently ignored.
   - No DTD/namespace validation or external entity resolution.
-test_files: []
-criteria_map: {}
+test_files: [tests/ssml.rs]
+criteria_map:
+  C1: [break_void_tag_parses_to_single_break_event_200ms, break_void_tag_parses_distinct_duration_375ms]
+  C2: [emphasis_strong_yields_open_text_end_in_order, prosody_rate_slow_maps_to_prosody_variant, say_as_maps_to_say_as_variant, phoneme_maps_to_phoneme_variant, sub_maps_to_sub_variant]
+  C3: [unclosed_void_break_tag_is_error, unknown_tag_is_error]
+  C4: [plain_text_becomes_single_text_event]
 attempts: 1
 last_failure: ""
 ---

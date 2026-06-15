@@ -30,3 +30,16 @@ verify = true
 # never here. Remote gates can be enabled once the gate workflows are wired.
 [github]
 repo = "voldiguarddevelopment/syrinx"
+
+# GitHub CI offload (F8). The workflows live in .github/workflows/. Ready but OFF:
+# for light tasks, local mutation/regression is far faster than a CI round-trip
+# (cold cargo-install of ratchet + build per gate). Flip enabled=true when a task's
+# local gates get heavy. Requires: the RATCHET_INSTALL_TOKEN repo secret (read access
+# to the private Ratchet repo, same value as mend's) AND a one-time plant-validation
+# on a real runner before the remote verdict is trusted. Free GitHub-hosted runners
+# (no GPU): this offloads deterministic Rust gates only — it does NOT enable the
+# GPU/model/perceptual tasks (those stay blocked-on-human).
+[remote_gates]
+enabled    = false
+regression = false
+remote     = "origin"
