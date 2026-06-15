@@ -357,7 +357,7 @@ not_doing:
   - No DTD/namespace validation or external entity resolution.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 A recursive-descent parser for the documented SSML subset into typed control events. Inputs: a `&str` of SSML or plain text. Outputs: `Result<Vec<ControlEvent>, SsmlError>`. Errors/edges: well-formed subset tags produce typed events in source order; malformed and out-of-subset tags return a typed `SsmlError`; plain text becomes a single `Text` event. Invariant: parsing is total — every input yields either `Ok(events)` or `Err`, never a panic. Done-check: the typed-event, multi-tag, malformed, and plain-text criteria.
