@@ -43,3 +43,7 @@ serde_json = "1"
 # target fails to build; GREEN adds it.
 syrinx-frontend = { path = "crates/syrinx-frontend" }
 unicode-normalization = "0.1"
+# T-03.01 prosody-plan frozen tests drive the editable prosody-plan data model
+# (`syrinx-prosody::plan`) through the root `tests/`. RED: the crate exposes no
+# `plan` module yet, so the test target fails to build; GREEN adds it.
+syrinx-prosody = { path = "crates/syrinx-prosody" }
