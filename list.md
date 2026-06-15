@@ -294,7 +294,7 @@ The grapheme-to-phoneme interface and a deterministic default backend. Inputs: a
 ### T-01.05  Map custom pronunciations
 id: T-01.05
 phase: 1
-status: pending
+status: done
 depends_on: [T-01.04]
 stack: rust
 criteria:
@@ -305,8 +305,12 @@ criteria:
 not_doing:
   - No validation that override values are well-formed IPA.
   - No multi-word/phrase overrides; single-word keys only.
-test_files: []
-criteria_map: {}
+test_files: [tests/overrides.rs]
+criteria_map:
+  C1: [override_hit_returns_mapped_ipa_exactly, override_hit_replaces_base_output]
+  C2: [override_miss_delegates_to_base, override_miss_matches_bare_base]
+  C3: [override_key_is_case_folded, override_query_is_case_folded]
+  C4: [empty_map_passes_known_word_through, empty_map_is_transparent_for_every_input]
 attempts: 1
 last_failure: ""
 ---
