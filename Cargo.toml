@@ -47,3 +47,13 @@ unicode-normalization = "0.1"
 # (`syrinx-prosody::plan`) through the root `tests/`. RED: the crate exposes no
 # `plan` module yet, so the test target fails to build; GREEN adds it.
 syrinx-prosody = { path = "crates/syrinx-prosody" }
+# T-08.01 audio-server scaffold frozen tests drive the Axum `/v1/audio/speech`
+# route and the pluggable synth trait (`syrinx-serve`) through the root `tests/`.
+# RED: `syrinx-serve` exposes no router/request/synth types yet, so the test
+# target fails to build; GREEN adds them. axum/tower/tokio/http-body let the test
+# drive the router via `tower`'s `oneshot` and inspect the response shape.
+syrinx-serve = { path = "crates/syrinx-serve" }
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
+http-body = "1"
