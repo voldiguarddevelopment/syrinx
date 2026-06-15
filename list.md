@@ -269,7 +269,7 @@ A two-tier override table consulted before phonemization. Inputs: a default lexi
 ### T-01.04  Phonemize to IPA
 id: T-01.04
 phase: 1
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -280,8 +280,12 @@ criteria:
 not_doing:
   - No stress/syllable-boundary marking beyond bare phoneme symbols.
   - No per-word IPA override (that is T-01.05) and no heteronym disambiguation (T-01.06).
-test_files: []
-criteria_map: {}
+test_files: [tests/g2p.rs, tests/golden/g2p/cat.expected, tests/golden/g2p/cat.in, tests/golden/g2p/fish.expected, tests/golden/g2p/fish.in, tests/golden/g2p/ship.expected, tests/golden/g2p/ship.in, tests/golden/g2p/sun.expected, tests/golden/g2p/sun.in, tests/golden/g2p/the.expected, tests/golden/g2p/the.in, tests/golden/g2p/thin.expected, tests/golden/g2p/thin.in, tests/golden/g2p/van.expected, tests/golden/g2p/van.in]
+criteria_map:
+  C1: [cat_maps_to_known_ipa]
+  C2: [the_maps_to_known_ipa, golden_set_is_non_empty, golden_labeled_set_round_trips]
+  C3: [oov_word_is_non_empty, oov_word_chars_all_in_ipa_set]
+  C4: [empty_input_maps_to_empty]
 attempts: 1
 last_failure: ""
 ---
