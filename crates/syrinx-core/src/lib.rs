@@ -116,23 +116,40 @@ pub fn mul(a: &Tensor, b: &Tensor) -> Result<Tensor, ShapeError> {
 pub fn linear(x: &Tensor, w: &Tensor, b: Option<&Tensor>) -> Tensor {
     let in_dim = w.shape[1];
     let out_dim = w.shape[0];
-    let rows = x.data.len() / in_dim;
-    let mut data = vec![0.0f32; rows * out_dim];
-    for i in 0..rows {
-        for o in 0..out_dim {
-            let mut sum = 0.0f64;
-            for k in 0..in_dim {
-                sum += x.data[i * in_dim + k] as f64 * w.data[o * in_dim + k] as f64;
-            }
-            if let Some(bias) = b {
-                sum += bias.data[o] as f64;
-            }
-            data[i * out_dim + o] = sum as f32;
+
+    // `matmul` contracts `A[m, k] x B[k, n]` over the shared inner dim, but
+    // `W` is stored `[out, in]`, so transpose it to `Wt[in, out]` and the
+    // product `x[rows, in] @ Wt[in, out]` is exactly `y[i][o] = sum_k x[i][k] *
+    // W[o][k]` (reference.py §4.3: `x @ W.T`).
+    let mut wt = vec![0.0f32; in_dim * out_dim];
+    for o in 0..out_dim {
+        for k in 0..in_dim {
+            wt[k * out_dim + o] = w.data[o * in_dim + k];
         }
     }
+    let wt = Tensor::new(wt, vec![in_dim, out_dim]);
+
+    let rows = x.data.len() / in_dim;
+    let x2d = Tensor::new(x.data.clone(), vec![rows, in_dim]);
+    let prod = matmul(&x2d, &wt).unwrap();
+
+    let out = match b {
+        // Bias is `[out]`; broadcast it down the `rows` axis and add (`+ b`).
+        Some(bias) => {
+            let mut bdata = Vec::new();
+            for _ in 0..rows {
+                bdata.extend_from_slice(&bias.data);
+            }
+            let broadcast = Tensor::new(bdata, vec![rows, out_dim]);
+            add(&prod, &broadcast).unwrap()
+        }
+        None => prod,
+    };
+
+    // Preserve the leading dims of `x`; only the last dim becomes `out`.
     let mut shape = x.shape.clone();
     *shape.last_mut().unwrap() = out_dim;
-    Tensor::new(data, shape)
+    Tensor::new(out.data, shape)
 }
 
 /// `rmsnorm(x[*, d], w[d], eps) -> [*, d]` (PARITY.md §4.4).
@@ -142,7 +159,10 @@ pub fn linear(x: &Tensor, w: &Tensor, b: Option<&Tensor>) -> Tensor {
 pub fn rmsnorm(x: &Tensor, w: &Tensor, eps: f32) -> Tensor {
     let d = w.shape[0];
     let rows = x.data.len() / d;
-    let mut data = vec![0.0f32; x.data.len()];
+    // First the scale-only pass: `x[k] / sqrt(mean(x^2) + eps)` (eps INSIDE the
+    // sqrt). The per-element weight `* w[k]` is then the elementwise product
+    // `mul(scaled, w)` with `w` broadcast down the `rows` axis.
+    let mut scaled = vec![0.0f32; x.data.len()];
     for i in 0..rows {
         let mut ms = 0.0f64;
         for k in 0..d {
@@ -152,10 +172,17 @@ pub fn rmsnorm(x: &Tensor, w: &Tensor, eps: f32) -> Tensor {
         ms /= d as f64;
         let inv = 1.0 / (ms + eps as f64).sqrt();
         for k in 0..d {
-            data[i * d + k] = ((x.data[i * d + k] as f64 * inv) * w.data[k] as f64) as f32;
+            scaled[i * d + k] = (x.data[i * d + k] as f64 * inv) as f32;
         }
     }
-    Tensor::new(data, x.shape.clone())
+    let scaled = Tensor::new(scaled, x.shape.clone());
+
+    let mut wdata = Vec::new();
+    for _ in 0..rows {
+        wdata.extend_from_slice(&w.data);
+    }
+    let weight = Tensor::new(wdata, x.shape.clone());
+    mul(&scaled, &weight).unwrap()
 }
 
 /// `softmax(x) -> same shape`, over the last axis (PARITY.md §4.5).
@@ -167,12 +194,7 @@ pub fn softmax(x: &Tensor) -> Tensor {
     let mut data = vec![0.0f32; x.data.len()];
     for i in 0..rows {
         let row = &x.data[i * d..i * d + d];
-        let mut m = row[0];
-        for &v in row {
-            if v > m {
-                m = v;
-            }
-        }
+        let m = row.iter().copied().fold(f32::NEG_INFINITY, f32::max);
         let mut s = 0.0f64;
         let mut e = vec![0.0f64; d];
         for k in 0..d {
@@ -190,15 +212,15 @@ pub fn softmax(x: &Tensor) -> Tensor {
 /// `silu(v) = v * sigmoid(v)`, elementwise, `sigmoid(v) = 1/(1 + exp(-v))`
 /// (PARITY.md §4.6).
 pub fn silu(x: &Tensor) -> Tensor {
-    let data = x
+    // `sigmoid(v) = 1 / (1 + exp(-v))` elementwise, then `silu = v * sigmoid(v)`
+    // is the elementwise product `mul(x, sigmoid)`.
+    let sig: Vec<f32> = x
         .data
         .iter()
-        .map(|&v| {
-            let sig = 1.0f64 / (1.0 + (-(v as f64)).exp());
-            (v as f64 * sig) as f32
-        })
+        .map(|&v| (1.0f64 / (1.0 + (-(v as f64)).exp())) as f32)
         .collect();
-    Tensor::new(data, x.shape.clone())
+    let sig = Tensor::new(sig, x.shape.clone());
+    mul(x, &sig).unwrap()
 }
 
 /// `rope(x[T, n_heads, head_dim], positions[T], theta) -> same shape`
@@ -213,19 +235,22 @@ pub fn rope(x: &Tensor, positions: &[usize], theta: f32) -> Tensor {
     let head_dim = x.shape[2];
     let half = head_dim / 2;
     let mut data = x.data.clone();
-    for (t, &position) in positions.iter().enumerate().take(t_dim) {
+    // Each `head_dim`-wide chunk is one (token, head) row; the rows for token
+    // `t` are the `n_heads` consecutive chunks rotated by `positions[t]`.
+    let mut chunks = data.chunks_mut(head_dim);
+    for (_t, &position) in positions.iter().enumerate().take(t_dim) {
         let pos = position as f64;
-        for h in 0..n_heads {
-            let base = (t * n_heads + h) * head_dim;
+        for _ in 0..n_heads {
+            let chunk = chunks.next().unwrap();
             for i in 0..half {
                 let inv_freq = (theta as f64).powf(-((2 * i) as f64) / head_dim as f64);
                 let angle = pos * inv_freq;
                 let c = angle.cos();
                 let s = angle.sin();
-                let a = x.data[base + 2 * i] as f64;
-                let bb = x.data[base + 2 * i + 1] as f64;
-                data[base + 2 * i] = (a * c - bb * s) as f32;
-                data[base + 2 * i + 1] = (a * s + bb * c) as f32;
+                let a = chunk[2 * i] as f64;
+                let bb = chunk[2 * i + 1] as f64;
+                chunk[2 * i] = (a * c - bb * s) as f32;
+                chunk[2 * i + 1] = (a * s + bb * c) as f32;
             }
         }
     }
