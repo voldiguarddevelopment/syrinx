@@ -3,3 +3,8 @@ name = "syrinx-stream"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[dependencies]
+# T-07.04 delegates the anti-alias band-limit to `syrinx-vocoder` (per the
+# criteria) before decimating 48kHz→8kHz.
+syrinx-vocoder = { path = "../syrinx-vocoder" }
