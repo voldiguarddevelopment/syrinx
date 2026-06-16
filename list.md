@@ -1052,7 +1052,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (whether the time-scaled speech sounds right / pitch is truly unshifted on rendered output) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 2
+attempts: 3
 last_failure: |
   surviving mutant at crates/syrinx-prosody/src/plan.rs:61 (bool-or-to-and) — frozen tests do not kill it
   surviving mutant at crates/syrinx-prosody/src/plan.rs:76 (cmp-ge-to-gt) — frozen tests do not kill it
