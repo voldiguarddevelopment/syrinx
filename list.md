@@ -744,7 +744,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; this gates only deterministic numerical parity against `lm_forward.json`.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The end-to-end LM forward, composed from the T-02.02c-a-verified block. Inputs: the fixed [1,5,9,2,0], weights name-generated via T-02.01c. Bounds: shape [5,512]; logits at 1e-3 max-abs against lm_forward.json, rejected at 2e-3; the untied head and final-norm position pinned (both on the dominant path, so they DO diverge >1e-3 — valid controls). Block count is pinned at activation scale in T-02.02c-a, NOT by a logit-scale 3-vs-4 control (that delta is sub-tolerance — the reason the parent halted). Outputs: logits[T, vocab=512]. Invariant: exact transcription of reference.py §5. Done-check: golden parity + shape + the untied-head and final-norm controls.
