@@ -29,6 +29,8 @@ pub enum PlanError {
     LengthMismatch,
     /// The requested phoneme index is at or past `N`.
     IndexOutOfRange,
+    /// The requested rate factor was not strictly positive.
+    InvalidRate,
 }
 
 /// The typed editable prosody plan.
@@ -56,7 +58,10 @@ impl ProsodyPlan {
         durations_ms: Vec<f32>,
         pitch_hz: Vec<f32>,
     ) -> Result<ProsodyPlan, PlanError> {
-        if durations_ms.len() != n || pitch_hz.len() != n {
+        if durations_ms.len() != n {
+            return Err(PlanError::LengthMismatch);
+        }
+        if pitch_hz.len() != n {
             return Err(PlanError::LengthMismatch);
         }
         Ok(ProsodyPlan {
@@ -71,12 +76,12 @@ impl ProsodyPlan {
     /// `i` at or past `N` yields [`PlanError::IndexOutOfRange`]; this never
     /// panics on any `usize`.
     pub fn phoneme(&self, i: usize) -> Result<Phoneme, PlanError> {
-        if i >= self.durations_ms.len() {
-            return Err(PlanError::IndexOutOfRange);
+        match (self.durations_ms.get(i), self.pitch_hz.get(i)) {
+            (Some(&duration_ms), Some(&pitch_hz)) => Ok(Phoneme {
+                duration_ms,
+                pitch_hz,
+            }),
+            _ => Err(PlanError::IndexOutOfRange),
         }
-        Ok(Phoneme {
-            duration_ms: self.durations_ms[i],
-            pitch_hz: self.pitch_hz[i],
-        })
     }
 }
