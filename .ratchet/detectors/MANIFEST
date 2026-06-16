@@ -1,2 +1,2 @@
-2ae8364ce2e5f8de2167c22432aeeddcdbf8841aea5d4d8c3a15158a0cf111b5  criteria_map:T-02.02b
-3ea27b918863dcc652aa3c7d32de1e040a472ab508498ed2cf57a187add67191  tests/block_prop.rs
+c2b6f0d22ef5b7fc94e32a61b545e495015d48df2b3710b302bd5396a42ebf82  criteria_map:T-02.02c-a
+b209977391fbd1c4aa1d1bd9c6c83ecb38990ae853b51724254a7da5ce9833ce  tests/lm_stage_parity.rs
