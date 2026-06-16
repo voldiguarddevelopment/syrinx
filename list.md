@@ -1837,7 +1837,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (narrowband intelligibility over a real telephony channel) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 1
+attempts: 2
 last_failure: |
   surviving mutant at crates/syrinx-stream/src/lib.rs:49 (cmp-eq-to-ne) — frozen tests do not kill it
   surviving mutant at crates/syrinx-stream/src/lib.rs:52 (arith-add-to-sub) — frozen tests do not kill it
