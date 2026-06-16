@@ -6,4 +6,5 @@ pub mod lipsync;
 pub mod pitch;
 pub mod plan;
 pub mod rate;
+pub mod roundtrip;
 pub mod volume;
