@@ -1837,7 +1837,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (narrowband intelligibility over a real telephony channel) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 A deterministic 48kHz→8kHz downsampler with an anti-alias band-limit over an f32 buffer. Inputs: a 48kHz f32 sample buffer. Outputs: an 8kHz f32 buffer of length `L * 8000 / 48000` (±1) with above-Nyquist energy attenuated. Errors/edges: output length pinned by the ratio across multiple L; a DC input stays constant; an above-Nyquist tone is attenuated below the anti-alias bound while an in-band tone passes; nothing panics. Invariant: the output is band-limited to the narrowband passband and length-correct for the rate ratio. This is the deterministic DSP on synthetic f32 input; narrowband intelligibility over a real telephony channel is deferred to a later perceptual eval against the real model.
