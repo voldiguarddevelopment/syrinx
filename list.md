@@ -1189,7 +1189,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (whether the round-tripped plan renders to audio matching the edit) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 End-to-end serialization fidelity of an edited plan. Inputs: a `ProsodyPlan` carrying a T-03.09 edit. Outputs: a JSON encoding that round-trips byte-identically and deserializes to a value equal to the edited plan under `PartialEq`. Errors/edges: the round-tripped plan equals the edited plan and differs from the pre-edit plan; repeat deserialization is deterministic; missing `schema_version` is a typed deserialize error, never a silent default; nothing panics. Invariant: an edited plan is a byte-stable, `PartialEq`-stable JSON round-trip. This is the deterministic serialize/round-trip check on synthetic edited plans; whether the round-tripped plan renders to audio matching the edit is deferred to a later perceptual eval against the real model.
