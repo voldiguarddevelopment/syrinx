@@ -71,3 +71,8 @@ syrinx-core = { path = "crates/syrinx-core" }
 # `rope`/`weights` (already a dep above) to build inputs and an independent
 # reference.
 syrinx-lm = { path = "crates/syrinx-lm" }
+# T-07.01 streaming ring-buffer frozen tests drive `syrinx-stream`'s `RingBuffer`
+# plus its `BufferError::Backpressure` full-buffer signal through the root
+# `tests/`. RED: `syrinx-stream` exposes no `RingBuffer`/`BufferError` yet, so
+# `tests/stream_ring_buffer.rs` fails to build; GREEN adds them.
+syrinx-stream = { path = "crates/syrinx-stream" }
