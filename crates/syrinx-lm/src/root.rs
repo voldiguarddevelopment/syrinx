@@ -8,6 +8,8 @@
 #[path = "lib.rs"]
 mod attn;
 mod block;
+mod stage;
 
 pub use attn::*;
 pub use block::{block, swiglu_ffn};
+pub use stage::{embed_tokens, layer_attention, transformer_block};
