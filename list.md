@@ -1760,7 +1760,7 @@ Inputs: the disentanglement and per-axis eval results. Bounds: an honest, fully-
 ### T-07.01  Buffer streaming audio packets
 id: T-07.01
 phase: 7
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -1771,8 +1771,11 @@ not_doing:
   - No `cpal` device output or real audio sink — buffer/packetizer logic only.
   - No TTFB latency tuning (that is T-07.02) and no telephony/8kHz path.
   - The PERCEPTUAL/AUDIO eval ("no underruns under load" on a live device stream) is deferred to a later eval task against the real model.
-test_files: []
-criteria_map: {}
+test_files: [tests/stream_ring_buffer.rs]
+criteria_map:
+  C1: [test_fifo_order_element_for_element, test_reordered_expectation_fails]
+  C2: [test_ring_wraps_without_overwriting_live_data]
+  C3: [test_pop_empty_returns_none, test_full_boundary_pushes_then_backpressure, test_backpressure_does_not_overwrite]
 attempts: 1
 last_failure: ""
 ---
