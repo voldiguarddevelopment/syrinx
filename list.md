@@ -1152,7 +1152,7 @@ Composes emotion steering and intonation into a sarcasm/irony toggle. Inputs: an
 ### T-03.09  Edit a phoneme in the plan
 id: T-03.09
 phase: 3
-status: pending
+status: done
 depends_on: [T-03.02, T-03.03]
 stack: rust
 criteria:
@@ -1163,8 +1163,11 @@ not_doing:
   - No volume editing in this API — duration and pitch only.
   - No batch/scripted edit language — single-phoneme edits.
   - The PERCEPTUAL/AUDIO eval (whether a renderer audibly honors the edit) is deferred to a later eval task against the real model.
-test_files: []
-criteria_map: {}
+test_files: [tests/edit_phoneme.rs]
+criteria_map:
+  C1: [test_edit_phoneme_full_edit_writes_both_fields_at_index, test_edit_phoneme_full_edit_writes_first_index]
+  C2: [test_edit_phoneme_duration_only_leaves_pitch_unchanged, test_edit_phoneme_pitch_only_leaves_duration_unchanged]
+  C3: [test_edit_phoneme_at_last_index_applies, test_edit_phoneme_at_n_errors_and_mutates_nothing, test_edit_phoneme_never_panics_on_any_index]
 attempts: 1
 last_failure: ""
 ---
