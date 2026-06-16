@@ -6,6 +6,11 @@
 //! is [`BufferError::Backpressure`] (no overwrite of live data), and the ring
 //! wraps at the capacity boundary. No `cpal` device output here — that and the
 //! TTFB path are separate tasks.
+//!
+//! T-07.04 adds the [`resample`] module: a deterministic 48kHz→8kHz telephony
+//! downsampler (anti-alias band-limit via `syrinx-vocoder`, then 6:1 decimation).
+
+pub mod resample;
 
 /// Error returned by [`RingBuffer::push`] when the buffer cannot accept a sample.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
