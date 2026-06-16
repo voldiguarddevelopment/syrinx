@@ -1165,7 +1165,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (whether a renderer audibly honors the edit) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The unified single-phoneme plan editor over the typed plan. Inputs: a `ProsodyPlan` of N phonemes and a `PhonemeEdit` carrying an optional new duration and/or pitch for one index i. Outputs: a new plan in which index i carries exactly the edited values and every other entry of both arrays is unchanged. Errors/edges: an edit at i == N → `PlanError::IndexOutOfRange` (i == N-1 applies) mutating nothing; duration and pitch fields are written independently; nothing panics. Invariant: only the edited phoneme's targeted fields change and the returned plan equals the original everywhere else. This is the deterministic typed-API edit on synthetic plans; whether a renderer audibly honors the edit is deferred to a later perceptual eval against the real model.
