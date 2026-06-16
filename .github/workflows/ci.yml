@@ -1,0 +1,35 @@
+# Continuous integration for Syrinx — independent verification of every push.
+# Runs async on GitHub (never blocks the local Ratchet loop): the loop's own
+# deterministic gates (checker/compile/test/mutation) stay local where they are
+# fastest for these light parity tasks; this re-runs the full committed suite on
+# a clean runner so a passing main is proven off the build box too.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Build
+        run: cargo build --workspace --all-targets --locked || cargo build --workspace --all-targets
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace -- --test-threads=1
