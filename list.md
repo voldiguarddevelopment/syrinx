@@ -664,7 +664,7 @@ The transformer block: SwiGLU FFN plus the pre-norm residual wiring. Inputs: `h[
 ### T-02.02c  Run the LM forward pass
 id: T-02.02c
 phase: 2
-status: blocked
+status: split
 depends_on: [T-02.02a, T-02.02b, T-02.01c]
 stack: rust
 criteria:
@@ -700,6 +700,50 @@ last_failure: |
   error: test failed, to rerun pass `--test lm_forward_parity`
 ---
 The end-to-end semantic LM forward. Inputs: `token_ids` (the fixed `[1,5,9,2,0]`), all weights name-generated via T-02.01c. Bounds: shape `[5,512]`; logits pinned at 1e-3 max-abs against `lm_forward.json` and rejected at 2e-3; block count, norm position, and head untying each pinned against a wrong alternative. Outputs: `logits[T, vocab=512]`. Errors/edges: a 3-block run, a post-lm_head final norm, or a tied head all diverge past tolerance. Invariant: exact transcription of `reference.py` §5 — `embed → 4× block → final rmsnorm → untied lm_head`, no randomness, weights a pure function of names. Done-check: the four criteria — golden parity plus the block-count / norm-order / untied-head boundary pins.
+
+### T-02.02c-a  Assemble the layer-0 forward stage
+id: T-02.02c-a
+phase: 2
+status: pending
+depends_on: [T-02.02a, T-02.02b, T-02.01c]
+stack: rust
+criteria:
+  - C1: `syrinx_lm` exposes the layer-0 forward stage so a repo-root integration test `tests/lm_stage_parity.rs` drives it on the fixed input `[1,5,9,2,0]` (positions `[0,1,2,3,4]`): the token embedding (gather of `weights("tok_embeddings", 512*128)` rows by id) matches `tests/golden/parity/lm_embed.json` `data` (shape `[5,128]`) within `tol` (1e-4) max-abs over all `5*128` elements; corrupting any embedding value fails the assertion.
+  - C2: `tests/lm_stage_parity.rs` pins the layer-0 attention sub-output — `attention(rmsnorm(embed, weights("layers.0.attention_norm.weight",128), eps=1e-5), layer=0, positions)` matches `tests/golden/parity/lm_attn0.json` (shape `[5,128]`) within 1e-4 max-abs; a zeroed attention (all-zeros output) diverges by `max|lm_attn0|` ~4.8e-4 (> 1e-4) and fails, and swapping the adjacent RoPE pair ordering also fails — confirming the RoPE + scaled-dot-product path is real.
+  - C3: `tests/lm_stage_parity.rs` pins the full layer-0 block — `transformer_block(embed, layer=0, positions)` with pre-RMSNorm residual order `h += attn(norm(h)); h += ffn(norm(h))` matches `tests/golden/parity/lm_block0.json` (shape `[5,128]`) within 1e-4 max-abs; an identity block (returning the embedding unchanged) diverges by ~4.8e-4 (> 1e-4) and fails, and swapping the SwiGLU gate/up weights (w1 with w3) also fails.
+  - C4: `tests/lm_stage_parity.rs` pins the literal `reference.py` §3 layer-0 tensor names under prefix `layers.0.` — `attention.w{q,k,v,o}.weight`, `feed_forward.w{1,3,2}.weight`, `attention_norm.weight`, `ffn_norm.weight`; using a wrong name or a transposed `[in,out]` matrix shape diverges from `lm_block0.json` and fails.
+not_doing:
+  - No multi-layer composition, final norm, or lm_head — that is T-02.02c-b; this gates only the embedding and a single layer-0 block numerically.
+  - No new attention/FFN/block algorithms — those are the T-02.02a / T-02.02b implementations; this task pins them numerically against the activation-scale goldens and may correct their numerics so long as the T-02.02a/b frozen property tests stay green.
+  - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic activation-scale parity at 1e-4.
+test_files: []
+criteria_map: {}
+attempts: 0
+last_failure: ""
+---
+The layer-0 forward stage, pinned where the transformer block is the signal. The [5,512] logit golden cannot see the blocks (each contributes ~2e-4, below its 1e-3 tol), so these [5,128] activation goldens pin embed -> attention -> block at 1e-4: a numeric error in the attention or FFN path is caught HERE, localized, instead of hiding under the logit-scale forward. Inputs: the fixed tokens [1,5,9,2,0]. Outputs: embedding, layer-0 attention sub-output, and layer-0 block output, each parity-checked at 1e-4 (signal ~4.8e-4, f32 noise <1e-5). Done-check: the four criteria — embed parity, attention parity, block parity, and the layer-0 name/shape pins.
+
+### T-02.02c-b  Compute the full LM forward logits
+id: T-02.02c-b
+phase: 2
+status: pending
+depends_on: [T-02.02c-a]
+stack: rust
+criteria:
+  - C1: `syrinx_lm::forward(token_ids)` runs `embed -> 4 blocks -> final rmsnorm(norm.weight, eps=1e-5) -> linear(output.weight)` with `positions = [0..T-1]`, drawing every named weight with the literal names of `reference.py` §3, and returns logits of shape `[T, 512]`; a repo-root integration test `tests/lm_forward_parity.rs` asserts the output shape equals `[5, 512]` for the input `[1,5,9,2,0]`.
+  - C2: `tests/lm_forward_parity.rs` loads `tests/golden/parity/lm_forward.json` and asserts `forward([1,5,9,2,0])` logits match its `data` within `tol` (1e-3) max-abs over all `5*512` elements; a `2e-3` perturbation of any single logit fails the assertion.
+  - C3: `tests/lm_forward_parity.rs` pins the untied lm_head — using `tok_embeddings` as the output projection instead of the separate `output.weight` drives the max-abs difference above 1e-3 and fails (the head is on the dominant path, so this control IS visible); the correct untied head passes.
+  - C4: `tests/lm_forward_parity.rs` pins the final-norm presence and position — omitting the final `rmsnorm(norm.weight)`, or applying it AFTER `output.weight` instead of before, each drives the max-abs difference above 1e-3 and fails; the correct norm-then-head order passes. (Block COUNT is not a logit-scale control: each block's ~2e-4 contribution is below the 1e-3 tol, so 3-vs-4 blocks cannot diverge here — block correctness is pinned at activation scale by T-02.02c-a.)
+not_doing:
+  - No sampling, greedy decoding, beam search, or KV-cache — a single deterministic forward producing logits only.
+  - No 3-vs-4-block negative control at logit scale — each block contributes ~2e-4, below the 1e-3 logit tol, so it is numerically unsatisfiable (this is why the original T-02.02c halted); block correctness lives in T-02.02c-a, this task pins the dominant embed/norm/head path and the end-to-end parity.
+  - No real pretrained-weight quality or SIM-o/cloning concern; this gates only deterministic numerical parity against `lm_forward.json`.
+test_files: []
+criteria_map: {}
+attempts: 0
+last_failure: ""
+---
+The end-to-end LM forward, composed from the T-02.02c-a-verified block. Inputs: the fixed [1,5,9,2,0], weights name-generated via T-02.01c. Bounds: shape [5,512]; logits at 1e-3 max-abs against lm_forward.json, rejected at 2e-3; the untied head and final-norm position pinned (both on the dominant path, so they DO diverge >1e-3 — valid controls). Block count is pinned at activation scale in T-02.02c-a, NOT by a logit-scale 3-vs-4 control (that delta is sub-tolerance — the reason the parent halted). Outputs: logits[T, vocab=512]. Invariant: exact transcription of reference.py §5. Done-check: golden parity + shape + the untied-head and final-norm controls.
 
 ### T-02.03  Run the speaker encoder forward
 id: T-02.03
