@@ -1838,7 +1838,11 @@ not_doing:
 test_files: []
 criteria_map: {}
 attempts: 1
-last_failure: ""
+last_failure: |
+  surviving mutant at crates/syrinx-stream/src/lib.rs:49 (cmp-eq-to-ne) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-stream/src/lib.rs:52 (arith-add-to-sub) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-stream/src/lib.rs:62 (cmp-eq-to-ne) — frozen tests do not kill it
+  surviving mutant at crates/syrinx-stream/src/lib.rs:66 (arith-add-to-sub) — frozen tests do not kill it
 ---
 A deterministic 48kHz→8kHz downsampler with an anti-alias band-limit over an f32 buffer. Inputs: a 48kHz f32 sample buffer. Outputs: an 8kHz f32 buffer of length `L * 8000 / 48000` (±1) with above-Nyquist energy attenuated. Errors/edges: output length pinned by the ratio across multiple L; a DC input stays constant; an above-Nyquist tone is attenuated below the anti-alias bound while an in-band tone passes; nothing panics. Invariant: the output is band-limited to the narrowband passband and length-correct for the rate ratio. This is the deterministic DSP on synthetic f32 input; narrowband intelligibility over a real telephony channel is deferred to a later perceptual eval against the real model.
 
