@@ -1108,7 +1108,7 @@ Text-prompted emotion with a monotonic intensity scale. Inputs: text, an emotion
 ### T-03.07  Apply intonation contours
 id: T-03.07
 phase: 3
-status: pending
+status: done
 depends_on: [T-03.01, T-03.03]
 stack: rust
 criteria:
@@ -1119,8 +1119,11 @@ not_doing:
   - No emotion semantics — contour shape over the pitch array only.
   - No per-phoneme/per-word pitch API — that is T-03.03.
   - The PERCEPTUAL/AUDIO eval (whether the contour sounds like the intended intonation on rendered output) is deferred to a later eval task against the real model.
-test_files: []
-criteria_map: {}
+test_files: [tests/contour.rs]
+criteria_map:
+  C1: [test_rising_preset_raises_last_above_first_by_delta, test_falling_preset_lowers_last_below_first_by_delta, test_flat_preset_is_identity]
+  C2: [test_manual_curve_sets_pitch_pointwise, test_manual_curve_wrong_length_errs_and_unchanged]
+  C3: [test_contour_empty_plan_is_noop, test_curve_empty_plan_is_noop, test_durations_untouched_by_every_contour]
 attempts: 1
 last_failure: ""
 ---
