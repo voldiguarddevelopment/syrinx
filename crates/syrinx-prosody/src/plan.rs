@@ -22,6 +22,19 @@ pub struct Phoneme {
     pub pitch_hz: f32,
 }
 
+/// A typed single-phoneme edit carrying an optional new duration and/or pitch.
+///
+/// A `Some` field requests writing that field at the target index; a `None`
+/// field leaves the corresponding entry of the plan equal to the original. The
+/// two fields are written independently (T-03.09).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PhonemeEdit {
+    /// The new duration in milliseconds, or `None` to leave duration unchanged.
+    pub duration_ms: Option<f32>,
+    /// The new pitch in hertz, or `None` to leave pitch unchanged.
+    pub pitch_hz: Option<f32>,
+}
+
 /// The typed errors a prosody-plan operation can return.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanError {
@@ -83,5 +96,28 @@ impl ProsodyPlan {
             }),
             _ => Err(PlanError::IndexOutOfRange),
         }
+    }
+
+    /// Apply a single-phoneme [`PhonemeEdit`] at index `i`, returning a new plan.
+    ///
+    /// The returned plan carries exactly the edited values at index `i` and is
+    /// bit-identical to the original everywhere else: a `Some` field is written,
+    /// a `None` field leaves that entry equal to the original, and the two fields
+    /// are written independently. `i` at or past `N` yields
+    /// [`PlanError::IndexOutOfRange`] and mutates nothing — `&self` is never
+    /// modified and this never panics on any `usize`. The schema version is
+    /// carried over.
+    pub fn edit_phoneme(&self, i: usize, edit: PhonemeEdit) -> Result<ProsodyPlan, PlanError> {
+        if i >= self.durations_ms.len() {
+            return Err(PlanError::IndexOutOfRange);
+        }
+        let mut plan = self.clone();
+        if let Some(duration_ms) = edit.duration_ms {
+            plan.durations_ms[i] = duration_ms;
+        }
+        if let Some(pitch_hz) = edit.pitch_hz {
+            plan.pitch_hz[i] = pitch_hz;
+        }
+        Ok(plan)
     }
 }
