@@ -730,7 +730,7 @@ The layer-0 forward stage, pinned where the transformer block is the signal. The
 ### T-02.02c-b  Compute the full LM forward logits
 id: T-02.02c-b
 phase: 2
-status: pending
+status: done
 depends_on: [T-02.02c-a]
 stack: rust
 criteria:
@@ -742,8 +742,12 @@ not_doing:
   - No sampling, greedy decoding, beam search, or KV-cache — a single deterministic forward producing logits only.
   - No 3-vs-4-block negative control at logit scale — each block contributes ~2e-4, below the 1e-3 logit tol, so it is numerically unsatisfiable (this is why the original T-02.02c halted); block correctness lives in T-02.02c-a, this task pins the dominant embed/norm/head path and the end-to-end parity.
   - No real pretrained-weight quality or SIM-o/cloning concern; this gates only deterministic numerical parity against `lm_forward.json`.
-test_files: []
-criteria_map: {}
+test_files: [tests/lm_forward_parity.rs]
+criteria_map:
+  C1: [test_forward_output_shape]
+  C2: [test_forward_parity_and_perturbation]
+  C3: [test_untied_head_control]
+  C4: [test_final_norm_presence_and_position]
 attempts: 1
 last_failure: ""
 ---
