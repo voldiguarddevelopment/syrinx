@@ -1824,7 +1824,7 @@ Inputs: the full inference pipeline on one 4090 with fusion/batching toggles. Bo
 ### T-07.04  Resample audio to 8 kHz telephony
 id: T-07.04
 phase: 7
-status: pending
+status: done
 depends_on: [T-00.01]
 stack: rust
 criteria:
@@ -1835,14 +1835,13 @@ not_doing:
   - No 48kHz full-band path changes and no codec encoding — resample plus band-limit only.
   - No echo cancellation or network jitter handling.
   - The PERCEPTUAL/AUDIO eval (narrowband intelligibility over a real telephony channel) is deferred to a later eval task against the real model.
-test_files: []
-criteria_map: {}
+test_files: [tests/resample_8k.rs]
+criteria_map:
+  C1: [test_length_ratio_pins_across_two_L, test_length_within_one_sample_nondivisible]
+  C2: [test_dc_input_stays_flat]
+  C3: [test_above_nyquist_tone_attenuated, test_in_band_tone_passes]
 attempts: 2
-last_failure: |
-  surviving mutant at crates/syrinx-stream/src/lib.rs:49 (cmp-eq-to-ne) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-stream/src/lib.rs:52 (arith-add-to-sub) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-stream/src/lib.rs:62 (cmp-eq-to-ne) — frozen tests do not kill it
-  surviving mutant at crates/syrinx-stream/src/lib.rs:66 (arith-add-to-sub) — frozen tests do not kill it
+last_failure: ""
 ---
 A deterministic 48kHz→8kHz downsampler with an anti-alias band-limit over an f32 buffer. Inputs: a 48kHz f32 sample buffer. Outputs: an 8kHz f32 buffer of length `L * 8000 / 48000` (±1) with above-Nyquist energy attenuated. Errors/edges: output length pinned by the ratio across multiple L; a DC input stays constant; an above-Nyquist tone is attenuated below the anti-alias bound while an in-band tone passes; nothing panics. Invariant: the output is band-limited to the narrowband passband and length-correct for the rate ratio. This is the deterministic DSP on synthetic f32 input; narrowband intelligibility over a real telephony channel is deferred to a later perceptual eval against the real model.
 
