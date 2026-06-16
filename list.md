@@ -1773,7 +1773,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval ("no underruns under load" on a live device stream) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 A deterministic ring buffer plus packetizer over an in-memory f32 sample stream. Inputs: f32 samples pushed by a producer and popped by a consumer against a fixed capacity C. Outputs: samples delivered in FIFO order with explicit empty and full signals. Errors/edges: pop on empty → `None`; push on full (live count == C) → `Err(BufferError::Backpressure)` with no overwrite; the ring wraps at C; the full boundary is pinned at C-1 vs C; nothing panics. Invariant: samples come out in the order they went in and a full buffer applies backpressure rather than corrupting live data. This is the deterministic in-memory buffer/packetizer on synthetic samples; the "no underruns under load" behavior on a live `cpal` device stream is deferred to a later audio eval against the real model.
