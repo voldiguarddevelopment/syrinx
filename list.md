@@ -1121,7 +1121,7 @@ not_doing:
   - The PERCEPTUAL/AUDIO eval (whether the contour sounds like the intended intonation on rendered output) is deferred to a later eval task against the real model.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 Named contour presets and manual curves applied deterministically to the plan's pitch array. Inputs: a `ProsodyPlan` and either a named preset (`Rising`/`Falling`/`Flat`) or a manual per-phoneme F0 curve. Outputs: a plan whose `pitch_hz` is transformed by the chosen contour with `durations_ms` untouched. Errors/edges: rising vs falling pinned in opposite directions and flat pinned as identity; a manual curve of wrong length → `PlanError::LengthMismatch`; an empty plan is a no-op `Ok`; nothing panics. Invariant: a preset transforms `pitch_hz` deterministically and an N-length manual curve is honored point-for-point. This is the deterministic typed transform on synthetic plans; whether the applied contour is perceptually the intended intonation on rendered audio is deferred to a later perceptual eval against the real model.
