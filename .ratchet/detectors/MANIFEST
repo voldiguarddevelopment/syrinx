@@ -1,2 +1,2 @@
-c9b4ced8b3596e28ffbc4fd4fab26ad002f8fd6154d5c650dc3c5d7131e3caeb  criteria_map:T-02.02c-b
-fd6cb5f8cb71ecda76b863d257259412becbdd4c80bb1b5acd8d2b9f250dbc29  tests/lm_forward_parity.rs
+d43ef1d7b873927ddc5e0b7b8e56d17c10b0ba43216835e6a6d157ffa587ca74  criteria_map:T-03.04
+e5d73eda5bf213fae218390738b5c7b28a6cf979c1b2cc47d748d3b6cd7796cb  tests/scale_rate.rs
