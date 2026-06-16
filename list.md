@@ -718,7 +718,7 @@ not_doing:
   - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic activation-scale parity at 1e-4.
 test_files: []
 criteria_map: {}
-attempts: 0
+attempts: 1
 last_failure: ""
 ---
 The layer-0 forward stage, pinned where the transformer block is the signal. The [5,512] logit golden cannot see the blocks (each contributes ~2e-4, below its 1e-3 tol), so these [5,128] activation goldens pin embed -> attention -> block at 1e-4: a numeric error in the attention or FFN path is caught HERE, localized, instead of hiding under the logit-scale forward. Inputs: the fixed tokens [1,5,9,2,0]. Outputs: embedding, layer-0 attention sub-output, and layer-0 block output, each parity-checked at 1e-4 (signal ~4.8e-4, f32 noise <1e-5). Done-check: the four criteria — embed parity, attention parity, block parity, and the layer-0 name/shape pins.
