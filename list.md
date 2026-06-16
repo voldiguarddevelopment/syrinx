@@ -1176,7 +1176,7 @@ The unified single-phoneme plan editor over the typed plan. Inputs: a `ProsodyPl
 ### T-03.10  Round-trip an edited plan
 id: T-03.10
 phase: 3
-status: pending
+status: done
 depends_on: [T-03.09]
 stack: rust
 criteria:
@@ -1187,8 +1187,11 @@ not_doing:
   - No new edit operations — exercises T-03.09's edit end to end.
   - No wire format other than JSON for this round-trip.
   - The PERCEPTUAL/AUDIO eval (whether the round-tripped plan renders to audio matching the edit) is deferred to a later eval task against the real model.
-test_files: []
-criteria_map: {}
+test_files: [tests/roundtrip_edited_plan.rs]
+criteria_map:
+  C1: [test_edited_plan_roundtrips_byte_stable]
+  C2: [test_deser_equals_edited_and_differs_from_pre_edit, test_pre_edit_roundtrip_distinct_from_edited]
+  C3: [test_roundtrip_deterministic_and_missing_version_errors]
 attempts: 1
 last_failure: ""
 ---
