@@ -1,2 +1,2 @@
-d366f19c75cc03a3facf5b37ab50dd2bbeab6d318f4975a0ea66e65ef40ee14c  criteria_map:T-07.01
-e533ed83a8bcf441493013103e5254a3a48341556a58e2c5cce0b3c0eeb72e8a  tests/stream_ring_buffer.rs
+14e544c8c7000375e07ae1757bd1798ad252439bf1cb4e29dfb5aec95d0f36e6  criteria_map:T-07.04
+c0226961af120f53a2091cc30e86cf46386c3dfb6efda36bb2a4b6bdd7e9e188  tests/resample_8k.rs
