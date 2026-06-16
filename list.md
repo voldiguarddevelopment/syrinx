@@ -704,7 +704,7 @@ The end-to-end semantic LM forward. Inputs: `token_ids` (the fixed `[1,5,9,2,0]`
 ### T-02.02c-a  Assemble the layer-0 forward stage
 id: T-02.02c-a
 phase: 2
-status: pending
+status: done
 depends_on: [T-02.02a, T-02.02b, T-02.01c]
 stack: rust
 criteria:
@@ -716,8 +716,12 @@ not_doing:
   - No multi-layer composition, final norm, or lm_head — that is T-02.02c-b; this gates only the embedding and a single layer-0 block numerically.
   - No new attention/FFN/block algorithms — those are the T-02.02a / T-02.02b implementations; this task pins them numerically against the activation-scale goldens and may correct their numerics so long as the T-02.02a/b frozen property tests stay green.
   - No real pretrained-weight quality or SIM-o/cloning concern; only deterministic activation-scale parity at 1e-4.
-test_files: []
-criteria_map: {}
+test_files: [tests/lm_stage_parity.rs]
+criteria_map:
+  C1: [test_embed_tokens_layer0_parity]
+  C2: [test_attention_sub_output_layer0_parity]
+  C3: [test_transformer_block_layer0_parity]
+  C4: [test_block_layer0_tensor_names_and_shapes]
 attempts: 1
 last_failure: ""
 ---
