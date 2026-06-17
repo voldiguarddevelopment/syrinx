@@ -1,0 +1,150 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0d13"/>
+      <stop offset="1" stop-color="#11161f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.32" r="0.7">
+      <stop offset="0" stop-color="#5865F2" stop-opacity="0.20"/>
+      <stop offset="1" stop-color="#5865F2" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#57F287"/>
+      <stop offset="0.55" stop-color="#41d6c3"/>
+      <stop offset="1" stop-color="#5865F2"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0.4">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.7" stop-color="#d8e0ec"/>
+      <stop offset="1" stop-color="#8fa3bf"/>
+    </linearGradient>
+    <linearGradient id="accentbar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#57F287"/>
+      <stop offset="1" stop-color="#5865F2"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect width="1280" height="640" fill="url(#glow)"/>
+
+  <!-- voiceprint waveform band -->
+  <g><rect x="98.3" y="297.0" width="8.3" height="6.0" rx="4.1" fill="url(#wave)" opacity="0.45"/>
+<rect x="111.3" y="290.2" width="8.3" height="19.6" rx="4.1" fill="url(#wave)" opacity="0.53"/>
+<rect x="124.2" y="286.7" width="8.3" height="26.6" rx="4.1" fill="url(#wave)" opacity="0.57"/>
+<rect x="137.2" y="287.0" width="8.3" height="25.9" rx="4.1" fill="url(#wave)" opacity="0.60"/>
+<rect x="150.1" y="288.5" width="8.3" height="23.0" rx="4.1" fill="url(#wave)" opacity="0.63"/>
+<rect x="163.1" y="287.6" width="8.3" height="24.8" rx="4.1" fill="url(#wave)" opacity="0.65"/>
+<rect x="176.0" y="283.4" width="8.3" height="33.2" rx="4.1" fill="url(#wave)" opacity="0.67"/>
+<rect x="189.0" y="278.5" width="8.3" height="43.1" rx="4.1" fill="url(#wave)" opacity="0.70"/>
+<rect x="202.0" y="276.1" width="8.3" height="47.7" rx="4.1" fill="url(#wave)" opacity="0.72"/>
+<rect x="214.9" y="277.0" width="8.3" height="46.0" rx="4.1" fill="url(#wave)" opacity="0.73"/>
+<rect x="227.9" y="278.3" width="8.3" height="43.3" rx="4.1" fill="url(#wave)" opacity="0.75"/>
+<rect x="240.8" y="276.9" width="8.3" height="46.1" rx="4.1" fill="url(#wave)" opacity="0.77"/>
+<rect x="253.8" y="272.4" width="8.3" height="55.1" rx="4.1" fill="url(#wave)" opacity="0.79"/>
+<rect x="266.7" y="267.5" width="8.3" height="65.1" rx="4.1" fill="url(#wave)" opacity="0.80"/>
+<rect x="279.7" y="264.7" width="8.3" height="70.6" rx="4.1" fill="url(#wave)" opacity="0.82"/>
+<rect x="292.6" y="264.4" width="8.3" height="71.3" rx="4.1" fill="url(#wave)" opacity="0.83"/>
+<rect x="305.6" y="264.4" width="8.3" height="71.2" rx="4.1" fill="url(#wave)" opacity="0.84"/>
+<rect x="318.5" y="263.5" width="8.3" height="73.1" rx="4.1" fill="url(#wave)" opacity="0.85"/>
+<rect x="331.5" y="262.5" width="8.3" height="74.9" rx="4.1" fill="url(#wave)" opacity="0.87"/>
+<rect x="344.4" y="263.5" width="8.3" height="73.0" rx="4.1" fill="url(#wave)" opacity="0.88"/>
+<rect x="357.4" y="266.0" width="8.3" height="68.1" rx="4.1" fill="url(#wave)" opacity="0.89"/>
+<rect x="370.3" y="266.6" width="8.3" height="66.7" rx="4.1" fill="url(#wave)" opacity="0.90"/>
+<rect x="383.3" y="262.4" width="8.3" height="75.2" rx="4.1" fill="url(#wave)" opacity="0.91"/>
+<rect x="396.2" y="254.3" width="8.3" height="91.4" rx="4.1" fill="url(#wave)" opacity="0.92"/>
+<rect x="409.2" y="247.6" width="8.3" height="104.9" rx="4.1" fill="url(#wave)" opacity="0.93"/>
+<rect x="422.1" y="246.9" width="8.3" height="106.2" rx="4.1" fill="url(#wave)" opacity="0.94"/>
+<rect x="435.1" y="251.6" width="8.3" height="96.9" rx="4.1" fill="url(#wave)" opacity="0.94"/>
+<rect x="448.0" y="255.2" width="8.3" height="89.6" rx="4.1" fill="url(#wave)" opacity="0.95"/>
+<rect x="461.0" y="251.7" width="8.3" height="96.7" rx="4.1" fill="url(#wave)" opacity="0.96"/>
+<rect x="474.0" y="241.8" width="8.3" height="116.5" rx="4.1" fill="url(#wave)" opacity="0.96"/>
+<rect x="486.9" y="233.3" width="8.3" height="133.4" rx="4.1" fill="url(#wave)" opacity="0.97"/>
+<rect x="499.9" y="234.5" width="8.3" height="131.0" rx="4.1" fill="url(#wave)" opacity="0.97"/>
+<rect x="512.8" y="246.1" width="8.3" height="107.8" rx="4.1" fill="url(#wave)" opacity="0.98"/>
+<rect x="525.8" y="260.1" width="8.3" height="79.8" rx="4.1" fill="url(#wave)" opacity="0.98"/>
+<rect x="538.7" y="266.6" width="8.3" height="66.9" rx="4.1" fill="url(#wave)" opacity="0.99"/>
+<rect x="551.7" y="262.4" width="8.3" height="75.3" rx="4.1" fill="url(#wave)" opacity="0.99"/>
+<rect x="564.6" y="253.7" width="8.3" height="92.6" rx="4.1" fill="url(#wave)" opacity="0.99"/>
+<rect x="577.6" y="250.0" width="8.3" height="100.1" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="590.5" y="254.9" width="8.3" height="90.2" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="603.5" y="263.7" width="8.3" height="72.7" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="616.4" y="267.6" width="8.3" height="64.8" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="629.4" y="262.7" width="8.3" height="74.6" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="642.3" y="252.7" width="8.3" height="94.7" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="655.3" y="245.0" width="8.3" height="110.1" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="668.2" y="243.8" width="8.3" height="112.3" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="681.2" y="247.3" width="8.3" height="105.4" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="694.1" y="250.5" width="8.3" height="98.9" rx="4.1" fill="url(#wave)" opacity="1.00"/>
+<rect x="707.1" y="251.1" width="8.3" height="97.8" rx="4.1" fill="url(#wave)" opacity="0.99"/>
+<rect x="720.0" y="250.6" width="8.3" height="98.8" rx="4.1" fill="url(#wave)" opacity="0.99"/>
+<rect x="733.0" y="251.7" width="8.3" height="96.6" rx="4.1" fill="url(#wave)" opacity="0.99"/>
+<rect x="746.0" y="254.3" width="8.3" height="91.4" rx="4.1" fill="url(#wave)" opacity="0.98"/>
+<rect x="758.9" y="255.4" width="8.3" height="89.2" rx="4.1" fill="url(#wave)" opacity="0.98"/>
+<rect x="771.9" y="253.0" width="8.3" height="93.9" rx="4.1" fill="url(#wave)" opacity="0.97"/>
+<rect x="784.8" y="249.1" width="8.3" height="101.7" rx="4.1" fill="url(#wave)" opacity="0.97"/>
+<rect x="797.8" y="247.9" width="8.3" height="104.2" rx="4.1" fill="url(#wave)" opacity="0.96"/>
+<rect x="810.7" y="251.1" width="8.3" height="97.9" rx="4.1" fill="url(#wave)" opacity="0.96"/>
+<rect x="823.7" y="255.4" width="8.3" height="89.2" rx="4.1" fill="url(#wave)" opacity="0.95"/>
+<rect x="836.6" y="255.5" width="8.3" height="89.0" rx="4.1" fill="url(#wave)" opacity="0.94"/>
+<rect x="849.6" y="249.5" width="8.3" height="101.1" rx="4.1" fill="url(#wave)" opacity="0.94"/>
+<rect x="862.5" y="241.9" width="8.3" height="116.2" rx="4.1" fill="url(#wave)" opacity="0.93"/>
+<rect x="875.5" y="240.3" width="8.3" height="119.5" rx="4.1" fill="url(#wave)" opacity="0.92"/>
+<rect x="888.4" y="247.8" width="8.3" height="104.4" rx="4.1" fill="url(#wave)" opacity="0.91"/>
+<rect x="901.4" y="260.3" width="8.3" height="79.4" rx="4.1" fill="url(#wave)" opacity="0.90"/>
+<rect x="914.3" y="269.3" width="8.3" height="61.4" rx="4.1" fill="url(#wave)" opacity="0.89"/>
+<rect x="927.3" y="270.0" width="8.3" height="60.1" rx="4.1" fill="url(#wave)" opacity="0.88"/>
+<rect x="940.2" y="264.9" width="8.3" height="70.1" rx="4.1" fill="url(#wave)" opacity="0.87"/>
+<rect x="953.2" y="261.7" width="8.3" height="76.5" rx="4.1" fill="url(#wave)" opacity="0.85"/>
+<rect x="966.1" y="265.4" width="8.3" height="69.1" rx="4.1" fill="url(#wave)" opacity="0.84"/>
+<rect x="979.1" y="274.1" width="8.3" height="51.8" rx="4.1" fill="url(#wave)" opacity="0.83"/>
+<rect x="992.0" y="281.1" width="8.3" height="37.8" rx="4.1" fill="url(#wave)" opacity="0.82"/>
+<rect x="1005.0" y="281.3" width="8.3" height="37.4" rx="4.1" fill="url(#wave)" opacity="0.80"/>
+<rect x="1018.0" y="275.6" width="8.3" height="48.7" rx="4.1" fill="url(#wave)" opacity="0.79"/>
+<rect x="1030.9" y="269.6" width="8.3" height="60.7" rx="4.1" fill="url(#wave)" opacity="0.77"/>
+<rect x="1043.9" y="268.1" width="8.3" height="63.8" rx="4.1" fill="url(#wave)" opacity="0.75"/>
+<rect x="1056.8" y="271.2" width="8.3" height="57.5" rx="4.1" fill="url(#wave)" opacity="0.73"/>
+<rect x="1069.8" y="275.7" width="8.3" height="48.5" rx="4.1" fill="url(#wave)" opacity="0.72"/>
+<rect x="1082.7" y="278.5" width="8.3" height="43.1" rx="4.1" fill="url(#wave)" opacity="0.70"/>
+<rect x="1095.7" y="279.2" width="8.3" height="41.6" rx="4.1" fill="url(#wave)" opacity="0.67"/>
+<rect x="1108.6" y="279.9" width="8.3" height="40.2" rx="4.1" fill="url(#wave)" opacity="0.65"/>
+<rect x="1121.6" y="282.2" width="8.3" height="35.6" rx="4.1" fill="url(#wave)" opacity="0.63"/>
+<rect x="1134.5" y="285.7" width="8.3" height="28.6" rx="4.1" fill="url(#wave)" opacity="0.60"/>
+<rect x="1147.5" y="289.4" width="8.3" height="21.3" rx="4.1" fill="url(#wave)" opacity="0.57"/>
+<rect x="1160.4" y="293.0" width="8.3" height="14.0" rx="4.1" fill="url(#wave)" opacity="0.53"/>
+<rect x="1173.4" y="297.0" width="8.3" height="6.0" rx="4.1" fill="url(#wave)" opacity="0.45"/></g>
+
+  <!-- title block -->
+  <text x="92" y="150" font-family="Noto Sans" font-weight="bold" font-size="118"
+        fill="url(#title)" letter-spacing="-2">Syrinx</text>
+  <text x="98" y="205" font-family="Noto Sans" font-size="34" fill="#aeb9c9">
+    Local neural TTS &amp; zero-shot voice cloning</text>
+
+  <!-- sub-tagline under the waveform -->
+  <text x="98" y="420" font-family="Noto Sans" font-size="23" fill="#7c8aa0">
+    Pure-Rust inference  ·  editable prosody plan  ·  one consumer GPU</text>
+
+  <!-- feature chips -->
+  <g>
+  <rect x="96" y="470" width="210" height="46" rx="23" fill="#161c27" stroke="#2b3543" stroke-width="1.5"/>
+  <text x="201.0" y="500" font-family="Noto Sans" font-size="20" fill="#c9d4e3" text-anchor="middle">Zero-shot cloning</text>
+</g>
+<g>
+  <rect x="324" y="470" width="250" height="46" rx="23" fill="#161c27" stroke="#2b3543" stroke-width="1.5"/>
+  <text x="449.0" y="500" font-family="Noto Sans" font-size="20" fill="#c9d4e3" text-anchor="middle">Editable prosody plan</text>
+</g>
+<g>
+  <rect x="592" y="470" width="210" height="46" rx="23" fill="#161c27" stroke="#2b3543" stroke-width="1.5"/>
+  <text x="697.0" y="500" font-family="Noto Sans" font-size="20" fill="#c9d4e3" text-anchor="middle">&lt;200ms streaming</text>
+</g>
+<g>
+  <rect x="820" y="470" width="210" height="46" rx="23" fill="#161c27" stroke="#2b3543" stroke-width="1.5"/>
+  <text x="925.0" y="500" font-family="Noto Sans" font-size="20" fill="#c9d4e3" text-anchor="middle">~270MB @ 4-bit</text>
+</g>
+
+  <!-- footer -->
+  <text x="92" y="600" font-family="Noto Sans" font-size="20" fill="#5a6678">voldiguarddevelopment</text>
+  <text x="1188" y="600" font-family="Noto Sans" font-size="20" fill="#5a6678" text-anchor="end">built with Rust + Ratchet</text>
+
+  <!-- bottom accent bar -->
+  <rect x="0" y="634" width="1280" height="6" fill="url(#accentbar)"/>
+</svg>
