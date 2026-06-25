@@ -29,6 +29,68 @@ pub struct Qwen2Lm {
     dev: Device,
 }
 
+/// Per-layer accumulated K/V for incremental (O(n)) autoregressive decoding.
+///
+/// Each entry holds that layer's running key/value sequence, **K stored
+/// post-RoPE** at the keys' true absolute positions, shaped `[b, N_KV, seq, HEAD_DIM]`
+/// (the pre-`repeat_kv` GQA layout — repetition is applied per step on read, never
+/// stored). `seq` grows by the number of tokens fed each step. `len()` is the current
+/// cache length and is exactly the absolute position the *next* token will occupy.
+pub struct KvCache {
+    /// `kv[layer] = Some((k, v))` once layer `layer` has been populated.
+    kv: Vec<Option<(Tensor, Tensor)>>,
+    /// Number of positions currently cached (== next token's absolute position).
+    len: usize,
+}
+
+impl KvCache {
+    /// An empty cache sized for the model's `N_LAYERS` decoder layers.
+    pub fn new() -> Self {
+        Self {
+            kv: (0..N_LAYERS).map(|_| None).collect(),
+            len: 0,
+        }
+    }
+
+    /// Current cache length (number of cached positions). The next token fed will sit
+    /// at absolute position `len()`.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Whether the cache is empty (no positions cached yet).
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    /// Append the new (post-RoPE) `k`/`v` slabs `[b, N_KV, t_new, HEAD_DIM]` for `layer`,
+    /// returning the full cached `(k, v)` covering all positions `0..len+t_new`.
+    /// Concatenation happens on the sequence axis (dim 2); existing entries are kept.
+    fn append(&mut self, layer: usize, k: &Tensor, v: &Tensor) -> Result<(Tensor, Tensor)> {
+        let (nk, nv) = match self.kv[layer].take() {
+            Some((ck, cv)) => (
+                Tensor::cat(&[&ck, k], 2)?.contiguous()?,
+                Tensor::cat(&[&cv, v], 2)?.contiguous()?,
+            ),
+            None => (k.contiguous()?, v.contiguous()?),
+        };
+        self.kv[layer] = Some((nk.clone(), nv.clone()));
+        Ok((nk, nv))
+    }
+
+    /// Record that `t_new` positions were just appended (advance the shared length).
+    /// Called once per forward after all layers have appended their slabs.
+    fn advance(&mut self, t_new: usize) {
+        self.len += t_new;
+    }
+}
+
+impl Default for KvCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Qwen2Lm {
     /// Load the converted fp32 checkpoint (`llm_fp32.safetensors`) onto `dev`.
     pub fn load(path: &str, dev: Device) -> Result<Self> {
@@ -88,6 +150,50 @@ impl Qwen2Lm {
         self.linear(&ctx, &format!("{p}.o_proj.weight"), None)
     }
 
+    /// Cached attention for `t_new` query tokens at absolute positions
+    /// `offset..offset+t_new`. Computes their Q/K/V, applies RoPE at the **absolute**
+    /// positions (via `cos`/`sin` built for that range), appends the new K/V to
+    /// `cache[layer]`, then attends the new queries over the **full** cached K/V
+    /// (`offset+t_new` keys) under `mask` `[t_new, offset+t_new]`.
+    ///
+    /// This is numerically the same computation as `attn` restricted to the last
+    /// `t_new` query rows of a full-sequence forward: identical Q/K/V projections,
+    /// identical RoPE phases (absolute positions), identical causal visibility, so its
+    /// logits match the full recompute to within fp rounding.
+    fn attn_cached(
+        &self,
+        x: &Tensor,
+        layer: usize,
+        cos: &Tensor,
+        sin: &Tensor,
+        mask: &Tensor,
+        cache: &mut KvCache,
+    ) -> Result<Tensor> {
+        let p = format!("llm.model.model.layers.{layer}.self_attn");
+        let (b, t, _) = x.dims3()?;
+        let q = self.linear(x, &format!("{p}.q_proj.weight"), Some(&format!("{p}.q_proj.bias")))?;
+        let k = self.linear(x, &format!("{p}.k_proj.weight"), Some(&format!("{p}.k_proj.bias")))?;
+        let v = self.linear(x, &format!("{p}.v_proj.weight"), Some(&format!("{p}.v_proj.bias")))?;
+        let q = q.reshape((b, t, N_HEADS, HEAD_DIM))?.transpose(1, 2)?.contiguous()?; // [b,14,t_new,64]
+        let k = k.reshape((b, t, N_KV, HEAD_DIM))?.transpose(1, 2)?.contiguous()?; // [b,2,t_new,64]
+        let v = v.reshape((b, t, N_KV, HEAD_DIM))?.transpose(1, 2)?.contiguous()?; // [b,2,t_new,64]
+        // RoPE the new Q and new K at their absolute positions, then commit the new
+        // (post-RoPE) K and raw V to the cache, getting back the full cached K/V.
+        let q = rope(&q, cos, sin)?;
+        let k = rope(&k, cos, sin)?;
+        let (k_full, v_full) = cache.append(layer, &k, &v)?; // [b,2,offset+t_new,64]
+        // GQA: repeat the *cached* KV heads up to the query-head count, then attend.
+        let k_full = repeat_kv(&k_full, N_HEADS / N_KV)?; // [b,14,offset+t_new,64]
+        let v_full = repeat_kv(&v_full, N_HEADS / N_KV)?;
+        let scale = 1.0 / (HEAD_DIM as f64).sqrt();
+        let scores = (q.matmul(&k_full.transpose(2, 3)?.contiguous()?)? * scale)?; // [b,14,t_new,offset+t_new]
+        let scores = scores.broadcast_add(mask)?;
+        let probs = candle_nn::ops::softmax(&scores, D::Minus1)?;
+        let ctx = probs.matmul(&v_full)?; // [b,14,t_new,64]
+        let ctx = ctx.transpose(1, 2)?.contiguous()?.reshape((b, t, HIDDEN))?;
+        self.linear(&ctx, &format!("{p}.o_proj.weight"), None)
+    }
+
     fn mlp(&self, x: &Tensor, layer: usize) -> Result<Tensor> {
         let p = format!("llm.model.model.layers.{layer}.mlp");
         let gate = self.linear(x, &format!("{p}.gate_proj.weight"), None)?;
@@ -118,6 +224,39 @@ impl Qwen2Lm {
     /// Full LM forward: hidden state -> CosyVoice2 `llm_decoder` -> logits `[b, t, 6564]`.
     pub fn forward_logits(&self, embeds: &Tensor) -> Result<Tensor> {
         let h = self.forward_hidden(embeds)?;
+        self.linear(&h, "llm_decoder.weight", Some("llm_decoder.bias"))
+    }
+
+    /// Incremental (cached) variant of `forward_hidden`: run the 24 decoder layers
+    /// over **only** the new tokens `embeds` `[b, t_new, 896]`, attending each layer's
+    /// new queries over the full per-layer K/V in `cache`. The new tokens occupy
+    /// absolute positions `cache.len()..cache.len()+t_new` (used for RoPE + the causal
+    /// mask). On return the cache has grown by `t_new`. Output is the last hidden state
+    /// for the new tokens only, `[b, t_new, 896]`.
+    pub fn forward_hidden_cached(&self, embeds: &Tensor, cache: &mut KvCache) -> Result<Tensor> {
+        let (_b, t_new, _) = embeds.dims3()?;
+        let offset = cache.len();
+        let (cos, sin) = rope_cos_sin_at(offset, t_new, &self.dev)?;
+        let mask = causal_mask_at(offset, t_new, &self.dev)?;
+        let mut h = embeds.clone();
+        for l in 0..N_LAYERS {
+            let pre = format!("llm.model.model.layers.{l}");
+            let r = h.clone();
+            let hn = self.rms_norm(&h, &format!("{pre}.input_layernorm.weight"))?;
+            h = (r + self.attn_cached(&hn, l, &cos, &sin, &mask, cache)?)?;
+            let r = h.clone();
+            let hn = self.rms_norm(&h, &format!("{pre}.post_attention_layernorm.weight"))?;
+            h = (r + self.mlp(&hn, l)?)?;
+        }
+        // All layers have appended their slabs; advance the shared cache length once.
+        cache.advance(t_new);
+        self.rms_norm(&h, "llm.model.model.norm.weight")
+    }
+
+    /// Incremental (cached) variant of `forward_logits`: `forward_hidden_cached` then the
+    /// `llm_decoder` head, returning logits for the new tokens only `[b, t_new, 6564]`.
+    pub fn forward_logits_cached(&self, embeds: &Tensor, cache: &mut KvCache) -> Result<Tensor> {
+        let h = self.forward_hidden_cached(embeds, cache)?;
         self.linear(&h, "llm_decoder.weight", Some("llm_decoder.bias"))
     }
 
@@ -179,14 +318,62 @@ impl Qwen2Lm {
         logits.narrow(1, t - 1, 1)?.reshape((SPEECH_VOCAB,))
     }
 
-    /// Autoregressively generate speech tokens, mirroring `Qwen2LM.inference`.
+    /// Last-position raw `llm_decoder` logits for `embeds` `[1, t_new, HIDDEN]` fed into
+    /// the **cached** path, returning `[V]`. Advances `cache` by `t_new`. With the cache
+    /// at length `L`, this is the logit-identical O(t_new) analogue of `step_logits` over
+    /// an `L+t_new` recompute (same positions, same causal visibility).
+    pub fn step_logits_cached(&self, embeds: &Tensor, cache: &mut KvCache) -> Result<Tensor> {
+        let logits = self.forward_logits_cached(embeds, cache)?; // [1, t_new, V]
+        let t = logits.dim(1)?;
+        logits.narrow(1, t - 1, 1)?.reshape((SPEECH_VOCAB,))
+    }
+
+    /// Autoregressively generate speech tokens, mirroring `Qwen2LM.inference`, using a
+    /// **KV cache** so each step is O(n) instead of O(n²).
     ///
-    /// Starts from `build_lm_input`, then per step: full forward -> last-position logits
-    /// -> `log_softmax` -> `ras_sampling` (with `seed`-pinned multinomial draws) -> stop
-    /// if the chosen id is a stop token, else append its `speech_embedding` row and
-    /// continue. EOS is masked while `step < min_len`. Returns the generated token ids
-    /// (stop token excluded), matching the reference's `out_tokens`.
+    /// Prefill: assemble `build_lm_input` and run it once through the cached forward,
+    /// populating every layer's K/V and yielding the step-0 last-position logits. Then
+    /// per step: `log_softmax` -> `ras_sampling` (with `seed`-pinned multinomial draws)
+    /// -> stop if the chosen id is a stop token, else append its `speech_embedding` row
+    /// and feed **only that one token** through the cached forward (cache grows by 1).
+    /// EOS is masked while `step < min_len`. Returns the generated token ids (stop token
+    /// excluded), matching the reference's `out_tokens`. Because the cache carries the
+    /// full history, generation may run to the real `max_len` with no practical cap.
     pub fn generate(
+        &self,
+        text_token: &[u32],
+        prompt_speech_token: &[u32],
+        min_len: usize,
+        max_len: usize,
+        seed: u64,
+    ) -> Result<Vec<u32>> {
+        let lm_input0 = self.build_lm_input(text_token, prompt_speech_token)?;
+        let mut cache = KvCache::new();
+        let mut rng = SplitMix64::new(seed);
+        let mut out: Vec<u32> = Vec::new();
+        // Prefill the assembled prompt once; `logits` is the step-0 last-position logit.
+        let mut logits = self.step_logits_cached(&lm_input0, &mut cache)?;
+        for i in 0..max_len {
+            let logp = log_softmax_vec(&logits)?;
+            let ignore_eos = i < min_len;
+            let top = ras_sampling(&logp, &out, ignore_eos, &mut rng);
+            if STOP_TOKENS.contains(&top) {
+                break;
+            }
+            out.push(top);
+            // Feed only the newly sampled token; the cache supplies all prior context.
+            let row = self.speech_embed(&[top])?; // [1,1,H]
+            logits = self.step_logits_cached(&row, &mut cache)?;
+        }
+        Ok(out)
+    }
+
+    /// Reference O(n²) full-recompute generation — the pre-cache algorithm, kept as the
+    /// correctness oracle for the cached `generate`. Identical sampling, stop conditions,
+    /// pinned PRNG and `min_len` EOS masking; the *only* difference from `generate` is
+    /// that each step re-runs the whole sequence (`step_logits`) instead of using a cache.
+    /// A fixed seed must yield the exact same token vector as `generate`.
+    pub fn generate_full_recompute(
         &self,
         text_token: &[u32],
         prompt_speech_token: &[u32],
@@ -387,12 +574,20 @@ fn repeat_kv(x: &Tensor, n: usize) -> Result<Tensor> {
 
 /// Build RoPE cos/sin tables `[t, head_dim]` for positions `0..t`.
 fn rope_cos_sin(t: usize, dev: &Device) -> Result<(Tensor, Tensor)> {
+    rope_cos_sin_at(0, t, dev)
+}
+
+/// Build RoPE cos/sin tables `[t, head_dim]` for the **absolute** positions
+/// `offset..offset+t`. Caching feeds only the new token(s), so their rotary phase
+/// must use their true absolute position (= `offset`, the current cache length),
+/// not a reset-to-zero position — this is the load-bearing correctness detail.
+fn rope_cos_sin_at(offset: usize, t: usize, dev: &Device) -> Result<(Tensor, Tensor)> {
     let half = HEAD_DIM / 2;
     let inv_freq: Vec<f32> = (0..half)
         .map(|i| 1f32 / ROPE_THETA.powf(2.0 * i as f32 / HEAD_DIM as f32))
         .collect();
     let inv_freq = Tensor::from_vec(inv_freq, (half,), dev)?;
-    let pos: Vec<f32> = (0..t).map(|i| i as f32).collect();
+    let pos: Vec<f32> = (0..t).map(|i| (offset + i) as f32).collect();
     let pos = Tensor::from_vec(pos, (t,), dev)?;
     let freqs = pos.unsqueeze(1)?.broadcast_mul(&inv_freq.unsqueeze(0)?)?; // [t, half]
     let emb = Tensor::cat(&[&freqs, &freqs], D::Minus1)?; // [t, head_dim]
@@ -401,11 +596,22 @@ fn rope_cos_sin(t: usize, dev: &Device) -> Result<(Tensor, Tensor)> {
 
 /// Additive causal mask `[t, t]`: 0 on/below the diagonal, -inf above.
 fn causal_mask(t: usize, dev: &Device) -> Result<Tensor> {
-    let mut data = vec![0f32; t * t];
-    for i in 0..t {
-        for j in (i + 1)..t {
-            data[i * t + j] = f32::NEG_INFINITY;
+    causal_mask_at(0, t, dev)
+}
+
+/// Additive causal mask `[t_new, offset + t_new]` for `t_new` queries at absolute
+/// positions `offset..offset+t_new` attending over all `offset+t_new` keys.
+/// Query row `i` (absolute position `offset+i`) may attend key column `j` iff
+/// `j <= offset + i` (causal); entries above that are `-inf`. With `offset = 0`
+/// this is the square mask; with one new query over a full cache it is all-zeros.
+fn causal_mask_at(offset: usize, t_new: usize, dev: &Device) -> Result<Tensor> {
+    let total = offset + t_new;
+    let mut data = vec![0f32; t_new * total];
+    for i in 0..t_new {
+        let q_abs = offset + i;
+        for j in (q_abs + 1)..total {
+            data[i * total + j] = f32::NEG_INFINITY;
         }
     }
-    Tensor::from_vec(data, (t, t), dev)
+    Tensor::from_vec(data, (t_new, total), dev)
 }
