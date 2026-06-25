@@ -7,11 +7,17 @@ publish = false
 [features]
 # The real CosyVoice2 flow-matching mel decoder (CausalMaskedDiffWithXvec) on
 # Candle. Off by default so the default build stays Candle-free; enabled on the
-# model box for numerical parity against the Python reference.
-real = ["dep:candle-core", "dep:candle-nn"]
+# model box for numerical parity against the Python reference. Also enables the
+# real HiFT vocoder so the deterministic `token2wav` (tokens -> mel -> audio)
+# zero-shot slice can be wired end-to-end behind this one feature.
+real = ["dep:candle-core", "dep:candle-nn", "dep:syrinx-vocoder", "syrinx-vocoder/real"]
 
 [dependencies]
 # Real-model backend (feature `real`): the conformer encoder + CFM ODE estimator
 # + fp32 safetensors weight loading. CPU fp32 is enough for parity.
 candle-core = { version = "0.8", optional = true }
 candle-nn = { version = "0.8", optional = true }
+# The real HiFT vocoder (mel + pinned source STFT -> waveform), used only by the
+# `token2wav` glue under the `real` feature; off by default so the scaffold build
+# stays Candle-free.
+syrinx-vocoder = { path = "../syrinx-vocoder", optional = true }

@@ -319,6 +319,97 @@ impl Flow {
         Ok(x)
     }
 
+    /// CausalConditionalCFM.solve_euler with CFG **and a non-trivial `cond`** — the
+    /// zero-shot prompt path. Identical to [`Self::cfm_solve_with_noise`] except the
+    /// conditioning signal is the caller-supplied `cond` `[1, 80, L]` (the prompt mel
+    /// prepended, zeros after) rather than all-zeros. The unconditioned CFG branch
+    /// (index 1) keeps `cond = 0`, mirroring `solve_euler`'s `cond_in[0] = cond`.
+    pub fn cfm_solve_with_cond(
+        &self,
+        mu: &Tensor,
+        spk: &Tensor,
+        cond: &Tensor,
+        z0: &Tensor,
+        n_timesteps: usize,
+    ) -> Result<Tensor> {
+        let l = mu.dim(2)?;
+        let mut tvals = vec![0f32; n_timesteps + 1];
+        for (i, s) in tvals.iter_mut().enumerate() {
+            let lin = i as f32 / n_timesteps as f32;
+            *s = 1.0 - (lin * 0.5 * std::f32::consts::PI).cos();
+        }
+        let mut x = z0.clone(); // [1,80,L]
+        let mut t = tvals[0];
+        let cfg = 0.7f64; // inference_cfg_rate
+        let cond_zero = Tensor::zeros((1, MEL, l), DType::F32, &self.dev)?;
+        for step in 1..=n_timesteps {
+            let x_in = Tensor::cat(&[&x, &x], 0)?; // [2,80,L]
+            let mu0 = mu.clone();
+            let mu1 = Tensor::zeros((1, MEL, l), DType::F32, &self.dev)?;
+            let mu_in = Tensor::cat(&[&mu0, &mu1], 0)?; // [2,80,L]
+            let spk0 = spk.clone();
+            let spk1 = Tensor::zeros((1, MEL), DType::F32, &self.dev)?;
+            let spk_in = Tensor::cat(&[&spk0, &spk1], 0)?; // [2,80]
+            // cond[0] = prompt cond, cond[1] = zeros (the CFG-dropped branch).
+            let cond_in = Tensor::cat(&[cond, &cond_zero], 0)?; // [2,80,L]
+            let t_in = Tensor::from_vec(vec![t, t], (2,), &self.dev)?;
+            let dphi = self.estimator(&x_in, &mu_in, &t_in, &spk_in, &cond_in)?; // [2,80,L]
+            let real = dphi.narrow(0, 0, 1)?;
+            let uncond = dphi.narrow(0, 1, 1)?;
+            let dphi_dt = ((real * (1.0 + cfg))? - (uncond * cfg)?)?;
+            let dt = tvals[step] - t;
+            x = (x + (dphi_dt * dt as f64)?)?;
+            t = tvals[step];
+        }
+        Ok(x)
+    }
+
+    /// Full zero-shot prompt-conditioned `flow.inference` (the CosyVoice2 path).
+    ///
+    /// Mirrors `CausalMaskedDiffWithXvec.inference(streaming=False, finalize=True)`:
+    /// concatenate `prompt_token ++ token`, encode the whole thing, project to mu,
+    /// build the CFM `cond` by prepending the prompt mel `prompt_feat`, solve the
+    /// 10-step Euler ODE feeding the pinned noise `z`, then drop the prompt-mel
+    /// prefix so only the generated mel is returned.
+    ///
+    /// - `prompt_token`: i64 `[1, Tp]`, `token`: i64 `[1, Tg]`
+    /// - `prompt_feat`: f32 `[1, Mp, 80]` (the prompt mel; `Mp == 2*Tp`)
+    /// - `embedding`: f32 `[1, 192]`
+    /// - `z`: f32 `[1, 80, 2*(Tp+Tg)]` — the model's fixed `rand_noise` slice.
+    ///
+    /// Returns the generated mel `[1, 80, 2*Tg]`.
+    pub fn forward_zero_shot(
+        &self,
+        prompt_token: &Tensor,
+        token: &Tensor,
+        prompt_feat: &Tensor,
+        embedding: &Tensor,
+        z: &Tensor,
+        n_timesteps: usize,
+    ) -> Result<Tensor> {
+        let spk = self.spk_proj(embedding)?; // [1, 80]
+
+        // concat prompt + gen tokens, embed, encode (full context, no mask).
+        let tok_cat = Tensor::cat(&[prompt_token, token], 1)?; // [1, Tp+Tg]
+        let emb = self.input_embedding(&tok_cat)?; // [1, T, 512]
+        let h = self.encoder(&emb)?; // [1, 2T, 512]
+        let mu = self.linear(&h, "encoder_proj.weight", Some("encoder_proj.bias"))?; // [1, 2T, 80]
+        let mu_t = mu.transpose(1, 2)?.contiguous()?; // [1, 80, 2T]
+
+        let total = mu_t.dim(2)?; // 2*(Tp+Tg)
+        let mel_len1 = prompt_feat.dim(1)?; // == 2*Tp
+        let mel_len2 = total - mel_len1; // == 2*Tg
+
+        // cond: prompt mel prepended ([1, 80, mel_len1]), zeros after -> [1,80,total].
+        let prompt_ct = prompt_feat.transpose(1, 2)?.contiguous()?; // [1, 80, mel_len1]
+        let cond_tail = Tensor::zeros((1, MEL, mel_len2), DType::F32, &self.dev)?;
+        let cond = Tensor::cat(&[&prompt_ct, &cond_tail], 2)?; // [1, 80, total]
+
+        let mel_full = self.cfm_solve_with_cond(&mu_t, &spk, &cond, z, n_timesteps)?; // [1,80,total]
+        // drop the prompt-mel prefix; keep only the generated mel.
+        mel_full.narrow(2, mel_len1, mel_len2)
+    }
+
     /// Convenience: solve using the design noise buffer reconstructed via the
     /// reference fixture is preferred; this variant uses a provided z explicitly.
     pub fn cfm_solve(&self, mu: &Tensor, spk: &Tensor, n_timesteps: usize) -> Result<Tensor> {
@@ -479,6 +570,31 @@ impl Flow {
         let h = gelu(&h)?;
         self.linear(&h, &format!("{p}.net.2.weight"), Some(&format!("{p}.net.2.bias")))
     }
+}
+
+/// Deterministic zero-shot **token2wav** glue: speech tokens -> mel -> audio.
+///
+/// Reproduces `CosyVoice2Model.token2wav` (non-streaming, single utterance) for the
+/// zero-shot path: the prompt-conditioned flow ([`Flow::forward_zero_shot`]) yields
+/// the generated mel, which the HiFT vocoder ([`syrinx_vocoder::real::HiftVocoder::decode`])
+/// turns into a 24 kHz waveform. Both stochastic inputs are pinned and fed in:
+/// the CFM noise `z` (the flow's fixed `rand_noise` slice) and the HiFT source STFT
+/// `s_stft` (the SineGen source has a random initial phase in the real model, so the
+/// reference captures it). Returns the waveform `[1, L]`.
+#[allow(clippy::too_many_arguments)]
+pub fn token2wav(
+    flow: &Flow,
+    vocoder: &syrinx_vocoder::real::HiftVocoder,
+    prompt_token: &Tensor,
+    token: &Tensor,
+    prompt_feat: &Tensor,
+    embedding: &Tensor,
+    z: &Tensor,
+    s_stft: &Tensor,
+    n_timesteps: usize,
+) -> Result<Tensor> {
+    let mel = flow.forward_zero_shot(prompt_token, token, prompt_feat, embedding, z, n_timesteps)?;
+    vocoder.decode(&mel, s_stft)
 }
 
 // ============================ free fns ============================
