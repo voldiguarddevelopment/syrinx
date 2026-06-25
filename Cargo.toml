@@ -88,6 +88,10 @@ syrinx-lm = { path = "crates/syrinx-lm" }
 syrinx-speaker = { path = "crates/syrinx-speaker", optional = true }
 syrinx-acoustic = { path = "crates/syrinx-acoustic", optional = true }
 syrinx-vocoder = { path = "crates/syrinx-vocoder", optional = true }
+# Optional normal dep (in addition to the dev-dep above) so the root `real`
+# feature can toggle `syrinx-frontend/real` for the text-tokenizer parity test
+# at the repo root. Mirrors how syrinx-speaker is wired.
+syrinx-frontend = { path = "crates/syrinx-frontend", optional = true }
 candle-core = { version = "0.8", optional = true }
 
 [features]
@@ -96,8 +100,10 @@ real = [
     "dep:syrinx-speaker",
     "dep:syrinx-acoustic",
     "dep:syrinx-vocoder",
+    "dep:syrinx-frontend",
     "syrinx-lm/real",
     "syrinx-speaker/real",
     "syrinx-acoustic/real",
     "syrinx-vocoder/real",
+    "syrinx-frontend/real",
 ]

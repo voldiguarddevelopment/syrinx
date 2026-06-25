@@ -14,6 +14,12 @@ pub mod pacing;
 pub mod punct;
 pub mod ssml;
 
+// Real CosyVoice2 text tokenizer (Qwen2 BPE via the HF `tokenizers` crate).
+// Compiled only under the crate's `real` feature, on the model box, where the
+// serialized `tokenizer.json` and the parity fixtures are available.
+#[cfg(feature = "real")]
+pub mod tokenizer;
+
 /// Dispatch a single named frontend stage over raw `input`, returning the stage's
 /// textual output (T-01.11). This is the one entry point the aggregating
 /// golden-file suite drives, one stage per fixture sub-tree:
