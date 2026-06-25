@@ -113,3 +113,17 @@ real = [
     "syrinx-frontend/real",
     "syrinx-serve/real",
 ]
+# GPU (CUDA) speed path for the root harness/tests: `real` plus Candle's CUDA
+# backend on every sub-crate that runs Candle. Lets the optional GPU smoke test
+# (`tests/real_gpu_synth.rs`, gated `#![cfg(feature="real")]`) and any root binary
+# open `cuda:i`. Output is not bit-equal to the CPU reference — CUDA is for speed
+# only; the CPU parity tests are unaffected and stay the numeric reference.
+cuda = [
+    "real",
+    "candle-core/cuda",
+    "syrinx-lm/cuda",
+    "syrinx-speaker/cuda",
+    "syrinx-acoustic/cuda",
+    "syrinx-vocoder/cuda",
+    "syrinx-serve/cuda",
+]

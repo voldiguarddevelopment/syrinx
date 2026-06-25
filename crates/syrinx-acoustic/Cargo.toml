@@ -11,6 +11,9 @@ publish = false
 # real HiFT vocoder so the deterministic `token2wav` (tokens -> mel -> audio)
 # zero-shot slice can be wired end-to-end behind this one feature.
 real = ["dep:candle-core", "dep:candle-nn", "dep:syrinx-vocoder", "syrinx-vocoder/real"]
+# GPU (CUDA) speed path: the flow-matching CFM ODE + HiFT on GPU. Output is not
+# bit-equal to CPU (CUDA is for speed only).
+cuda = ["real", "candle-core/cuda", "candle-nn/cuda", "syrinx-vocoder/cuda"]
 
 [dependencies]
 # Real-model backend (feature `real`): the conformer encoder + CFM ODE estimator

@@ -8,6 +8,8 @@ publish = false
 # The real CosyVoice2 HiFT vocoder forward on Candle (CPU fp32). Off by default so
 # the toy build + CI stay Candle-free; enabled on the model box for real parity.
 real = ["dep:candle-core", "dep:candle-nn"]
+# GPU (CUDA) speed path (see syrinx-lm `cuda`). Output is not bit-equal to CPU.
+cuda = ["real", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 # Real-model backend (feature `real`): the HiFTGenerator decode() forward + the

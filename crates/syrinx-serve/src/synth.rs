@@ -43,6 +43,33 @@ use syrinx_frontend::tokenizer::{TextTokenizer, TokenizerError};
 use syrinx_speaker::real::CamPlus;
 use syrinx_vocoder::real::HiftVocoder;
 
+/// Select the compute device for the synthesizer.
+///
+/// With the `cuda` feature built, `ordinal = Some(i)` opens `cuda:i`; `None`
+/// asks for `cuda:0`. Without the `cuda` feature (or if any CUDA open fails),
+/// this falls back to [`Device::Cpu`] — the parity device — so the CPU build
+/// keeps working unchanged.
+///
+/// CUDA is for **speed only**; its output is not bit-equal to the CPU reference
+/// (see [`Synthesizer::load_on_device`]).
+pub fn pick_device(ordinal: Option<usize>) -> Device {
+    #[cfg(feature = "cuda")]
+    {
+        let i = ordinal.unwrap_or(0);
+        match Device::new_cuda(i) {
+            Ok(d) => return d,
+            Err(e) => {
+                eprintln!("syrinx: cuda:{i} unavailable ({e}); falling back to CPU");
+            }
+        }
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        let _ = ordinal;
+    }
+    Device::Cpu
+}
+
 /// kaldi fbank params (CAM++ input): 80 mel bins, 16 kHz.
 const FBANK_MELS: usize = 80;
 const SR_16K: f32 = 16_000.0;
@@ -177,9 +204,28 @@ pub struct Synthesizer {
 }
 
 impl Synthesizer {
-    /// Load every sub-model from `cfg` onto the CPU.
+    /// Load every sub-model from `cfg` onto the CPU (the parity device).
+    ///
+    /// This is the default, numerically-verified path. For the GPU speed path
+    /// (built with the `cuda` feature) use [`Synthesizer::load_on_device`] with
+    /// a CUDA device from [`pick_device`].
     pub fn load(cfg: &SynthConfig) -> Result<Self, SynthError> {
-        let dev = Device::Cpu;
+        Self::load_on_device(cfg, Device::Cpu)
+    }
+
+    /// Load every sub-model from `cfg` onto an explicit `dev`.
+    ///
+    /// All Candle sub-models already take a `Device` at load time and build
+    /// every constant from `self.dev`, so a single device threaded here drives
+    /// the whole pipeline on that backend. The speech-token ONNX prompt step
+    /// still runs on its own CPU runtime (`ort`); only the Candle stages move.
+    ///
+    /// GPU output will not bit-match the CPU reference (CPU-vs-GPU gemm
+    /// accumulation diverges through deep nets) — the CUDA path is for **speed**
+    /// and its verification is functional (finite, non-silent, sane-length
+    /// audio + a measured speedup), never 1e-3 parity. CPU stays the parity
+    /// device.
+    pub fn load_on_device(cfg: &SynthConfig, dev: Device) -> Result<Self, SynthError> {
         let tokenizer = TextTokenizer::from_file(&cfg.tokenizer_json)?;
         let speech_tokenizer = SpeechTokenizer::load(&cfg.speech_tokenizer_onnx)?;
         let speaker = CamPlus::load(&cfg.spk_weights, dev.clone())?;
@@ -195,6 +241,11 @@ impl Synthesizer {
             vocoder,
             dev,
         })
+    }
+
+    /// The device every Candle sub-model was loaded onto.
+    pub fn device(&self) -> &Device {
+        &self.dev
     }
 
     /// Run the frontend half: tokenize text and derive the prompt-side conditioning
@@ -361,6 +412,29 @@ impl Synthesizer {
             N_TIMESTEPS,
         )?;
         Ok(audio)
+    }
+
+    /// Run only the flow-matching CFM mel decoder (`forward_zero_shot`) — the
+    /// heaviest acoustic stage — returning the generated mel `[1, 80, 2*Tg]`.
+    ///
+    /// Exposed so callers (e.g. the GPU speed benchmark) can time the flow ODE in
+    /// isolation. The full pipeline uses this internally inside [`token2wav`].
+    pub fn flow_forward(
+        &self,
+        cond: &PromptCond,
+        speech_token: &Tensor,
+        z: &Tensor,
+        n_timesteps: usize,
+    ) -> Result<Tensor, SynthError> {
+        let mel = self.flow.forward_zero_shot(
+            &cond.prompt_token,
+            speech_token,
+            &cond.prompt_feat,
+            &cond.spk_embedding,
+            z,
+            n_timesteps,
+        )?;
+        Ok(mel)
     }
 
     /// Build a **deterministic, zero-phase, noise-free** HiFT source STFT `[1, 18, T]`

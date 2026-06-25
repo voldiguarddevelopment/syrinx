@@ -21,6 +21,19 @@ real = [
     "syrinx-acoustic/real",
     "syrinx-vocoder/real",
 ]
+# GPU (CUDA) speed path: the whole synthesizer on GPU via Candle's CUDA backend.
+# Enables `cuda` on each Candle sub-crate + `candle-core/cuda` so `pick_device`
+# can open `cuda:i` and `Synthesizer::load_on_device` runs the pipeline on GPU.
+# Output is not bit-equal to the CPU reference — CUDA is for speed only; CPU stays
+# the parity device.
+cuda = [
+    "real",
+    "candle-core/cuda",
+    "syrinx-lm/cuda",
+    "syrinx-speaker/cuda",
+    "syrinx-acoustic/cuda",
+    "syrinx-vocoder/cuda",
+]
 
 [dependencies]
 axum = "0.7"

@@ -14,6 +14,10 @@ path = "src/root.rs"
 # The real CosyVoice2 LM forward (DESIGN T2.1) on Candle. Off by default so the
 # toy parity build + CI stay Candle-free; enabled on the GPU box for real parity.
 real = ["dep:candle-core", "dep:candle-nn"]
+# GPU (CUDA) speed path: the same `real` forward, with Candle's CUDA backend so
+# `Qwen2Lm::load(.., Device::new_cuda(..))` runs the KV-cache decode on GPU.
+# Output is not bit-equal to the CPU reference — CUDA is for speed only.
+cuda = ["real", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 # T-02.02a attention composes the `syrinx-core` reference primitives

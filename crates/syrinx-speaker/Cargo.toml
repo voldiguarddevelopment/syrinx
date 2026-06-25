@@ -9,6 +9,8 @@ publish = false
 # default so the toy parity build + CI stay Candle-free; enabled on the model box for
 # real numerical parity against `campplus.onnx`.
 real = ["dep:candle-core", "dep:candle-nn"]
+# GPU (CUDA) speed path (see syrinx-lm `cuda`). Output is not bit-equal to CPU.
+cuda = ["real", "candle-core/cuda", "candle-nn/cuda"]
 
 [dependencies]
 # Real-model backend (feature `real`): the CAM++ x-vector forward + fp32 weight

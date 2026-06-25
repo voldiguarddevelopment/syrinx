@@ -628,8 +628,26 @@ fn conv1d(x: &Tensor, w: &Tensor, b: Option<&Tensor>, s: usize) -> Result<Tensor
 }
 
 /// Nearest-neighbour upsample along the time (last) dim by integer `factor`.
+///
+/// Implemented as an `index_select` over the gather indices `[0,0,..,1,1,..]`
+/// (each input position repeated `factor` times, in order) rather than Candle's
+/// `upsample_nearest1d`. The two are numerically **identical** for an integer
+/// factor — nearest-neighbour upsample *is* this exact integer repeat — but
+/// `upsample_nearest1d` has no CUDA kernel in candle 0.8 ("upsample-nearest1d is
+/// not supported on cuda"), whereas `index_select` runs on both CPU and CUDA.
+/// So this keeps the CPU result bit-for-bit unchanged while letting the flow run
+/// on GPU.
 fn upsample_nearest_time(x: &Tensor, factor: usize) -> Result<Tensor> {
-    x.upsample_nearest1d(x.dim(2)? * factor)
+    let t = x.dim(2)?;
+    // gather indices: position p maps to inputs [p,p,..] (factor copies), in order.
+    let mut idx: Vec<u32> = Vec::with_capacity(t * factor);
+    for p in 0..t {
+        for _ in 0..factor {
+            idx.push(p as u32);
+        }
+    }
+    let idx = Tensor::from_vec(idx, (t * factor,), x.device())?;
+    x.index_select(&idx, 2)
 }
 
 fn leaky_relu(x: &Tensor, slope: f64) -> Result<Tensor> {
