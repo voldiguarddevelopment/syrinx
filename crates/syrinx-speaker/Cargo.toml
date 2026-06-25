@@ -3,3 +3,15 @@ name = "syrinx-speaker"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[features]
+# The real CosyVoice2 speaker encoder (CAM++ / campplus) forward on Candle. Off by
+# default so the toy parity build + CI stay Candle-free; enabled on the model box for
+# real numerical parity against `campplus.onnx`.
+real = ["dep:candle-core", "dep:candle-nn"]
+
+[dependencies]
+# Real-model backend (feature `real`): the CAM++ x-vector forward + fp32 weight
+# loading (ported from the ONNX graph). Mirrors syrinx-lm's `real` track.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
