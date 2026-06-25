@@ -36,7 +36,7 @@
 
 use candle_core::{DType, Device, Tensor};
 
-use syrinx_acoustic::real::{token2wav, Flow};
+use syrinx_acoustic::real::{token2wav, token2wav_streaming, AudioChunk, Flow};
 use syrinx_frontend::feat::{kaldi_fbank, prompt_mel};
 use syrinx_frontend::speech_token::{SpeechTokenError, SpeechTokenizer};
 use syrinx_frontend::tokenizer::{TextTokenizer, TokenizerError};
@@ -412,6 +412,85 @@ impl Synthesizer {
             N_TIMESTEPS,
         )?;
         Ok(audio)
+    }
+
+    /// **Streaming** synthesis: same `tts_text`-in-reference-voice flow + vocoder as
+    /// [`Synthesizer::synthesize`], but audio is emitted **incrementally** chunk by
+    /// chunk (low first-byte latency) via `on_chunk`, instead of one final `Vec`.
+    ///
+    /// This drives [`token2wav_streaming`], which replicates CosyVoice2's
+    /// `token2wav` streaming path: a HiFT mel/source/speech overlap cache across
+    /// chunks plus a hamming cross-fade at every chunk boundary. `token_hop` is the
+    /// number of finalized speech tokens per chunk (a chunk needs only
+    /// `token_hop + pre_lookahead` tokens present, so the first chunk lands long
+    /// before the utterance finishes).
+    ///
+    /// Each emitted chunk is delivered to `on_chunk` as a flat `Vec<f32>` of 24 kHz
+    /// samples in order; concatenating them yields the full streamed waveform.
+    ///
+    /// The per-chunk HiFT source is built with the same deterministic, zero-phase F0
+    /// source as the non-streaming smoke path ([`Synthesizer::deterministic_source_stft`]),
+    /// applied to each (overlap-extended) mel chunk. A pinned `inputs.s_stft` is **not**
+    /// used here (the streaming source must be rebuilt per chunk); `inputs.z`, the LM
+    /// seed/cap, and `inputs.pinned_speech_token` are honoured exactly as in `synthesize`.
+    pub fn synthesize_streaming(
+        &mut self,
+        tts_text: &str,
+        prompt_text: &str,
+        ref_wav_16k: &[f32],
+        ref_wav_24k: &[f32],
+        inputs: &SynthInputs,
+        token_hop: usize,
+        mut on_chunk: impl FnMut(Vec<f32>) -> Result<(), SynthError>,
+    ) -> Result<(), SynthError> {
+        let cond = self.prompt_cond(tts_text, prompt_text, ref_wav_16k, ref_wav_24k)?;
+
+        let speech_token = match &inputs.pinned_speech_token {
+            Some(ids) => ids_i64_to_tensor(ids, &self.dev)?,
+            None => self.generate_speech_token(&cond, inputs.lm_seed, inputs.max_gen_steps)?,
+        };
+
+        let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
+        let z = match &inputs.z {
+            Some(z) => z.clone(),
+            None => Tensor::zeros((1, MEL_NUM_MELS, total), DType::F32, &self.dev)?,
+        };
+
+        // Per-chunk source builder: the deterministic F0 source STFT over the chunk's
+        // (overlap-extended) mel. `&self` capture keeps the vocoder + device in scope.
+        let source_fn = |mel: &Tensor| -> candle_core::Result<Tensor> {
+            self.deterministic_source_stft(mel)
+                .map_err(|e| candle_core::Error::Msg(e.to_string()))
+        };
+
+        let mut cb_err: Option<SynthError> = None;
+        let res = token2wav_streaming(
+            &self.flow,
+            &self.vocoder,
+            &cond.prompt_token,
+            &speech_token,
+            &cond.prompt_feat,
+            &cond.spk_embedding,
+            &z,
+            &source_fn,
+            token_hop,
+            N_TIMESTEPS,
+            |chunk: AudioChunk| {
+                let wav: Vec<f32> = chunk
+                    .wav
+                    .flatten_all()
+                    .and_then(|t| t.to_vec1::<f32>())?;
+                if let Err(e) = on_chunk(wav) {
+                    cb_err = Some(e);
+                    return Err(candle_core::Error::Msg("streaming callback aborted".into()));
+                }
+                Ok(())
+            },
+        );
+        if let Some(e) = cb_err {
+            return Err(e);
+        }
+        res.map_err(SynthError::from)
     }
 
     /// Run only the flow-matching CFM mel decoder (`forward_zero_shot`) — the

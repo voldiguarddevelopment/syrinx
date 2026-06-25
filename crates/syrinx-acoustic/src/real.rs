@@ -597,6 +597,186 @@ pub fn token2wav(
     vocoder.decode(&mel, s_stft)
 }
 
+// ============================ streaming token2wav ============================
+
+/// Flow upsamples speech tokens to mel by this factor (CosyVoice2 `token_mel_ratio`).
+pub const TOKEN_MEL_RATIO: usize = 2;
+/// HiFT samples emitted per mel frame: `prod(upsample_rates) * istft_hop` = 8*5*3*4.
+pub const SOURCE_PER_MEL: usize = 480;
+/// Mel frames overlapped from one HiFT chunk into the next (CosyVoice2 `mel_cache_len`).
+pub const MEL_CACHE_LEN: usize = 20;
+/// Waveform samples cross-faded at a chunk boundary (`source_cache_len`): the
+/// trailing samples of one chunk blend with the leading samples of the next.
+pub const SOURCE_CACHE_LEN: usize = MEL_CACHE_LEN * SOURCE_PER_MEL; // 9600
+
+/// A `(mel [1,80,T]) -> source STFT [1,18,T]` callback the streaming driver uses to
+/// build the HiFT source branch for a (overlap-extended) mel chunk. The non-streaming
+/// pipeline derives this from the F0 predictor (see `Synthesizer::deterministic_source_stft`)
+/// or pins it from the reference; streaming reuses the very same builder per chunk so
+/// the source covers exactly the mel it is decoded with.
+pub type SourceFn<'a> = dyn Fn(&Tensor) -> Result<Tensor> + 'a;
+
+/// One emitted streaming audio chunk: the waveform `[1, L]` plus the token offset
+/// (in finalized speech tokens) it ends at, for the caller's bookkeeping.
+pub struct AudioChunk {
+    /// The emitted (already cross-faded, cache-trimmed) waveform `[1, L]`.
+    pub wav: Tensor,
+    /// Number of finalized speech tokens consumed up to and including this chunk.
+    pub token_offset: usize,
+}
+
+/// Per-utterance streaming state: the HiFT mel/source/speech overlap caches that
+/// must persist across chunks. Mirrors `CosyVoice2Model.hift_cache_dict[uuid]`.
+struct HiftCache {
+    /// Last `MEL_CACHE_LEN` mel frames of the previous chunk's (extended) mel.
+    mel: Option<Tensor>, // [1,80,MEL_CACHE_LEN]
+    /// The trailing `SOURCE_CACHE_LEN` waveform samples held back from the previous
+    /// chunk, used as the fade-out leg of the next boundary cross-fade.
+    speech_tail: Option<Tensor>, // [1, SOURCE_CACHE_LEN]
+}
+
+/// Streaming `token2wav`: drive the flow + HiFT incrementally so audio is emitted
+/// chunk-by-chunk with low first-byte latency, replicating
+/// `CosyVoice2Model.token2wav`'s mel/source overlap + hamming cross-fade.
+///
+/// `token_hop` is the number of *finalized* speech tokens released per chunk; a
+/// chunk for tokens `[off .. off+hop)` only needs tokens up to `off+hop+PRE_LOOKAHEAD`
+/// to be present (the flow's right lookahead), so the first chunk is produced after
+/// `token_hop + PRE_LOOKAHEAD` tokens instead of the whole utterance.
+///
+/// ## Flow handling (documented approximation)
+/// CosyVoice2's flow is *causal* and caches its left-context (`flow_cache`); this port
+/// has only the non-causal full-context [`Flow::forward_zero_shot`]. So per chunk we
+/// re-run the full-context flow over the *grown* token prefix and slice out the newly
+/// finalized mel region `[2*off .. 2*(off+hop)]`. For a strictly-causal flow these
+/// finalized frames are identical to the cached path; for this non-causal port they are
+/// an approximation whose only error source is right-context that a causal model would
+/// not see. The HiFT caching + overlap + hamming fade below is replicated *exactly*.
+///
+/// `prompt_token` / `prompt_feat` / `embedding` / `z_full` are the same zero-shot
+/// conditioning as non-streaming (`z_full` must cover the full final flow length,
+/// `2*(|prompt|+|token|)`). `source_fn` builds the HiFT source STFT for a mel chunk.
+#[allow(clippy::too_many_arguments)]
+pub fn token2wav_streaming(
+    flow: &Flow,
+    vocoder: &syrinx_vocoder::real::HiftVocoder,
+    prompt_token: &Tensor,
+    token: &Tensor,
+    prompt_feat: &Tensor,
+    embedding: &Tensor,
+    z_full: &Tensor,
+    source_fn: &SourceFn<'_>,
+    token_hop: usize,
+    n_timesteps: usize,
+    mut on_chunk: impl FnMut(AudioChunk) -> Result<()>,
+) -> Result<()> {
+    assert!(token_hop >= 1, "token_hop must be >= 1");
+    let dev = z_full.device();
+    let n_tokens = token.dim(1)?;
+    let prompt_len = prompt_token.dim(1)?;
+    let mut cache = HiftCache { mel: None, speech_tail: None };
+
+    // offset = number of finalized tokens already emitted as mel.
+    let mut offset = 0usize;
+    while offset < n_tokens {
+        // How many tokens we want to finalize this step.
+        let want_end = (offset + token_hop).min(n_tokens);
+        let finalize = want_end == n_tokens;
+        // Tokens that must be present for the flow to finalize `want_end`: the
+        // finalized region plus PRE_LOOKAHEAD of right context (clamped to the end).
+        let avail_end = (want_end + PRE_LOOKAHEAD).min(n_tokens);
+        let tok_slice = token.narrow(1, 0, avail_end)?; // grown prefix [1, avail_end]
+
+        // z slice for this (prompt + avail) flow length.
+        let flow_len = TOKEN_MEL_RATIO * (prompt_len + avail_end);
+        let z = z_full.narrow(2, 0, flow_len)?.contiguous()?;
+        // prompt_feat is always the full prompt mel (its length matches 2*prompt_len).
+        let mel_full = flow.forward_zero_shot(
+            prompt_token, &tok_slice, prompt_feat, embedding, &z, n_timesteps,
+        )?; // [1, 80, 2*avail_end]
+
+        // newly-finalized mel region: [2*offset .. 2*want_end].
+        let mel_start = TOKEN_MEL_RATIO * offset;
+        let mel_count = TOKEN_MEL_RATIO * (want_end - offset);
+        let mel_new = mel_full.narrow(2, mel_start, mel_count)?.contiguous()?;
+
+        // --- HiFT chunk with mel overlap, source, and waveform cross-fade. ---
+        let mel_in = match &cache.mel {
+            Some(prev) => Tensor::cat(&[prev, &mel_new], 2)?, // prepend overlap
+            None => mel_new.clone(),
+        };
+        let src = source_fn(&mel_in)?; // [1,18, len(mel_in)]
+        let speech = vocoder.decode(&mel_in, &src)?; // [1, L]
+        let total_len = speech.dim(1)?;
+
+        // Hold back the trailing SOURCE_CACHE_LEN samples (unless this is the last
+        // chunk), and trim them from what we emit now.
+        let (mut emit, new_tail) = if !finalize && total_len > SOURCE_CACHE_LEN {
+            let keep = total_len - SOURCE_CACHE_LEN;
+            let head = speech.narrow(1, 0, keep)?.contiguous()?;
+            let tail = speech.narrow(1, keep, SOURCE_CACHE_LEN)?.contiguous()?;
+            (head, Some(tail))
+        } else {
+            (speech, None)
+        };
+
+        // Cross-fade the leading SOURCE_CACHE_LEN samples of this emit with the held
+        // tail of the previous chunk (hamming(2*SOURCE_CACHE_LEN)).
+        if let Some(prev_tail) = &cache.speech_tail {
+            emit = hamming_crossfade(&emit, prev_tail, dev)?;
+        }
+
+        on_chunk(AudioChunk { wav: emit, token_offset: want_end })?;
+
+        // Update caches for the next chunk: keep the last MEL_CACHE_LEN mel frames
+        // and the held waveform tail.
+        let mlen = mel_in.dim(2)?;
+        let keep_mel = MEL_CACHE_LEN.min(mlen);
+        cache.mel = Some(mel_in.narrow(2, mlen - keep_mel, keep_mel)?.contiguous()?);
+        cache.speech_tail = new_tail;
+
+        offset = want_end;
+    }
+    Ok(())
+}
+
+/// Cross-fade `emit`'s leading `SOURCE_CACHE_LEN` samples with `prev_tail` using a
+/// hamming window of length `2*SOURCE_CACHE_LEN`, replicating CosyVoice2's
+/// `fade_in_out`: `emit[:n] = emit[:n]*w_in + prev_tail*w_out`, where `w_in` is the
+/// rising (first) half and `w_out` the falling (second) half of the window.
+fn hamming_crossfade(emit: &Tensor, prev_tail: &Tensor, dev: &Device) -> Result<Tensor> {
+    let n = SOURCE_CACHE_LEN;
+    let emit_len = emit.dim(1)?;
+    let tail_len = prev_tail.dim(1)?;
+    let overlap = n.min(emit_len).min(tail_len);
+    if overlap == 0 {
+        return Ok(emit.clone());
+    }
+    // hamming(2n): w[m] = 0.54 - 0.46 cos(2π m / (2n - 1)), m in 0..2n.
+    let win_len = 2 * n;
+    let mut w_in = vec![0f32; overlap]; // rising half, indices 0..overlap
+    let mut w_out = vec![0f32; overlap]; // falling half, indices (win_len-overlap)..win_len
+    for m in 0..overlap {
+        let hm = |idx: usize| -> f32 {
+            0.54 - 0.46 * (2.0 * std::f32::consts::PI * idx as f32 / (win_len as f32 - 1.0)).cos()
+        };
+        w_in[m] = hm(m);
+        w_out[m] = hm(win_len - overlap + m);
+    }
+    let w_in = Tensor::from_vec(w_in, (1, overlap), dev)?;
+    let w_out = Tensor::from_vec(w_out, (1, overlap), dev)?;
+
+    let head = emit.narrow(1, 0, overlap)?;
+    let tail_seg = prev_tail.narrow(1, tail_len - overlap, overlap)?;
+    let blended = (head.broadcast_mul(&w_in)? + tail_seg.broadcast_mul(&w_out)?)?;
+    if emit_len > overlap {
+        let rest = emit.narrow(1, overlap, emit_len - overlap)?;
+        Tensor::cat(&[&blended, &rest], 1)
+    } else {
+        Ok(blended)
+    }
+}
+
 // ============================ free fns ============================
 
 /// Pad the last (time) dim with zeros: `left` then `right`.
