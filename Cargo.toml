@@ -69,10 +69,35 @@ syrinx-core = { path = "crates/syrinx-core" }
 # `syrinx-lm` exposes no `attention` yet, so `tests/attention_prop.rs` fails to
 # build; GREEN adds it. The test also uses `syrinx-core`'s `Tensor`/`linear`/
 # `rope`/`weights` (already a dep above) to build inputs and an independent
-# reference.
-syrinx-lm = { path = "crates/syrinx-lm" }
+# reference. (syrinx-lm is declared in [dependencies] below — non-dev — so the
+# `real` feature can toggle its real-model module; the attention test uses it
+# the same way regardless of the section.)
 # T-07.01 streaming ring-buffer frozen tests drive `syrinx-stream`'s `RingBuffer`
 # plus its `BufferError::Backpressure` full-buffer signal through the root
 # `tests/`. RED: `syrinx-stream` exposes no `RingBuffer`/`BufferError` yet, so
 # `tests/stream_ring_buffer.rs` fails to build; GREEN adds them.
 syrinx-stream = { path = "crates/syrinx-stream" }
+
+# Real-model (Candle) parity tests live at the repo root (`tests/real_*.rs`) per
+# the frozen scaffold rule that member crates host no tests. They run only with
+# `--features real`, which pulls Candle + each crate's own `real` feature; the
+# default build stays Candle-free. `syrinx-lm` is non-optional (the T-02.02a
+# attention frozen test uses it); the rest are pulled in only by `real`.
+[dependencies]
+syrinx-lm = { path = "crates/syrinx-lm" }
+syrinx-speaker = { path = "crates/syrinx-speaker", optional = true }
+syrinx-acoustic = { path = "crates/syrinx-acoustic", optional = true }
+syrinx-vocoder = { path = "crates/syrinx-vocoder", optional = true }
+candle-core = { version = "0.8", optional = true }
+
+[features]
+real = [
+    "dep:candle-core",
+    "dep:syrinx-speaker",
+    "dep:syrinx-acoustic",
+    "dep:syrinx-vocoder",
+    "syrinx-lm/real",
+    "syrinx-speaker/real",
+    "syrinx-acoustic/real",
+    "syrinx-vocoder/real",
+]
