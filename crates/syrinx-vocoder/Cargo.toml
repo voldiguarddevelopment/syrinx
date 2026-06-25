@@ -3,3 +3,14 @@ name = "syrinx-vocoder"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[features]
+# The real CosyVoice2 HiFT vocoder forward on Candle (CPU fp32). Off by default so
+# the toy build + CI stay Candle-free; enabled on the model box for real parity.
+real = ["dep:candle-core", "dep:candle-nn"]
+
+[dependencies]
+# Real-model backend (feature `real`): the HiFTGenerator decode() forward + the
+# folded-weight-norm safetensors loader. Mirrors syrinx-lm's `real` track.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }

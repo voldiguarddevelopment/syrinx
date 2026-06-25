@@ -10,6 +10,11 @@
 //! (clamped), so a constant (DC) signal stays exactly constant, including at the
 //! buffer edges.
 
+// The real CosyVoice2 HiFT vocoder forward via Candle (mel -> 24 kHz waveform).
+// Gated behind the `real` feature; built + parity-verified on the model box.
+#[cfg(feature = "real")]
+pub mod real;
+
 /// Band-limit `input` with a length-`taps` moving-average (boxcar) low-pass.
 ///
 /// Each output sample is the mean of the `taps` input samples starting at that
