@@ -20,6 +20,12 @@ pub mod ssml;
 #[cfg(feature = "real")]
 pub mod tokenizer;
 
+// Audio feature extraction (kaldi fbank for the CAM++ speaker encoder + the flow
+// decoder prompt mel). Compiled only under the crate's `real` feature, on the
+// model box, where the parity fixtures (reference waveforms + features) live.
+#[cfg(feature = "real")]
+pub mod feat;
+
 /// Prompt **speech-token** tokenizer (real-weights track): 16 kHz reference wav
 /// -> `prompt_speech_token` ids via a Rust whisper log-mel + `speech_tokenizer_v2.onnx`
 /// run through ONNX Runtime. Compiled only under the crate's `real` feature.
