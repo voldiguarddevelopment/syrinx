@@ -8,6 +8,13 @@
 
 use std::sync::Arc;
 
+// The real CosyVoice2 end-to-end synthesizer (the `real`-feature capstone): wires
+// the five parity-verified sub-models into one `text + voice -> 24 kHz audio`
+// pipeline. Compiled only under the crate's `real` feature, on the model box, where
+// the weights + fixtures live; the default Axum scaffold build stays Candle-free.
+#[cfg(feature = "real")]
+pub mod synth;
+
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{header, StatusCode};

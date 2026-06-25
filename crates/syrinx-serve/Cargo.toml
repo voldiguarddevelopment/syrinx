@@ -4,8 +4,36 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+# The real CosyVoice2 end-to-end synthesizer (the capstone). Off by default so the
+# Axum scaffold + CI stay Candle-free; enabled on the model box to wire the five
+# parity-verified components into one `text + voice -> 24 kHz audio` pipeline. Pulls
+# Candle + each sub-crate's own `real` feature.
+real = [
+    "dep:candle-core",
+    "dep:syrinx-frontend",
+    "dep:syrinx-speaker",
+    "dep:syrinx-acoustic",
+    "dep:syrinx-vocoder",
+    "syrinx-lm/real",
+    "syrinx-frontend/real",
+    "syrinx-speaker/real",
+    "syrinx-acoustic/real",
+    "syrinx-vocoder/real",
+]
+
 [dependencies]
 axum = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 futures-util = "0.3"
+
+# Real-model capstone deps (feature `real`): the five sub-models + Candle for the
+# tensor glue. `syrinx-lm` is non-optional in the workspace already; the rest are
+# optional and only pulled in by `real`, keeping the scaffold build dependency-light.
+candle-core = { version = "0.8", optional = true }
+syrinx-lm = { path = "../syrinx-lm" }
+syrinx-frontend = { path = "../syrinx-frontend", optional = true }
+syrinx-speaker = { path = "../syrinx-speaker", optional = true }
+syrinx-acoustic = { path = "../syrinx-acoustic", optional = true }
+syrinx-vocoder = { path = "../syrinx-vocoder", optional = true }
