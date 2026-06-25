@@ -117,12 +117,27 @@ pass — there are no stubbed greens.
 - **Substrate:** the eleven-crate workspace, core tensor ops, the deterministic
   name-seeded weight generator, and the parity harness.
 
-**🚧 Next — needs real pretrained weights + GPU**
-- Pretrained weight swap into the verified shapes; the DiT acoustic decoder, the
-  HiFi-GAN/Vocos vocoder, and the speaker encoder *runtimes* (same
-  reference-architecture + golden-parity treatment as the LM).
-- Quality evaluation: SIM-o (cloning), cross-lingual/accent, MOS-proxy, WER — these
-  require a 4090-class GPU and the reference model, and are honestly gated as such.
+**✅ Real CosyVoice2 model — DONE (a standalone, near-real-time Rust TTS)**
+
+On top of the deterministic spec engine, the real **CosyVoice2-0.5B** model is now
+reimplemented in pure-Rust **[Candle](https://github.com/huggingface/candle)** and verified
+numerically against the real PyTorch model — every stage behind a `real` cargo feature
+(the default build stays Candle-free):
+
+- **LM** — Qwen2-0.5B forward + **KV-cache autoregressive generation**: logits 1.3e-4,
+  per-step gen logits 2.9e-5, argmax-exact.
+- **Speaker** — CAM++ x-vector (architecture recovered from the `campplus.onnx` graph): 1.3e-5, cosine 1.0.
+- **Acoustic** — flow-matching mel (conformer + CFM Euler ODE + zero-shot prompt conditioning): mel 1.3e-5.
+- **Vocoder** — HiFT (upsample + Snake ResBlocks + iSTFT-via-inverse-DFT): waveform 5.2e-5.
+- **Frontend** — Qwen BPE tokenizer (exact) · kaldi fbank + prompt mel (1e-3) · `speech_tokenizer_v2.onnx` (exact, via `ort`).
+- **`Synthesizer`** (`syrinx-serve::synth`) — `synthesize(text, ref_audio) → 24 kHz audio`,
+  full-chain deterministic parity **7.7e-5**. **No Python in the inference path.**
+- **GPU runtime** (`cuda` feature, Candle-CUDA) — full synth **~26× faster**, **RTF ≈ 1.67**
+  (near real-time) on a single consumer GPU.
+
+The parity fixtures (real weights + Python reference dumps) live on the model box, so these
+tests are **env-gated and skip cleanly in CI** — the default build + CI stay green and
+Candle-free, while the real path runs for real where the weights exist.
 
 ---
 
@@ -143,8 +158,9 @@ already proven correct. See [`PARITY.md`](PARITY.md) and [`REFERENCE.md`](REFERE
 
 ## Getting started
 
-> **Heads up:** the deterministic stages build and run today; end-to-end audio
-> synthesis awaits the pretrained-weight milestone above.
+> **Heads up:** the default build is the deterministic spec engine (Candle-free). The
+> **real CosyVoice2 model** — full `text + ref → audio` synthesis — runs behind the
+> `real` / `cuda` features against on-disk weights; see *Real CosyVoice2 model* above.
 
 ```bash
 # Build the whole workspace
@@ -157,8 +173,10 @@ cargo test --workspace
 cargo run -p syrinx-cli -- --help
 ```
 
-**Requirements:** a stable Rust toolchain. The pretrained-model path additionally needs
-an RTX&nbsp;4090-class GPU (for the eventual weight-swap + quality eval).
+**Requirements:** a stable Rust toolchain for the default build. The **real** model path
+(`--features real`) additionally needs the CosyVoice2-0.5B weights + reference fixtures on
+disk (the parity tests are env-gated on them); the **`cuda`** speed path needs an NVIDIA GPU
++ the Candle-CUDA toolchain (~26× faster, near real-time).
 
 ---
 
@@ -180,13 +198,14 @@ the harness will not mark a task done on belief.
 ## Roadmap
 
 - [x] Eleven-crate workspace + CI
-- [x] Deterministic text frontend (Phase 1)
-- [x] LM inference runtime, parity-gated (Phase 2, LM path)
-- [x] Prosody control surface + audio streaming (Phases 3 & 7, deterministic parts)
-- [ ] DiT acoustic decoder / vocoder / speaker-encoder runtimes (reference + goldens)
-- [ ] Pretrained weight swap + 4-bit quantization path
-- [ ] Cloning / cross-lingual / perceptual **quality** eval (GPU)
-- [ ] Server `/v1/audio` + streaming end-to-end + watermarking on every output
+- [x] Deterministic spec engine — frontend, LM forward, prosody, streaming (parity-gated)
+- [x] **Real CosyVoice2-0.5B port** — LM (+ KV-cache gen) · CAM++ speaker · flow-matching · HiFT · frontend, all Candle, all parity-verified
+- [x] **End-to-end `Synthesizer`** — `text + ref → audio`, full-chain parity 7.7e-5, no Python on the hot path
+- [x] **GPU runtime** (Candle-CUDA) — ~26×, RTF ≈ 1.67 (near real-time)
+- [ ] Chunk-aware **streaming** synthesis (sub-200 ms TTFB) — *in progress*
+- [ ] Syrinx's **control layer**: editable prosody plan, emotion/intensity, paralinguistic detail — *in progress*
+- [ ] 4-bit quantization · cloning / cross-lingual / perceptual **quality** eval
+- [ ] Server `/v1/audio` end-to-end + watermarking on every output
 
 See [`DESIGN.md`](DESIGN.md) for the full task-based plan and resolved design decisions.
 
