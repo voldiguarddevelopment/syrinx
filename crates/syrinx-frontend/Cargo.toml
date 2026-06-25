@@ -7,13 +7,21 @@ publish = false
 [features]
 # Real-model track (model box only): off by default so the toy/CI build stays
 # light + dependency-free. Enabled for numerical parity against the CosyVoice2
-# Python reference. The text tokenizer pulls the Hugging Face `tokenizers` crate.
-real = ["dep:tokenizers"]
+# Python reference. The text tokenizer pulls the Hugging Face `tokenizers` crate;
+# the audio feature extractor (kaldi fbank + prompt mel) pulls `rustfft`; the
+# prompt speech-token tokenizer pulls `ndarray` + `ort` (ONNX Runtime).
+real = ["dep:tokenizers", "dep:rustfft", "dep:ndarray", "dep:ort"]
 
 [dependencies]
 unicode-normalization = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Audio feature-extraction FFT backend (feature `real`). Pure-Rust, no system
+# deps. The kaldi fbank (CAM++ input) + the flow-decoder prompt mel are computed
+# in `feat.rs`; only the FFT is delegated to `rustfft`, the windows + mel banks
+# are hand-built to match torchaudio kaldi / matcha exactly.
+rustfft = { version = "6", optional = true }
 
 # Real text-tokenizer backend (feature `real`): the Hugging Face `tokenizers`
 # crate loads the model's serialized Qwen2 BPE `tokenizer.json` (incl. the
@@ -22,3 +30,11 @@ serde_json = "1"
 # features we never use; `onig` provides the regex engine the Qwen pre-tokenizer's
 # split needs (vendored oniguruma, built via `cc`).
 tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+
+# Prompt speech-token tokenizer (feature `real`): whisper log-mel computed in
+# Rust + `speech_tokenizer_v2.onnx` run via ONNX Runtime. `ndarray` holds the
+# mel feature math; `ort` is the ONNX Runtime binding (`download-binaries` pulls
+# a prebuilt CPU runtime, `tls-rustls` gives it the TLS provider it needs to do
+# so, so there's no system dependency).
+ndarray = { version = "0.16", optional = true }
+ort = { version = "2.0.0-rc.10", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls"] }

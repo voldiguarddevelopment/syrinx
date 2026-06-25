@@ -20,6 +20,12 @@ pub mod ssml;
 #[cfg(feature = "real")]
 pub mod tokenizer;
 
+/// Prompt **speech-token** tokenizer (real-weights track): 16 kHz reference wav
+/// -> `prompt_speech_token` ids via a Rust whisper log-mel + `speech_tokenizer_v2.onnx`
+/// run through ONNX Runtime. Compiled only under the crate's `real` feature.
+#[cfg(feature = "real")]
+pub mod speech_token;
+
 /// Dispatch a single named frontend stage over raw `input`, returning the stage's
 /// textual output (T-01.11). This is the one entry point the aggregating
 /// golden-file suite drives, one stage per fixture sub-tree:
