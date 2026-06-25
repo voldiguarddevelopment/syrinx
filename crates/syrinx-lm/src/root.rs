@@ -15,3 +15,9 @@ pub use attn::*;
 pub use block::{block, swiglu_ffn};
 pub use forward::forward;
 pub use stage::{embed_tokens, layer_attention, transformer_block};
+
+// The real CosyVoice2 LM forward via Candle (DESIGN T2.1). Gated behind the
+// `real` feature so the default/CI build stays Candle-free and the toy parity
+// tests are unaffected; built + verified against real weights on the GPU box.
+#[cfg(feature = "real")]
+pub mod real;

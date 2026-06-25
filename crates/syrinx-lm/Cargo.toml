@@ -10,8 +10,16 @@ publish = false
 # isolated `block.rs` (T-02.02b SwiGLU FFN + pre-norm residual block).
 path = "src/root.rs"
 
+[features]
+# The real CosyVoice2 LM forward (DESIGN T2.1) on Candle. Off by default so the
+# toy parity build + CI stay Candle-free; enabled on the GPU box for real parity.
+real = ["dep:candle-core", "dep:candle-nn"]
+
 [dependencies]
 # T-02.02a attention composes the `syrinx-core` reference primitives
 # (`linear`/`rope`) over the `Tensor` contract; T-02.02b's block/FFN add
 # `silu`/`mul`/`add`/`rmsnorm`.
 syrinx-core = { path = "../syrinx-core" }
+# Real-model backend (feature `real`): the Qwen2-0.5B forward + weight loading.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
