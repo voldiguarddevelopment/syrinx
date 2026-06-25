@@ -3,3 +3,15 @@ name = "syrinx-acoustic"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[features]
+# The real CosyVoice2 flow-matching mel decoder (CausalMaskedDiffWithXvec) on
+# Candle. Off by default so the default build stays Candle-free; enabled on the
+# model box for numerical parity against the Python reference.
+real = ["dep:candle-core", "dep:candle-nn"]
+
+[dependencies]
+# Real-model backend (feature `real`): the conformer encoder + CFM ODE estimator
+# + fp32 safetensors weight loading. CPU fp32 is enough for parity.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
