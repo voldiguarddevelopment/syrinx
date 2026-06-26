@@ -12,8 +12,17 @@ path = "src/main.rs"
 # The real `synth` command: loads the CosyVoice2 `Synthesizer` (via syrinx-serve's
 # `real` capstone) and renders `text + reference voice -> 24 kHz WAV`. Off by
 # default so the scaffold build stays Candle-free; enabled on the model box.
-real = ["dep:syrinx-serve", "syrinx-serve/real"]
-# GPU (CUDA) speed path for `synth --cuda`: pulls syrinx-serve's `cuda` feature so
+real = [
+    "dep:syrinx-serve",
+    "dep:syrinx-prosody",
+    "dep:serde_json",
+    "syrinx-serve/real",
+]
+# Text normalization: build the CLI with `tn` to normalize text (wetext-style zh+en)
+# before tokenizing in the `synth`/`serve`/`stream` paths. A build-time choice (the
+# synth's normalization hook is compile-gated); `--features real,tn`.
+tn = ["real", "syrinx-serve/tn"]
+# GPU (CUDA) speed path for `--cuda`: pulls syrinx-serve's `cuda` feature so
 # `pick_device`/`load_on_device` can open `cuda:i`. Output is not bit-equal to the
 # CPU reference — CUDA is for speed only.
 cuda = ["real", "syrinx-serve/cuda"]
@@ -23,3 +32,7 @@ cuda = ["real", "syrinx-serve/cuda"]
 # pulled in only under this crate's `real` feature. Args are hand-rolled (no clap)
 # and the WAV codec is reused from syrinx-serve (`wavio`), keeping deps minimal.
 syrinx-serve = { path = "../syrinx-serve", optional = true }
+# The editable prosody `RenderPlan` for `synth --pitch/--rate/--plan` (pure-Rust).
+syrinx-prosody = { path = "../syrinx-prosody", optional = true }
+# Parse a `--plan <FILE.json>` render plan.
+serde_json = { version = "1", optional = true }

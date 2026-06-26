@@ -209,6 +209,23 @@ pub fn router_with_real_synth(synth: RealSynth) -> Router {
     router_with_synth(Arc::new(synth))
 }
 
+/// Boot the OpenAI-compatible audio server around `synth` and serve it **blocking**
+/// on `addr` until the process is killed. Runs a self-contained multi-thread Tokio
+/// runtime internally so a synchronous caller (e.g. the `syrinx serve` CLI command)
+/// can launch the server without being async itself. Returns only on bind/serve
+/// error.
+#[cfg(feature = "real")]
+pub fn serve_blocking(synth: RealSynth, addr: std::net::SocketAddr) -> std::io::Result<()> {
+    let app = router_with_real_synth(synth);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(async move {
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        axum::serve(listener, app).await
+    })
+}
+
 /// Handle `GET /v1/health`: return 200 with the documented typed JSON health body
 /// reporting status `"ok"` and the crate's build version.
 async fn health() -> Response {
