@@ -609,12 +609,27 @@ pub const MEL_CACHE_LEN: usize = 20;
 /// trailing samples of one chunk blend with the leading samples of the next.
 pub const SOURCE_CACHE_LEN: usize = MEL_CACHE_LEN * SOURCE_PER_MEL; // 9600
 
-/// A `(mel [1,80,T]) -> source STFT [1,18,T]` callback the streaming driver uses to
-/// build the HiFT source branch for a (overlap-extended) mel chunk. The non-streaming
-/// pipeline derives this from the F0 predictor (see `Synthesizer::deterministic_source_stft`)
-/// or pins it from the reference; streaming reuses the very same builder per chunk so
-/// the source covers exactly the mel it is decoded with.
-pub type SourceFn<'a> = dyn Fn(&Tensor) -> Result<Tensor> + 'a;
+/// The **phase-continuous** streaming source builder the driver calls per chunk.
+///
+/// Args: `(mel_in [1,80,L], phase_in, overlap_samples, prev_source_tail)`:
+///   * `mel_in` — the (overlap-extended) chunk mel to decode,
+///   * `phase_in` — the global F0-excitation phase (in cycles) at the start of this
+///     chunk's *new* (post-overlap) region, carried from the previous chunk so the
+///     excitation is globally continuous (not reset per chunk — that reset is what
+///     decorrelated streaming from the non-streaming reference),
+///   * `overlap_samples` — leading source samples that belong to the carried-over
+///     overlap region (== the previous chunk's `mel_cache` frames × `SOURCE_PER_MEL`),
+///   * `prev_source_tail` — `Some([1, overlap_samples])` of the previous chunk's
+///     trailing source waveform, used to **overwrite** the overlap region so it is
+///     sample-identical to what the vocoder already emitted (CosyVoice2 `cache_source`),
+///     or `None` for the first chunk.
+///
+/// Returns `(s_stft [1,18,T_src], source_wave [1, L·SOURCE_PER_MEL], phase_out)`:
+/// the STFT for the vocoder, the full source waveform (so the driver can cache its
+/// tail as the next chunk's overlap), and the global phase at this chunk's end
+/// (the next chunk's `phase_in`).
+pub type StreamSourceFn<'a> =
+    dyn Fn(&Tensor, f64, usize, Option<&Tensor>) -> Result<(Tensor, Tensor, f64)> + 'a;
 
 /// One emitted streaming audio chunk: the waveform `[1, L]` plus the token offset
 /// (in finalized speech tokens) it ends at, for the caller's bookkeeping.
@@ -633,6 +648,10 @@ struct HiftCache {
     /// The trailing `SOURCE_CACHE_LEN` waveform samples held back from the previous
     /// chunk, used as the fade-out leg of the next boundary cross-fade.
     speech_tail: Option<Tensor>, // [1, SOURCE_CACHE_LEN]
+    /// The trailing `SOURCE_CACHE_LEN` **source** (excitation) samples of the previous
+    /// chunk. Overwrites the next chunk's overlap source so the excitation is
+    /// sample-coherent across the boundary (CosyVoice2 `cache_source`).
+    source_tail: Option<Tensor>, // [1, SOURCE_CACHE_LEN]
 }
 
 /// Streaming `token2wav`: drive the flow + HiFT incrementally so audio is emitted
@@ -665,7 +684,7 @@ pub fn token2wav_streaming(
     prompt_feat: &Tensor,
     embedding: &Tensor,
     z_full: &Tensor,
-    source_fn: &SourceFn<'_>,
+    source_fn: &StreamSourceFn<'_>,
     token_hop: usize,
     n_timesteps: usize,
     mut on_chunk: impl FnMut(AudioChunk) -> Result<()>,
@@ -674,8 +693,12 @@ pub fn token2wav_streaming(
     let dev = z_full.device();
     let n_tokens = token.dim(1)?;
     let prompt_len = prompt_token.dim(1)?;
-    let mut cache = HiftCache { mel: None, speech_tail: None };
+    let mut cache = HiftCache { mel: None, speech_tail: None, source_tail: None };
 
+    // Global F0-excitation phase (in cycles) carried across chunks so the streaming
+    // source is one continuous sinusoid, exactly like the non-streaming source —
+    // rather than restarting from phase 0 each chunk (which decorrelates the audio).
+    let mut phase = 0f64;
     // offset = number of finalized tokens already emitted as mel.
     let mut offset = 0usize;
     while offset < n_tokens {
@@ -701,11 +724,20 @@ pub fn token2wav_streaming(
         let mel_new = mel_full.narrow(2, mel_start, mel_count)?.contiguous()?;
 
         // --- HiFT chunk with mel overlap, source, and waveform cross-fade. ---
+        let overlap_frames = match &cache.mel {
+            Some(prev) => prev.dim(2)?,
+            None => 0,
+        };
         let mel_in = match &cache.mel {
             Some(prev) => Tensor::cat(&[prev, &mel_new], 2)?, // prepend overlap
             None => mel_new.clone(),
         };
-        let src = source_fn(&mel_in)?; // [1,18, len(mel_in)]
+        // Build the phase-continuous source: the overlap region is overwritten by the
+        // previous chunk's trailing source; the new region continues the global phase.
+        let overlap_samples = overlap_frames * SOURCE_PER_MEL;
+        let (src, source_wave, phase_out) =
+            source_fn(&mel_in, phase, overlap_samples, cache.source_tail.as_ref())?;
+        phase = phase_out;
         let speech = vocoder.decode(&mel_in, &src)?; // [1, L]
         let total_len = speech.dim(1)?;
 
@@ -734,6 +766,11 @@ pub fn token2wav_streaming(
         let keep_mel = MEL_CACHE_LEN.min(mlen);
         cache.mel = Some(mel_in.narrow(2, mlen - keep_mel, keep_mel)?.contiguous()?);
         cache.speech_tail = new_tail;
+        // Cache the trailing source samples (one mel_cache worth) for the next chunk's
+        // overlap overwrite — these carry the exact phase the vocoder just consumed.
+        let swlen = source_wave.dim(1)?;
+        let keep_src = SOURCE_CACHE_LEN.min(swlen);
+        cache.source_tail = Some(source_wave.narrow(1, swlen - keep_src, keep_src)?.contiguous()?);
 
         offset = want_end;
     }
