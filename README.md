@@ -84,8 +84,13 @@ text ─▶ [Frontend] ─▶ [AR Semantic LM] ─▶ [Prosody Plan] ─▶ [NAR
 and paralinguistic tokens; a **non-autoregressive** flow-matching decoder owns the
 acoustic frames so first-byte latency is one chunk, not one utterance.
 
-**Parameter budget (pre-quant ~420M):** LM ~250M · acoustic ~120M · speaker enc ~30M ·
-vocoder ~20M → **~270&nbsp;MB at 4-bit**.
+> The diagram is the original aspirational design; the **real shipped pipeline** is the
+> CosyVoice2 / CosyVoice3 ports documented under *Build status* below (24 kHz; CV2 uses a
+> conformer flow + HiFT, CV3 a 22-layer DiT flow + causal HiFT).
+
+**Realized 4-bit footprint (int4, opt-in):** **CV2 ≈ 388 MB** (the unused untied `lm_head`
+dropped) · **CV3 ≈ 488 MB** (its 22-layer DiT flow dominates). The early "~270 MB" budget
+under-counted the Qwen2-0.5B body; int4 is a size win, not a speed win (dequant-on-fetch).
 
 ---
 
@@ -203,11 +208,11 @@ already proven correct. See [`PARITY.md`](PARITY.md) and [`REFERENCE.md`](REFERE
 ## Getting started
 
 > **Heads up:** the default build is the deterministic spec engine (Candle-free). The
-> **real CosyVoice2 model** — full `text + ref → audio` synthesis — runs behind the
-> `real` / `cuda` features against on-disk weights; see *Real CosyVoice2 model* above.
+> **real CosyVoice2 *and* CosyVoice3 models** — full `text + ref → audio` synthesis — run
+> behind the `real` / `cuda` features against on-disk weights; see *Real CosyVoice2/3 model* above.
 
 ```bash
-# Build the whole workspace
+# Build the whole workspace (default, Candle-free)
 cargo build --workspace
 
 # Run the full test suite (frozen parity + property tests)
@@ -217,10 +222,30 @@ cargo test --workspace
 cargo run -p syrinx-cli -- --help
 ```
 
+**Real synthesis** — `text + reference clip → 24 kHz wav`, behind `--features real` (add
+`--features cuda` + `--cuda` for the GPU path). Pick the model with `--cv3`:
+
+```bash
+# CosyVoice2 (default): weights via SYRINX_*_WEIGHTS env (or --model-dir)
+cargo run -p syrinx-cli --features real -- synth \
+  --text "Hello from Syrinx." --prompt-text "<ref transcript>" \
+  --ref-wav ref.wav --out out.wav
+
+# CosyVoice3: same CLI, add --cv3 (weights via SYRINX_CV3_*; v3 speech tokenizer)
+cargo run -p syrinx-cli --features real -- synth --cv3 \
+  --text "收到好友从远方寄来的生日礼物。" --prompt-text "希望你以后能够做的比我还好呦。" \
+  --ref-wav ref.wav --out out_cv3.wav
+
+# OpenAI-compatible server (either model): `serve` / `serve --cv3`
+cargo run -p syrinx-cli --features real -- serve --cv3 --ref-wav ref.wav --port 8080
+curl -s localhost:8080/v1/audio/speech -H 'content-type: application/json' \
+  -d '{"model":"syrinx-cv3","input":"hello","voice":"v","response_format":"wav"}' -o out.wav
+```
+
 **Requirements:** a stable Rust toolchain for the default build. The **real** model path
-(`--features real`) additionally needs the CosyVoice2-0.5B weights + reference fixtures on
-disk (the parity tests are env-gated on them); the **`cuda`** speed path needs an NVIDIA GPU
-+ the Candle-CUDA toolchain (~26× faster, near real-time).
+(`--features real`) additionally needs the CosyVoice2-0.5B **or** CosyVoice3-0.5B weights +
+reference fixtures on disk (the parity tests are env-gated on them); the **`cuda`** speed path
+needs an NVIDIA GPU + the Candle-CUDA toolchain (~26× faster, near real-time).
 
 ---
 
