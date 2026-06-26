@@ -6,9 +6,10 @@
 
 **A local, Rust-served neural TTS + zero-shot voice-cloning engine.**
 
-Clone a voice from seconds of reference audio, render it with full prosodic and
-emotional control, stream it sub-200&nbsp;ms on a single consumer GPU — and edit the
-prosody as a plan, not a black box. Inference is **pure Rust**; no Python on the hot path.
+Clone a voice from seconds of reference audio and render it near real-time on a single
+consumer GPU — with editable speech-rate prosody as a typed plan, not a black box.
+Inference is **pure Rust** (Candle); no Python on the hot path. (Emotional control and
+sub-200 ms streaming are on the roadmap, not yet shipped — see [Status](#what-it-is).)
 
 [![CI](https://github.com/voldiguarddevelopment/syrinx/actions/workflows/ci.yml/badge.svg)](https://github.com/voldiguarddevelopment/syrinx/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
@@ -30,12 +31,16 @@ The design goal is the rare combination of **clone quality + expressive range +
 low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a **~270&nbsp;MB
 4-bit footprint**.
 
-> **Status — honest snapshot.** The deterministic engine (text frontend, the inference
-> *runtime*, the prosody control surface, and audio streaming) is **built and
-> test-gated** in Rust. The pieces that require real pretrained weights and a GPU
-> (weight-swap, cloning *quality*, the DiT decoder / vocoder / speaker-encoder
-> *quality* eval) are scaffolded with a parity-checked reference architecture and are
-> the next milestone. See [Build status](#build-status).
+> **Status — honest snapshot.** The **real CosyVoice2-0.5B model is fully reimplemented
+> in pure-Rust [Candle](https://github.com/huggingface/candle) and parity-verified**
+> (`text + ref → 24 kHz audio`, full-chain 7.7e-5) — with a GPU runtime (RTF ≈ 1.67), a
+> CLI + OpenAI-compatible server, zh+en text normalization, faithful speech-rate control,
+> measured eval (SIM-o ≈ 0.74 clone fidelity), an int4-quantized LM, and an output
+> watermark. **Not yet:** sample-faithful streaming (needs a causal flow), emotion /
+> paralinguistic control (needs the instruct checkpoint), and cross-lingual / WER eval
+> (needs ASR). The original "deterministic spec engine" was Ratchet's GPU-less, parity-gated
+> *proxy*; the real pipeline supersedes it (and orphans some of it). See
+> [Build status](#build-status) and [Roadmap](#roadmap).
 
 ---
 
@@ -45,15 +50,20 @@ low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a **~270&n
   acoustic decoder → vocoder — is Rust. No Python runtime in production.
 - 🎙️ **Zero-shot cloning.** A reference clip → a speaker embedding → a cloned voice,
   no per-speaker fine-tuning.
-- ✏️ **Editable prosody plan.** Duration and pitch are a typed, serializable plan you
-  can edit per-word and per-phoneme, then re-render — decoupled from the renderer.
-- ⚡ **Streaming-first.** Chunk-aware causal flow matching targets sub-200&nbsp;ms
-  time-to-first-byte; ring-buffered packet streaming with a telephony (8&nbsp;kHz) path.
-- 🌍 **Cross-lingual & multi-accent** transfer (research-tracked attribute control).
-- 🔬 **Parity-gated correctness.** Every numerical stage is checked against a
-  byte-exact reference within tolerance — a stage is "done" only when its frozen test
-  passes, never by assertion.
-- 🔒 **Watermarking + consent** are first-class policy, not an afterthought.
+- ✏️ **Editable prosody.** A typed, serializable `RenderPlan` carries speech-rate and
+  pitch (global + per-region). Speech-rate is faithful (≈ 1/rate); training-free **pitch
+  is a weak lever** (the vocoder's mel envelope dominates — measured + documented).
+  Per-*word*/phoneme targeting needs an aligner the base model doesn't expose.
+- ⚡ **Streaming.** Chunk-aware incremental synthesis is implemented; **sub-200 ms TTFB is
+  a design target** (needs a causal cached flow + GPU), not yet a measured result, and the
+  stream is not yet sample-identical to the batch path.
+- 🌍 **Cross-lingual & multi-accent** transfer — *research-tracked, not yet validated*
+  (needs an ASR-based eval).
+- 🔬 **Parity-gated correctness.** Every numerical stage of the real model is checked
+  against the PyTorch reference within tolerance — "done" means the frozen test passes,
+  never an assertion.
+- 🔒 **Real, honest watermark.** A spread-spectrum watermark on every output, imperceptible
+  and detectable after light processing — *not* adversarially robust (see Ethics).
 
 ---
 
@@ -103,7 +113,14 @@ Syrinx is built **test-first behind deterministic gates** (see
 [How this was built](#how-this-was-built)). A task is `done` only when its frozen tests
 pass — there are no stubbed greens.
 
-**✅ Done — the deterministic engine + parity foundation**
+**✅ Done — the deterministic spec engine (Ratchet's GPU-less proxy)**
+
+> **Note:** this layer was Ratchet's parity-gated *proxy* — it is built + test-gated, but
+> the **real CosyVoice2 pipeline below supersedes most of it**. In particular the rich
+> text frontend (normalization beyond the `tn` path, G2P, SSML, lexicon, heteronyms) and
+> the toy prosody contours are **not wired into the real `Synthesizer`** today — they are
+> orphaned, slated for the consolidation pass on the [Roadmap](#roadmap).
+
 - **Text frontend:** normalization, number/date/currency expansion, acronym + custom
   lexicon, G2P, heteronym resolution, SSML subset, punctuation→prosody, context
   windowing, breathing/pacing, and the typed frontend→LM contract.
@@ -197,25 +214,42 @@ the harness will not mark a task done on belief.
 
 ## Roadmap
 
+**Done (real, verified):**
 - [x] Eleven-crate workspace + CI
-- [x] Deterministic spec engine — frontend, LM forward, prosody, streaming (parity-gated)
 - [x] **Real CosyVoice2-0.5B port** — LM (+ KV-cache gen) · CAM++ speaker · flow-matching · HiFT · frontend, all Candle, all parity-verified
 - [x] **End-to-end `Synthesizer`** — `text + ref → audio`, full-chain parity 7.7e-5, no Python on the hot path
-- [x] **GPU runtime** (Candle-CUDA) — ~26×, RTF ≈ 1.67 (near real-time)
-- [ ] Chunk-aware **streaming** synthesis (sub-200 ms TTFB) — *in progress*
-- [ ] Syrinx's **control layer**: editable prosody plan, emotion/intensity, paralinguistic detail — *in progress*
-- [ ] 4-bit quantization · cloning / cross-lingual / perceptual **quality** eval
-- [ ] Server `/v1/audio` end-to-end + watermarking on every output
+- [x] **GPU runtime** (Candle-CUDA) — ~26×, RTF ≈ 1.67 (near real-time on a consumer GPU)
+- [x] **CLI + server** — `syrinx synth|serve|stream`; OpenAI-compatible `POST /v1/audio/speech` returns real audio
+- [x] **Text normalization** — wetext-style zh+en (~95% match to the reference), wired into the real path (`tn` feature)
+- [x] **Editable prosody** — speech-rate (faithful, ≈1/rate) + a typed `RenderPlan`; **pitch is a weak training-free lever** (the HiFT mel filter dominates perceived pitch — measured + documented)
+- [x] **Measured eval** — SIM-o clone fidelity (≈0.74), RTF, TTFB (WER/MOS report honest `null` — need ASR/MOS models)
+- [x] **int4 (Q4_0) LM quant** — ~2.5× (2449 → 986 MB, SIM-o 0.72 preserved); the f16 embedding tables are the remaining bulk
+- [x] **Output watermark** — spread-spectrum, imperceptible + detectable after light processing (see *Ethics*)
 
-See [`DESIGN.md`](DESIGN.md) for the full task-based plan and resolved design decisions.
+**Not yet (honest):**
+- [ ] **Sample-faithful streaming** — streaming works + is correct-length, but is *not* sample-identical to the non-streaming path; needs a **causal cached flow** (CosyVoice2 `flow_cache`). Sub-200 ms TTFB is a design target, not a measured result (CPU TTFB is LM-bound).
+- [ ] **Emotion / paralinguistic control** — needs the CosyVoice2 **instruct checkpoint** (not in the base 0.5B); research-tracked.
+- [ ] **Cross-lingual / WER / perceptual-MOS eval** — needs an ASR + a MOS-prediction model on the eval box.
+- [ ] **Smaller footprint** — quantize the embedding tables + the flow to approach a ~270 MB target.
+- [ ] **Consolidation** — retire the orphaned deterministic spec-engine modules (frontend normalize/G2P/SSML, toy prosody) now superseded by the real pipeline.
+
+The "deterministic spec engine" rows above were Ratchet's GPU-less, parity-gated **proxy**; the real
+CosyVoice2 pipeline supersedes them, and several of those modules are now orphaned (slated for the
+consolidation pass). See [`DESIGN.md`](DESIGN.md) for the full task-based plan.
 
 ---
 
 ## Ethics & consent
 
-Voice cloning is powerful and abusable. Syrinx treats **consent and watermarking as
-requirements, not features**: every synthesized output is intended to carry a robust,
-post-edit-detectable watermark, and cloning is gated behind a usage policy. Do not
+Voice cloning is powerful and abusable. Syrinx can embed a **spread-spectrum watermark**
+in every synthesized output (`Synthesizer::synthesize_watermarked`): key-seeded,
+imperceptible (≈ −48 dBFS), and detectable after **light** processing — high-bitrate
+re-encoding, gain changes, light noise, and integer-sample crops. It is **not**
+adversarially robust: aggressive low-bitrate MP3/Opus, time-stretch/resample, or
+deliberate removal defeat it — that needs a *learned*, perceptually-masked scheme
+(AudioSeal / WavMark), tracked as future work. See
+[`crates/syrinx-serve/docs/WATERMARK.md`](crates/syrinx-serve/docs/WATERMARK.md) for the
+honest robustness boundary. Cloning is meant to be gated behind a usage policy — do not
 clone a voice you do not have the right to use.
 
 ---
