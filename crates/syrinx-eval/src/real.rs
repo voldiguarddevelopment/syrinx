@@ -145,6 +145,91 @@ pub fn evaluate(
     })
 }
 
+/// One multilingual eval case: a [`evaluate`] input plus the ASR `lang` hint that
+/// the WER helper (`scripts/eval_wer.py`, via `SYRINX_WER_LANG`) must use for *this*
+/// case's transcription. Cross-lingual is expressed by giving a reference voice in
+/// one language (`prompt_text` / `ref_wav_*`) while `text` + `lang` are another: the
+/// zero-shot clone carries the voice across into the target language.
+pub struct EvalCase<'a> {
+    /// Whisper language hint for the WER ASR of this case's output (`"zh"`, `"en"`, …).
+    pub lang: &'a str,
+    /// The text to synthesize (may be in a different language than the reference).
+    pub text: &'a str,
+    /// Transcript of the reference clip (the cloned voice), in the reference's language.
+    pub prompt_text: &'a str,
+    /// Reference voice waveform at 16 kHz mono (CAM++ / speech-token path).
+    pub ref_wav_16k: &'a [f32],
+    /// Reference voice waveform at 24 kHz mono (the synthesizer's prompt audio).
+    pub ref_wav_24k: &'a [f32],
+}
+
+/// Evaluate a suite of [`EvalCase`]s and tag each result with a `lang | text` label.
+///
+/// A thin loop over [`evaluate`]: per case it sets `SYRINX_WER_LANG` to the case's
+/// `lang` (so the Whisper WER helper transcribes in that language — the per-case
+/// language wiring), runs the unchanged single-case [`evaluate`], then restores the
+/// prior `SYRINX_WER_LANG`. A case whose synthesis errors is logged to stderr and
+/// omitted, so a short result vector flags a failure to the caller. Aggregate the
+/// returned rows with [`aggregate`].
+pub fn evaluate_suite(
+    synth: &mut Synthesizer,
+    cases: &[EvalCase<'_>],
+    max_gen_steps: Option<usize>,
+) -> Vec<(String, Metrics)> {
+    let mut results = Vec::with_capacity(cases.len());
+    for case in cases {
+        // The WER helper reads SYRINX_WER_LANG from its environment; set it to this
+        // case's language for the duration of the call, then restore the prior value.
+        let prev = std::env::var("SYRINX_WER_LANG").ok();
+        std::env::set_var("SYRINX_WER_LANG", case.lang);
+
+        let input = EvalInput {
+            text: case.text,
+            prompt_text: case.prompt_text,
+            ref_wav_16k: case.ref_wav_16k,
+            ref_wav_24k: case.ref_wav_24k,
+        };
+        let label = case_label(case);
+        match evaluate(synth, &input, max_gen_steps) {
+            Ok(m) => results.push((label, m)),
+            Err(e) => eprintln!("evaluate_suite: case `{label}` failed: {e}"),
+        }
+
+        match prev {
+            Some(v) => std::env::set_var("SYRINX_WER_LANG", v),
+            None => std::env::remove_var("SYRINX_WER_LANG"),
+        }
+    }
+    results
+}
+
+/// A short, stable label for a case: `lang | <first chars of text>`.
+fn case_label(case: &EvalCase<'_>) -> String {
+    let snippet: String = case.text.chars().take(24).collect();
+    format!("{} | {}", case.lang, snippet)
+}
+
+/// Mean of each metric across `results`, skipping `None` values per metric. A metric
+/// that is `None` in every row stays `None` (no rows to average); otherwise the value
+/// is the arithmetic mean of the present values for that metric.
+pub fn aggregate(results: &[(String, Metrics)]) -> Metrics {
+    let mean = |select: fn(&Metrics) -> Option<f64>| -> Option<f64> {
+        let vals: Vec<f64> = results.iter().filter_map(|(_, m)| select(m)).collect();
+        if vals.is_empty() {
+            None
+        } else {
+            Some(vals.iter().sum::<f64>() / vals.len() as f64)
+        }
+    };
+    Metrics {
+        sim_o: mean(|m| m.sim_o),
+        wer: mean(|m| m.wer),
+        mos_proxy: mean(|m| m.mos_proxy),
+        ttfb_ms: mean(|m| m.ttfb_ms),
+        rtf: mean(|m| m.rtf),
+    }
+}
+
 /// Run an external audio-eval helper and parse a float from its last stdout line.
 /// `env_var` holds a command prefix (e.g. `"micromamba run -n syrinx python scripts/eval_mos.py"`);
 /// the synth output WAV path is appended, plus `extra` (the reference text, for WER) when given.
