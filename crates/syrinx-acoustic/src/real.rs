@@ -15,7 +15,8 @@
 //! is what the reference dumper records — under that path all padding masks are
 //! all-true, so attention is unmasked.
 
-use candle_core::{safetensors, DType, Device, Result, Tensor, D};
+use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
+use candle_core::{safetensors, DType, Device, Module, Result, Tensor, D};
 use std::collections::HashMap;
 
 const ENC_DIM: usize = 512; // encoder hidden
@@ -93,9 +94,49 @@ impl StreamCfg {
 }
 
 /// The real CosyVoice2 flow `CausalMaskedDiffWithXvec`, loaded from fp32 safetensors.
+///
+/// Two precisions share this one struct and one forward, exactly like the LM:
+///   * **fp32 (default, parity)** — every weight kept in `w` as f32; [`Flow::load`],
+///     byte-unchanged. `linear` is the plain `x @ Wᵀ` reference matmul.
+///   * **int4 (`load_quantized`)** — every plain-`linear()` weight (the conformer
+///     `linear_q/k/v/pos/out` + `feed_forward.w_1/w_2`, the estimator transformer
+///     `to_q/k/v` + `to_out` + gelu-FF, the `time_mlp`/resnet `mlp.1`, the
+///     `spk_embed_affine` / `encoder_proj` / subsample projections) is quantized to GGML
+///     `Q4_0` and lives in `qmm` as [`QMatMul`]; `linear` dispatches to it. Conv kernels,
+///     LayerNorm/`pos_bias`/biases and the `input_embedding` lookup stay f32 in `w` (they
+///     are not plain `x @ Wᵀ` matmuls). All forward math is otherwise identical.
 pub struct Flow {
     w: HashMap<String, Tensor>,
+    /// Quantized `linear()` weights (int4), keyed by the same name as the fp32 weight.
+    /// Empty for the fp32 build; populated by [`Flow::load_quantized`].
+    qmm: HashMap<String, QMatMul>,
+    /// Sum of the `QTensor` storage bytes realized by quantization (0 in the fp32 build).
+    quant_bytes: usize,
     dev: Device,
+}
+
+/// Realized weight footprint of a loaded [`Flow`], split into the int4-quantized
+/// `linear()` weights and the retained dense (f32) part (conv kernels, norms, biases,
+/// `input_embedding`). `total_bytes` is the headline size number.
+#[derive(Debug, Clone, Copy)]
+pub struct FlowFootprint {
+    /// Bytes held by the `Q4_0` quantized `linear()` weights (0 in the fp32 build).
+    pub quant_bytes: usize,
+    /// Bytes held by the retained dense f32 weights.
+    pub dense_bytes: usize,
+    /// Number of `linear()` weights quantized to int4.
+    pub n_quantized: usize,
+}
+
+impl FlowFootprint {
+    /// Total realized weight bytes (`quant + dense`).
+    pub fn total_bytes(&self) -> usize {
+        self.quant_bytes + self.dense_bytes
+    }
+    /// Total realized weight footprint in mebibytes.
+    pub fn total_mb(&self) -> f64 {
+        self.total_bytes() as f64 / (1024.0 * 1024.0)
+    }
 }
 
 impl Flow {
@@ -106,7 +147,62 @@ impl Flow {
         for (k, v) in raw {
             w.insert(k, v.to_dtype(DType::F32)?);
         }
-        Ok(Self { w, dev })
+        Ok(Self { w, qmm: HashMap::new(), quant_bytes: 0, dev })
+    }
+
+    /// Load the same `flow_fp32.safetensors`, but quantize every plain-`linear()` weight
+    /// to **int4** (GGML `Q4_0`) — the README size goal, mirroring [`Qwen2Lm::load_quantized`].
+    ///
+    /// Quantized (one `QMatMul` each): every weight name [`is_quant_linear_flow`] flags —
+    /// the conformer attention/FFN projections, the estimator transformer + gelu-FF, the
+    /// time/resnet MLP linears, and the `spk_embed`/`encoder_proj`/subsample projections.
+    /// These are all true `x @ Wᵀ` matmuls, so `QMatMul::forward` is the same op with an
+    /// int4 weight. `Q4_0` runs 32-wide blocks along the inner (`in_features`) dim; a
+    /// weight whose inner dim is not a multiple of 32 is left dense in f16 (recorded).
+    ///
+    /// Kept dense (f32): conv1d kernels, LayerNorm weights, `pos_bias_u/v`, all biases,
+    /// and the `input_embedding` lookup table — none are plain `x @ Wᵀ` matmuls.
+    ///
+    /// int4 trades accuracy for size; the forward is otherwise byte-identical to
+    /// [`Flow::load`]. The on-box SIM-o eval measures the quality cost.
+    pub fn load_quantized(path: &str, dev: Device) -> Result<Self> {
+        let raw = safetensors::load(path, &dev)?;
+        let mut w = HashMap::with_capacity(raw.len());
+        let mut qmm = HashMap::new();
+        let mut quant_bytes = 0usize;
+        for (k, v) in raw {
+            let vf = v.to_dtype(DType::F32)?;
+            if is_quant_linear_flow(&k) {
+                let dims = vf.dims();
+                let inner = *dims.last().unwrap_or(&0);
+                // Q4_0 needs the inner dim to be a multiple of the 32-element block.
+                if dims.len() == 2 && inner % GgmlDType::Q4_0.block_size() == 0 {
+                    let qt = QTensor::quantize(&vf, GgmlDType::Q4_0)?;
+                    quant_bytes += qt.storage_size_in_bytes();
+                    qmm.insert(k, QMatMul::from_qtensor(qt)?);
+                    continue;
+                }
+                // Not block-aligned: keep dense in f16 (none expected for these dims).
+                w.insert(k, vf.to_dtype(DType::F16)?);
+                continue;
+            }
+            w.insert(k, vf);
+        }
+        Ok(Self { w, qmm, quant_bytes, dev })
+    }
+
+    /// Realized weight footprint (quantized + dense) of this loaded flow.
+    pub fn footprint(&self) -> FlowFootprint {
+        let dense_bytes: usize = self
+            .w
+            .values()
+            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+            .sum();
+        FlowFootprint {
+            quant_bytes: self.quant_bytes,
+            dense_bytes,
+            n_quantized: self.qmm.len(),
+        }
     }
 
     fn g(&self, name: &str) -> Result<Tensor> {
@@ -117,9 +213,23 @@ impl Flow {
     }
 
     /// `x @ W^T (+ b)` for `[.., in]` input and `[out, in]` weight.
+    ///
+    /// When a quantized `QMatMul` exists for `w` (the int4 build) it computes the same
+    /// `x @ Wᵀ` with an int4 weight (QMatMul requires a contiguous f32 input); otherwise
+    /// it is the dense fp32 matmul. The bias, when present, is always added in f32. The
+    /// fp32 build has no `qmm` entry, so its path is byte-for-byte the original matmul.
     fn linear(&self, x: &Tensor, w: &str, b: Option<&str>) -> Result<Tensor> {
-        let weight = self.g(w)?;
-        let y = x.broadcast_matmul(&weight.t()?)?;
+        let y = if let Some(qm) = self.qmm.get(w) {
+            qm.forward(&x.contiguous()?)?
+        } else {
+            let weight = self.g(w)?;
+            if weight.dtype() == DType::F32 {
+                x.broadcast_matmul(&weight.t()?)?
+            } else {
+                // f16 dense fallback (non-block-aligned weight): upcast for the matmul.
+                x.broadcast_matmul(&weight.to_dtype(DType::F32)?.t()?)?
+            }
+        };
         match b {
             Some(bn) => y.broadcast_add(&self.g(bn)?),
             None => Ok(y),
@@ -1007,6 +1117,43 @@ fn hamming_crossfade(emit: &Tensor, prev_tail: &Tensor, dev: &Device) -> Result<
 }
 
 // ============================ free fns ============================
+
+/// Per-`linear()` weight suffixes that are real `x @ Wᵀ` matmuls in the flow, and so
+/// are quantized to int4 in [`Flow::load_quantized`]. Every name here is passed to
+/// [`Flow::linear`]; conv kernels, LayerNorm weights, `pos_bias_u/v`, biases and the
+/// `input_embedding` lookup are excluded (they are not plain matmuls).
+const QUANT_LINEAR_FLOW_SUFFIXES: [&str; 16] = [
+    // conformer RelPositionMultiHeadedAttention
+    ".linear_q.weight",
+    ".linear_k.weight",
+    ".linear_v.weight",
+    ".linear_pos.weight",
+    ".linear_out.weight",
+    // conformer PositionwiseFeedForward
+    ".w_1.weight",
+    ".w_2.weight",
+    // estimator diffusers BasicTransformerBlock self-attn + gelu FF
+    ".to_q.weight",
+    ".to_k.weight",
+    ".to_v.weight",
+    ".to_out.0.weight",
+    ".net.0.proj.weight",
+    ".net.2.weight",
+    // estimator resnet time-MLP (mlp.1) and time_mlp (linear_1/linear_2)
+    ".mlp.1.weight",
+    ".linear_1.weight",
+    ".linear_2.weight",
+];
+
+/// Whether `name` is a plain `linear()` weight the flow quantizes to int4: any suffix
+/// in [`QUANT_LINEAR_FLOW_SUFFIXES`], or the two standalone projections
+/// (`spk_embed_affine_layer` / `encoder_proj`) and the LinearNoSubsampling `out.0`.
+fn is_quant_linear_flow(name: &str) -> bool {
+    name == "spk_embed_affine_layer.weight"
+        || name == "encoder_proj.weight"
+        || name.ends_with(".out.0.weight")
+        || QUANT_LINEAR_FLOW_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
 
 /// Pad the last (time) dim with zeros: `left` then `right`.
 fn pad_time(x: &Tensor, left: usize, right: usize) -> Result<Tensor> {

@@ -37,16 +37,51 @@ const ROPE_THETA: f32 = 1_000_000.0;
 ///     are f32 in both. The forward, sampler, KV-cache and generation loop are byte-for
 ///     -byte the same code path; only the per-`linear` weight representation differs.
 pub struct Qwen2Lm {
-    /// Dense weights: norms + biases (f32) and, in the quantized build, the f16 embed
-    /// tables. In the fp32 build this holds every weight.
+    /// Dense weights: norms + biases (f32). In the fp32 build this holds every weight
+    /// (embeds included, as f32); in the quantized build the embeds move to `qembed`.
     w: HashMap<String, Tensor>,
     /// Quantized linear weights, keyed by the same name as the fp32 weight. Empty for
     /// the fp32 build; populated by [`Qwen2Lm::load_quantized`].
     qmm: HashMap<String, QMatMul>,
+    /// int8-quantized embedding lookup tables (dequant-on-gather), keyed by table name.
+    /// Empty for the fp32 build; populated by [`Qwen2Lm::load_quantized`].
+    qembed: HashMap<String, QEmbed>,
     /// Sum of the `QTensor` storage sizes (bytes) realized by quantization — 0 in the
     /// fp32 build. Combined with the retained dense `w` to report the footprint.
     quant_bytes: usize,
     dev: Device,
+}
+
+/// A per-row symmetric **int8**-quantized embedding table, supporting a
+/// *dequant-on-gather* lookup: an embedding is a row lookup (`index_select`), not a
+/// matmul, so there is no `QMatMul` here — we `index_select` the needed rows of the
+/// int8 store + their per-row scales, **then** dequantize only those few rows to f32.
+/// The full f32 table is never reconstructed.
+struct QEmbed {
+    /// `[V, H]` u8: each signed int8 weight `q ∈ [-127,127]` stored as `q + 128`
+    /// (range `[1,255]`) so it fits U8 — candle's only 1-byte dtype. One byte per
+    /// element ⇒ exactly half the f16 table it replaces.
+    q: Tensor,
+    /// `[V, 1]` f32 per-row scale `max(|row|)/127`; dequant of a row is `(q-128)*scale`.
+    scale: Tensor,
+    /// Realized storage bytes (`q` u8 + `scale` f32).
+    bytes: usize,
+}
+
+/// Per-row symmetric int8-quantize an `[V, H]` f32 embedding table for
+/// dequant-on-gather. Each row carries its own scale `max(|row|)/127`; its weights are
+/// `round(row/scale)` clamped to `[-127,127]`, stored `+128` as u8. An all-zero row
+/// quantizes to all-`128` (the `+1e-12` keeps the `0/0` finite) ⇒ dequantizes to zeros.
+fn quantize_embed_int8(table: &Tensor) -> Result<QEmbed> {
+    let amax = table.abs()?.max_keepdim(D::Minus1)?; // [V, 1]
+    let scale = ((amax / 127.0)? + 1e-12)?; // [V, 1], f32; +eps guards an all-zero row
+    let q = table
+        .broadcast_div(&scale)?
+        .round()?
+        .clamp(-127f32, 127f32)?; // [V, H], integer-valued f32 in [-127,127]
+    let q = (q + 128.0)?.to_dtype(DType::U8)?; // store offset by +128 (range [1,255])
+    let bytes = q.elem_count() + scale.elem_count() * DType::F32.size_in_bytes();
+    Ok(QEmbed { q, scale, bytes })
 }
 
 /// Realized on-disk-equivalent footprint of a loaded [`Qwen2Lm`], split into the
@@ -57,16 +92,20 @@ pub struct Qwen2Lm {
 pub struct Footprint {
     /// Bytes held by the `Q4_0` quantized linear weights (0 in the fp32 build).
     pub quant_bytes: usize,
-    /// Bytes held by the retained dense weights (embeds f16, norms/biases f32).
+    /// Bytes held by the int8-quantized embedding tables (0 in the fp32 build, where
+    /// the embeds live in `dense_bytes` as f32 instead).
+    pub embed_bytes: usize,
+    /// Bytes held by the retained dense weights (norms/biases f32, plus the f32 embeds
+    /// in the fp32 build).
     pub dense_bytes: usize,
     /// Number of weights that were quantized to int4.
     pub n_quantized: usize,
 }
 
 impl Footprint {
-    /// Total realized weight bytes (`quant + dense`).
+    /// Total realized weight bytes (`quant + int8-embed + dense`).
     pub fn total_bytes(&self) -> usize {
-        self.quant_bytes + self.dense_bytes
+        self.quant_bytes + self.embed_bytes + self.dense_bytes
     }
     /// Total realized weight footprint in mebibytes.
     pub fn total_mb(&self) -> f64 {
@@ -151,6 +190,7 @@ impl Qwen2Lm {
         Ok(Self {
             w,
             qmm: HashMap::new(),
+            qembed: HashMap::new(),
             quant_bytes: 0,
             dev,
         })
@@ -168,9 +208,14 @@ impl Qwen2Lm {
     /// inner dim is **not** a multiple of 32 is left dense in f16 (recorded, none occur
     /// for these dims).
     ///
-    /// Kept dense: the embedding tables (`embed_tokens` / `llm_embedding` /
-    /// `speech_embedding`) as an **f16** lookup (an `index_select` gather, not a matmul),
-    /// the RMSNorm weights (f32, tiny) and the attention q/k/v **biases** (f32, tiny).
+    /// Quantized to **int8** (per-row symmetric, [`QEmbed`]): the embedding tables
+    /// (`embed_tokens` / `llm_embedding` / `speech_embedding`). These are `index_select`
+    /// gathers, not matmuls, so they are *not* `QMatMul`s — the gathered rows are
+    /// dequantized on lookup (see [`Qwen2Lm::embed_rows`]). int8 halves the f16 tables
+    /// (1 byte/elem + a tiny per-row scale) — the embeds were the post-int4 footprint bulk.
+    ///
+    /// Kept dense: the RMSNorm weights (f32, tiny) and the attention q/k/v **biases**
+    /// (f32, tiny).
     ///
     /// int4 trades accuracy for size; the forward is otherwise identical, so the
     /// quantized logits track but do not equal the fp32 logits (see the root
@@ -179,6 +224,7 @@ impl Qwen2Lm {
         let raw = safetensors::load(path, &dev)?;
         let mut w = HashMap::with_capacity(raw.len());
         let mut qmm = HashMap::new();
+        let mut qembed = HashMap::new();
         let mut quant_bytes = 0usize;
         for (k, v) in raw {
             let vf = v.to_dtype(DType::F32)?;
@@ -196,9 +242,10 @@ impl Qwen2Lm {
                 w.insert(k, vf.to_dtype(DType::F16)?);
                 continue;
             }
-            // Embedding tables -> f16 lookup; everything else (norms, biases) stays f32.
+            // Embedding tables -> per-row int8 dequant-on-gather lookup; everything else
+            // (norms, biases) stays f32.
             if is_embedding_table(&k) {
-                w.insert(k, vf.to_dtype(DType::F16)?);
+                qembed.insert(k, quantize_embed_int8(&vf)?);
             } else {
                 w.insert(k, vf);
             }
@@ -206,6 +253,7 @@ impl Qwen2Lm {
         Ok(Self {
             w,
             qmm,
+            qembed,
             quant_bytes,
             dev,
         })
@@ -218,8 +266,10 @@ impl Qwen2Lm {
             .values()
             .map(|t| t.elem_count() * t.dtype().size_in_bytes())
             .sum();
+        let embed_bytes: usize = self.qembed.values().map(|e| e.bytes).sum();
         Footprint {
             quant_bytes: self.quant_bytes,
+            embed_bytes,
             dense_bytes,
             n_quantized: self.qmm.len(),
         }
@@ -404,12 +454,21 @@ impl Qwen2Lm {
     /// Gather rows `ids` from a `[V, HIDDEN]` embedding table, returning `[1, n, HIDDEN]`.
     ///
     /// `ids` are u32 token ids; this is a plain row lookup (the `nn.Embedding` op).
+    ///
+    /// In the int8 quantized build the table lives in `qembed` as per-row int8: we
+    /// `index_select` only the needed rows of the u8 store + their per-row scales, then
+    /// **dequantize just those rows** to f32 (`(q-128)*scale`) — the full f32 table is
+    /// never reconstructed. In the fp32 build the table is a plain f32 tensor in `w`.
     fn embed_rows(&self, table: &str, ids: &[u32]) -> Result<Tensor> {
-        let w = self.g(table)?; // [V, HIDDEN]
         let idx = Tensor::from_vec(ids.to_vec(), (ids.len(),), &self.dev)?;
+        if let Some(qe) = self.qembed.get(table) {
+            let q = qe.q.index_select(&idx, 0)?.to_dtype(DType::F32)?; // [n, HIDDEN]
+            let s = qe.scale.index_select(&idx, 0)?; // [n, 1]
+            let rows = (q - 128.0)?.broadcast_mul(&s)?; // [n, HIDDEN], dequantized
+            return rows.unsqueeze(0); // [1, n, HIDDEN]
+        }
+        let w = self.g(table)?; // [V, HIDDEN]
         let rows = w.index_select(&idx, 0)?; // [n, HIDDEN]
-        // In the quantized build the table is f16; upcast the gathered rows to f32 so the
-        // whole transformer (and the QMatMul inputs) stay f32. A no-op in the fp32 build.
         let rows = rows.to_dtype(DType::F32)?;
         rows.unsqueeze(0) // [1, n, HIDDEN]
     }

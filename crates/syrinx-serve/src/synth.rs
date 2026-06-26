@@ -229,14 +229,15 @@ impl Synthesizer {
         Self::load_on_device_inner(cfg, dev, false)
     }
 
-    /// Load every sub-model, but build the LM as the **int4 (Q4_0) quantized** variant
-    /// ([`syrinx_lm::real::Qwen2Lm::load_quantized`]) for a ~4× smaller LM footprint —
-    /// the README size goal. Every other sub-model loads exactly as in [`load`]; only
-    /// the LM's big linear weights become int4.
+    /// Load every sub-model in its **quantized** variant for the README ~270 MB size
+    /// goal: the LM via [`syrinx_lm::real::Qwen2Lm::load_quantized`] (int4 big linears +
+    /// int8 dequant-on-gather embedding tables) and the flow via [`Flow::load_quantized`]
+    /// (Q4_0 `linear()` weights). The CAM++ speaker, HiFT vocoder and tokenizers load
+    /// exactly as in [`load`] (small / not the footprint bulk).
     ///
-    /// int4 trades quality for size; CPU stays the parity device for the **fp32** LM
-    /// ([`load`]), and the quantized LM's output quality is measured on the box (SIM-o),
-    /// not asserted to fp32 parity here.
+    /// int4/int8 trade quality for size; CPU stays the parity device for the **fp32**
+    /// path ([`load`]), and the quantized quality is measured on the box (SIM-o), not
+    /// asserted to fp32 parity here.
     pub fn load_quantized(cfg: &SynthConfig) -> Result<Self, SynthError> {
         Self::load_on_device_inner(cfg, Device::Cpu, true)
     }
@@ -247,8 +248,9 @@ impl Synthesizer {
         Self::load_on_device_inner(cfg, dev, true)
     }
 
-    /// Shared loader for the fp32 and int4 LM paths. `quantized` selects the LM
-    /// precision; all other sub-models are identical.
+    /// Shared loader for the fp32 and quantized paths. `quantized` selects the LM **and**
+    /// flow precision (int4 linears + int8 embeds for the LM, Q4_0 linears for the flow);
+    /// all other sub-models are identical.
     fn load_on_device_inner(
         cfg: &SynthConfig,
         dev: Device,
@@ -262,7 +264,11 @@ impl Synthesizer {
         } else {
             syrinx_lm::real::Qwen2Lm::load(&cfg.lm_weights, dev.clone())?
         };
-        let flow = Flow::load(&cfg.flow_weights, dev.clone())?;
+        let flow = if quantized {
+            Flow::load_quantized(&cfg.flow_weights, dev.clone())?
+        } else {
+            Flow::load(&cfg.flow_weights, dev.clone())?
+        };
         let vocoder = HiftVocoder::load(&cfg.hift_weights, dev.clone())?;
         Ok(Self {
             tokenizer,
