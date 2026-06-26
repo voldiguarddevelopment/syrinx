@@ -385,6 +385,105 @@ impl Synth for MultiVoiceSynth {
     }
 }
 
+/// The **real CosyVoice3** synth: drives the CV3 [`Cv3Synthesizer`](crate::synth_cv3::Cv3Synthesizer)
+/// for every request and returns the 24 kHz audio encoded as WAV bytes — the CV3
+/// counterpart of [`RealSynth`], implementing the same [`Synth`] trait so it slots into
+/// the identical Axum routes (`router_with_synth` / `MultiVoiceSynth` route by `req.model`/
+/// `req.voice`; this is additive, the CV2 paths are untouched).
+///
+/// Constructed **bound to one reference voice** (prompt transcript + its already-resampled
+/// 16 kHz/24 kHz waveforms), exactly like [`RealSynth`]. Each request synthesizes
+/// `req.input` in that voice; `req.model`/`req.voice` are advisory (single configured voice).
+///
+/// The CV3 synthesizer has **no native chunk-streaming path** (only the buffered
+/// `synthesize`), so [`Cv3RealSynth`] does not override
+/// [`Synth::synthesize_stream`] — a `response_format == "stream"` request therefore
+/// uses the handler's buffered-fallback (the whole body wrapped in one chunk).
+/// [`Cv3Synthesizer::synthesize`](crate::synth_cv3::Cv3Synthesizer::synthesize) takes
+/// `&mut self`, so the loaded models live behind a [`std::sync::Mutex`]; requests to a
+/// single `Cv3RealSynth` are serialized (the single-GPU/CPU default).
+#[cfg(feature = "real")]
+pub struct Cv3RealSynth {
+    synth: Arc<std::sync::Mutex<crate::synth_cv3::Cv3Synthesizer>>,
+    prompt_text: String,
+    ref_wav_16k: Vec<f32>,
+    ref_wav_24k: Vec<f32>,
+    seed: u64,
+    max_gen_steps: Option<usize>,
+}
+
+#[cfg(feature = "real")]
+impl Cv3RealSynth {
+    /// Build a `Cv3RealSynth` from a loaded [`Cv3Synthesizer`](crate::synth_cv3::Cv3Synthesizer)
+    /// and a reference voice (`prompt_text` + its resampled 16 kHz/24 kHz mono
+    /// waveforms). Defaults: `seed = 0`, no live-LM step cap (the real ratio).
+    pub fn new(
+        synth: crate::synth_cv3::Cv3Synthesizer,
+        prompt_text: impl Into<String>,
+        ref_wav_16k: Vec<f32>,
+        ref_wav_24k: Vec<f32>,
+    ) -> Self {
+        Self {
+            synth: Arc::new(std::sync::Mutex::new(synth)),
+            prompt_text: prompt_text.into(),
+            ref_wav_16k,
+            ref_wav_24k,
+            seed: 0,
+            max_gen_steps: None,
+        }
+    }
+
+    /// Set the LM sampling seed (default `0`).
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Cap the live LM generation steps (default `None` = the real `|tok(tts_text)|*20`
+    /// ratio). A cap keeps CPU runs tractable; see `synth_cv3::Cv3SynthInputs`.
+    pub fn with_max_gen_steps(mut self, max_gen_steps: Option<usize>) -> Self {
+        self.max_gen_steps = max_gen_steps;
+        self
+    }
+}
+
+#[cfg(feature = "real")]
+impl Synth for Cv3RealSynth {
+    fn synthesize(&self, req: &SpeechRequest) -> Vec<u8> {
+        let inputs = crate::synth_cv3::Cv3SynthInputs {
+            lm_seed: self.seed,
+            max_gen_steps: self.max_gen_steps,
+            ..Default::default()
+        };
+        // The Synth trait has no error channel; on a poisoned lock or a synth failure we
+        // log and return an empty body (the handler maps it to a typed 500) rather than panic.
+        let mut synth = match self.synth.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let wav = match synth.synthesize(
+            &req.input,
+            &self.prompt_text,
+            &self.ref_wav_16k,
+            &self.ref_wav_24k,
+            &inputs,
+        ) {
+            Ok(wav) => wav,
+            Err(e) => {
+                eprintln!("syrinx-serve: cv3 synthesis failed: {e}");
+                return Vec::new();
+            }
+        };
+        match crate::wavio::encode_wav_24k(&wav) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("syrinx-serve: wav encode failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+}
+
 /// The typed JSON error body returned for a malformed request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
@@ -438,6 +537,15 @@ pub fn router_with_real_synth(synth: RealSynth) -> Router {
     router_with_synth(Arc::new(synth))
 }
 
+/// Build the audio router wired to a [`Cv3RealSynth`], so `POST /v1/audio/speech`
+/// returns **real CosyVoice3** audio (24 kHz WAV) in the configured reference voice.
+/// The CV3 counterpart of [`router_with_real_synth`]; `Cv3RealSynth` is just a
+/// [`Synth`], so this is a thin convenience over [`router_with_synth`].
+#[cfg(feature = "real")]
+pub fn router_with_cv3_synth(synth: Cv3RealSynth) -> Router {
+    router_with_synth(Arc::new(synth))
+}
+
 /// Boot the OpenAI-compatible audio server around `synth` and serve it **blocking**
 /// on `addr` until the process is killed. Runs a self-contained multi-thread Tokio
 /// runtime internally so a synchronous caller (e.g. the `syrinx serve` CLI command)
@@ -445,7 +553,22 @@ pub fn router_with_real_synth(synth: RealSynth) -> Router {
 /// error.
 #[cfg(feature = "real")]
 pub fn serve_blocking(synth: RealSynth, addr: std::net::SocketAddr) -> std::io::Result<()> {
-    let app = router_with_real_synth(synth);
+    serve_router_blocking(router_with_real_synth(synth), addr)
+}
+
+/// CV3 counterpart of [`serve_blocking`]: boot the OpenAI-compatible audio server
+/// backed by a [`Cv3RealSynth`] and serve it **blocking** on `addr`. Used by the
+/// `syrinx serve --cv3` CLI command. Same routes + runtime as the CV2 path.
+#[cfg(feature = "real")]
+pub fn serve_blocking_cv3(synth: Cv3RealSynth, addr: std::net::SocketAddr) -> std::io::Result<()> {
+    serve_router_blocking(router_with_cv3_synth(synth), addr)
+}
+
+/// Shared blocking-serve core: run `app` on a self-contained multi-thread Tokio
+/// runtime, binding `addr`. The CV2 ([`serve_blocking`]) and CV3
+/// ([`serve_blocking_cv3`]) entry points differ only in which router they pass.
+#[cfg(feature = "real")]
+fn serve_router_blocking(app: Router, addr: std::net::SocketAddr) -> std::io::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;

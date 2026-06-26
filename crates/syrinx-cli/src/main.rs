@@ -34,7 +34,8 @@ mod real {
 
     use syrinx_prosody::render_plan::RenderPlan;
     use syrinx_serve::synth::{SynthConfig, SynthInputs, Synthesizer};
-    use syrinx_serve::{wavio, RealSynth};
+    use syrinx_serve::synth_cv3::{Cv3SynthConfig, Cv3SynthInputs, Cv3Synthesizer};
+    use syrinx_serve::{wavio, Cv3RealSynth, RealSynth};
 
     const USAGE: &str = "\
 syrinx — local CosyVoice2 TTS + zero-shot voice cloning (pure Rust)
@@ -55,11 +56,18 @@ COMMON OPTIONS (all commands):
     --model-dir <DIR>      Directory of sub-model files (or per-model env vars).
     --max-steps <N>        Cap on live LM generation steps (CPU tractability).
     --cuda                 Run on GPU (requires a --features cuda build).
+    --cv3                  Drive the CosyVoice3 synthesizer (synth + serve only)
+                           using the SYRINX_CV3_* model files instead of CV2.
 
 MODEL FILES (env var overrides --model-dir/<default>):
     SYRINX_LM_WEIGHTS llm_fp32.safetensors    SYRINX_SPK_WEIGHTS campplus_weights.safetensors
     SYRINX_FLOW_WEIGHTS flow_fp32.safetensors SYRINX_HIFT_WEIGHTS hift_fp32.safetensors
     SYRINX_TOK_JSON tokenizer.json            SYRINX_STOK_ONNX speech_tokenizer_v2.onnx
+
+CV3 MODEL FILES (with --cv3; env var overrides --model-dir/<default>):
+    SYRINX_CV3_LM_WEIGHTS llm_fp32.safetensors    SYRINX_CV3_SPK_WEIGHTS campplus_weights.safetensors
+    SYRINX_CV3_FLOW_WEIGHTS flow_fp32.safetensors SYRINX_CV3_HIFT_WEIGHTS hift_fp32.safetensors
+    SYRINX_CV3_TOK_JSON tokenizer.json            SYRINX_CV3_STOK_ONNX speech_tokenizer_v3.onnx
 ";
 
     const SYNTH_USAGE: &str = "\
@@ -67,22 +75,25 @@ syrinx synth — render text in a reference voice
 
     syrinx synth --text <TEXT> --prompt-text <TEXT> --ref-wav <WAV> --out <WAV>
                  [--pitch <SEMITONES>] [--rate <R>] [--plan <FILE.json>]
-                 [--model-dir <DIR>] [--max-steps <N>] [--cuda]
+                 [--model-dir <DIR>] [--max-steps <N>] [--cuda] [--cv3]
 
     --text <TEXT>          Text to speak.                              [required]
     --out <WAV>            Output 24 kHz mono 16-bit WAV.              [required]
     --rate <R>             Global speech-rate (>1 faster, <1 slower; faithful).
     --pitch <SEMITONES>    Global pitch shift (NOTE: weak training-free lever).
     --plan <FILE.json>     Load a full RenderPlan (overrides --pitch/--rate).
+    --cv3                  Use the CosyVoice3 synthesizer (SYRINX_CV3_* files);
+                           prosody plan/pitch/rate are CV2-only and are ignored.
 ";
 
     const SERVE_USAGE: &str = "\
 syrinx serve — boot the OpenAI-compatible audio server in a reference voice
 
     syrinx serve --prompt-text <TEXT> --ref-wav <WAV> [--port <N>]
-                 [--model-dir <DIR>] [--max-steps <N>] [--cuda]
+                 [--model-dir <DIR>] [--max-steps <N>] [--cuda] [--cv3]
 
     --port <N>             Listen port (default 8080); binds 127.0.0.1.
+    --cv3                  Serve the CosyVoice3 synthesizer (SYRINX_CV3_* files).
     Then POST /v1/audio/speech  {\"model\":\"syrinx\",\"input\":\"<text>\",\"voice\":\"v\"}
 ";
 
@@ -109,6 +120,7 @@ syrinx stream — chunk-streaming synthesis to a WAV
         plan: Option<PathBuf>,
         port: Option<u16>,
         hop: Option<usize>,
+        cv3: bool,
     }
 
     pub fn run() -> i32 {
@@ -190,6 +202,7 @@ syrinx stream — chunk-streaming synthesis to a WAV
                     );
                 }
                 "--cuda" => o.cuda = true,
+                "--cv3" => o.cv3 = true,
                 "-h" | "--help" => {
                     println!("{usage}");
                     std::process::exit(0);
@@ -256,6 +269,53 @@ syrinx stream — chunk-streaming synthesis to a WAV
         }
     }
 
+    /// CV3 model-file config, mirroring [`build_config`] but reading the `SYRINX_CV3_*`
+    /// env vars (falling back to `--model-dir/<default>`). The only default-name delta
+    /// from CV2 is the v3 speech tokenizer (`speech_tokenizer_v3.onnx`).
+    fn build_cv3_config(model_dir: &Option<PathBuf>) -> Result<Cv3SynthConfig, String> {
+        Ok(Cv3SynthConfig {
+            lm_weights: resolve_path("SYRINX_CV3_LM_WEIGHTS", "llm_fp32.safetensors", model_dir)?,
+            spk_weights: resolve_path(
+                "SYRINX_CV3_SPK_WEIGHTS",
+                "campplus_weights.safetensors",
+                model_dir,
+            )?,
+            flow_weights: resolve_path(
+                "SYRINX_CV3_FLOW_WEIGHTS",
+                "flow_fp32.safetensors",
+                model_dir,
+            )?,
+            hift_weights: resolve_path(
+                "SYRINX_CV3_HIFT_WEIGHTS",
+                "hift_fp32.safetensors",
+                model_dir,
+            )?,
+            tokenizer_json: resolve_path("SYRINX_CV3_TOK_JSON", "tokenizer.json", model_dir)?,
+            speech_tokenizer_onnx: resolve_path(
+                "SYRINX_CV3_STOK_ONNX",
+                "speech_tokenizer_v3.onnx",
+                model_dir,
+            )?,
+        })
+    }
+
+    /// Load every CV3 sub-model. `--cuda` behaves exactly as in [`load_synth`]: it
+    /// picks a GPU device on a `--features cuda` build, else transparently CPU.
+    fn load_cv3_synth(o: &Opts) -> Result<Cv3Synthesizer, String> {
+        let cfg = build_cv3_config(&o.model_dir)?;
+        if o.cuda {
+            #[cfg(not(feature = "cuda"))]
+            eprintln!(
+                "syrinx: --cuda requested but this binary was built without the `cuda` \
+                 feature; running on CPU"
+            );
+            let dev = syrinx_serve::synth::pick_device(None);
+            Cv3Synthesizer::load_on_device(&cfg, dev).map_err(|e| e.to_string())
+        } else {
+            Cv3Synthesizer::load(&cfg).map_err(|e| e.to_string())
+        }
+    }
+
     /// Read the reference voice: `--prompt-text` + the `--ref-wav` resampled to the
     /// 16 kHz + 24 kHz mono buffers the synthesizer expects.
     fn read_voice(o: &Opts) -> Result<(String, Vec<f32>, Vec<f32>), String> {
@@ -287,9 +347,41 @@ syrinx stream — chunk-streaming synthesis to a WAV
         Ok(None)
     }
 
+    /// CV3 render path for `synth --cv3`: load the CV3 synthesizer and render
+    /// `tts_text` in the reference voice to a 24 kHz WAV. The editable prosody plan
+    /// (`--pitch/--rate/--plan`) is a CV2-only lever, so it is not applied here.
+    fn cmd_synth_cv3(o: &Opts, text: &str, out: &std::path::Path) -> Result<(), String> {
+        let (prompt_text, r16, r24) = read_voice(o)?;
+        if o.plan.is_some() || o.pitch.is_some() || o.rate.is_some() {
+            eprintln!(
+                "syrinx synth --cv3: prosody plan/pitch/rate are CV2-only and are ignored \
+                 on the CV3 path"
+            );
+        }
+        let mut synth = load_cv3_synth(o)?;
+        let inputs = Cv3SynthInputs {
+            lm_seed: 0,
+            max_gen_steps: o.max_steps,
+            ..Default::default()
+        };
+        let wav = synth
+            .synthesize(text, &prompt_text, &r16, &r24, &inputs)
+            .map_err(|e| e.to_string())?;
+        wavio::write_wav_24k(out, &wav).map_err(|e| e.to_string())?;
+        eprintln!(
+            "syrinx: wrote {} ({} samples, 24 kHz mono, CV3)",
+            out.display(),
+            wav.len()
+        );
+        Ok(())
+    }
+
     fn cmd_synth(o: Opts) -> Result<(), String> {
         let text = o.text.clone().ok_or("missing required --text")?;
         let out = o.out.clone().ok_or("missing required --out")?;
+        if o.cv3 {
+            return cmd_synth_cv3(&o, &text, &out);
+        }
         let (prompt_text, r16, r24) = read_voice(&o)?;
         let plan = build_plan(&o)?;
         let mut synth = load_synth(&o)?;
@@ -315,6 +407,13 @@ syrinx stream — chunk-streaming synthesis to a WAV
     }
 
     fn cmd_stream(o: Opts) -> Result<(), String> {
+        if o.cv3 {
+            return Err(
+                "the CV3 synthesizer has no chunk-streaming path; use `synth --cv3` \
+                 (buffered) or `serve --cv3`"
+                    .to_string(),
+            );
+        }
         let text = o.text.clone().ok_or("missing required --text")?;
         let out = o.out.clone().ok_or("missing required --out")?;
         let (prompt_text, r16, r24) = read_voice(&o)?;
@@ -347,9 +446,16 @@ syrinx stream — chunk-streaming synthesis to a WAV
     fn cmd_serve(o: Opts) -> Result<(), String> {
         let (prompt_text, r16, r24) = read_voice(&o)?;
         let port = o.port.unwrap_or(8080);
+        let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+        if o.cv3 {
+            let synth = load_cv3_synth(&o)?;
+            let real =
+                Cv3RealSynth::new(synth, prompt_text, r16, r24).with_max_gen_steps(o.max_steps);
+            eprintln!("syrinx serve --cv3: listening on http://{addr}  (POST /v1/audio/speech)");
+            return syrinx_serve::serve_blocking_cv3(real, addr).map_err(|e| e.to_string());
+        }
         let synth = load_synth(&o)?;
         let real = RealSynth::new(synth, prompt_text, r16, r24).with_max_gen_steps(o.max_steps);
-        let addr: SocketAddr = ([127, 0, 0, 1], port).into();
         eprintln!("syrinx serve: listening on http://{addr}  (POST /v1/audio/speech)");
         syrinx_serve::serve_blocking(real, addr).map_err(|e| e.to_string())
     }
