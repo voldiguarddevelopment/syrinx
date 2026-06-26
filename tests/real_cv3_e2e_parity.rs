@@ -49,7 +49,7 @@ use candle_core::{DType, Device, Tensor};
 use std::collections::HashMap;
 use std::path::Path;
 
-use syrinx_serve::synth_cv3::{Cv3SynthConfig, Cv3SynthInputs, Cv3Synthesizer};
+use syrinx_serve::synth_cv3::{Cv3SynthConfig, Cv3Synthesizer};
 
 fn max_abs_diff(a: &Tensor, b: &Tensor) -> f32 {
     (a - b)
@@ -282,26 +282,41 @@ fn real_cv3_e2e_frontend_chain_and_smoke() {
     }
 
     // ---- (3) full synthesize smoke: live LM generation -> finite non-silent audio ----
-    let live = synth
-        .synthesize(
-            TTS_TEXT,
-            PROMPT_TEXT,
-            &ref_wav_16k,
-            &ref_wav_24k,
-            // Cap live LM generation (KV-cached but still costly on CPU for a smoke);
-            // overridable via SYRINX_CV3_SYNTH_MAXSTEPS.
-            &Cv3SynthInputs {
-                lm_seed: 1234,
-                max_gen_steps: Some(
-                    std::env::var("SYRINX_CV3_SYNTH_MAXSTEPS")
-                        .ok()
-                        .and_then(|s| s.parse().ok())
-                        .unwrap_or(40),
-                ),
-                ..Default::default()
-            },
-        )
-        .expect("live CV3 synthesize");
+    // Run the live chain STEPWISE (instead of the one-call `synthesize`) so a failure is
+    // diagnosable: print the generated speech-token count, the flow mel shape, and the
+    // produced HiFT source length. A 0-token gen (the AR-loop early-stop bug) shows here
+    // before the vocoder ever sees an empty mel.
+    let cap = std::env::var("SYRINX_CV3_SYNTH_MAXSTEPS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(40usize);
+    let live_cond = synth
+        .prompt_cond(TTS_TEXT, PROMPT_TEXT, &ref_wav_16k, &ref_wav_24k)
+        .expect("live prompt_cond");
+    let gen_tok = synth
+        .generate_speech_token(&live_cond, 1234, Some(cap))
+        .expect("live generate_speech_token");
+    let n_tok = gen_tok.dim(1).unwrap();
+    let prompt_len = live_cond.prompt_token.dim(1).unwrap();
+    eprintln!("live gen: speech_token.len() = {n_tok}  (prompt_token={prompt_len}, cap={cap})");
+    assert!(
+        n_tok > 0,
+        "live LM generated 0 speech tokens: the AR decode loop stopped immediately \
+         (min_len must mask the FULL control-stop range, not just EOS)"
+    );
+
+    // Flow -> mel, then the deterministic HiFT source, then vocode (each printed).
+    let z_zeros = Tensor::zeros((1, 80, 2 * (prompt_len + n_tok)), DType::F32, &dev).unwrap();
+    let live_mel = synth
+        .flow_forward(&live_cond, &gen_tok, &z_zeros, 10)
+        .expect("live flow_forward");
+    eprintln!("live flow mel shape = {:?}", live_mel.dims());
+    let source = synth
+        .deterministic_source(&live_mel)
+        .expect("live deterministic_source");
+    eprintln!("live source length = {} samples", source.dim(2).unwrap());
+    let audio_t = synth.vocode(&live_mel, &source).expect("live vocode");
+    let live: Vec<f32> = audio_t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
     assert!(!live.is_empty(), "live CV3 synthesis produced no audio");
     assert!(
         live.iter().all(|x| x.is_finite()),

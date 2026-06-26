@@ -195,6 +195,16 @@ impl Cv3Hift {
             source.clone()
         };
         let l = x.dim(D::Minus1)?;
+        // Defense: `center=True` reflect padding reads `sig[1..=pad]` and `sig[l-1-pad..]`,
+        // so it needs at least `n_fft` samples. A shorter `source` means the upstream mel
+        // is empty/degenerate (e.g. the LM AR loop produced no speech tokens) — fail with a
+        // clear error instead of indexing out of bounds inside the reflect-pad loop.
+        if l < N_FFT {
+            return Err(candle_core::Error::Msg(format!(
+                "Cv3Hift::stft: source length {l} < n_fft {N_FFT}; the source/mel is empty or \
+                 degenerate (did the speech-token generation produce zero tokens?)"
+            )));
+        }
         let sig: Vec<f32> = x.flatten_all()?.to_vec1::<f32>()?;
 
         // center=True: reflect-pad n_fft/2 on each side (no edge repeat).

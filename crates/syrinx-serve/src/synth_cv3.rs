@@ -316,18 +316,38 @@ impl Cv3Synthesizer {
             Some(z) => z.clone(),
             None => Tensor::zeros((1, MEL_NUM_MELS, total), DType::F32, &self.dev)?,
         };
-        // Cv3Flow.forward returns the generated mel (prompt-mel prefix already dropped).
+        let mel = self.flow_forward(cond, speech_token, &z, N_TIMESTEPS)?; // [1,80,2*Tg]
+        let source = self.deterministic_source(&mel)?; // [1, 1, L_src]
+        self.vocode(&mel, &source) // [1, L]
+    }
+
+    /// Run only the CV3 flow CFM mel decoder for live conditioning: feeds `cond`'s
+    /// prompt token/feat/embedding plus the generated `speech_token` + noise `z` to
+    /// [`Cv3Flow::forward`], returning the generated mel `[1, 80, 2*Tg]` (prompt-mel
+    /// prefix dropped). Exposed so callers can inspect the intermediate mel (e.g. the
+    /// smoke test prints its shape before vocoding).
+    pub fn flow_forward(
+        &self,
+        cond: &PromptCond,
+        speech_token: &Tensor,
+        z: &Tensor,
+        n_timesteps: usize,
+    ) -> Result<Tensor, SynthError> {
         let mel = self.flow.forward(
             &cond.prompt_token,
             speech_token,
             &cond.prompt_feat,
             &cond.spk_embedding,
-            &z,
-            N_TIMESTEPS,
-        )?; // [1, 80, 2*Tg]
-        let source = self.deterministic_source(&mel)?; // [1, 1, L_src]
-        let audio = self.vocoder.decode(&mel, &source)?; // [1, L]
-        Ok(audio)
+            z,
+            n_timesteps,
+        )?;
+        Ok(mel)
+    }
+
+    /// Vocode a generated mel `[1, 80, T]` with a source waveform `[1, 1, L]` into 24 kHz
+    /// audio `[1, L]` via [`Cv3Hift::decode`]. The decode STFTs the source internally.
+    pub fn vocode(&self, mel: &Tensor, source: &Tensor) -> Result<Tensor, SynthError> {
+        Ok(self.vocoder.decode(mel, source)?)
     }
 
     /// Run only the CV3 flow CFM mel decoder over **explicit reference** prompt/speech

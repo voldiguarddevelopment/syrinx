@@ -258,7 +258,20 @@ fn ras_sampling(logp: &[f32], decoded: &[u32], ignore_eos: bool, rng: &mut Split
     const TAU_R: f32 = 0.1;
     let mut logp = logp.to_vec();
     if ignore_eos {
-        logp[SPEECH_TOKEN_SIZE as usize] = f32::NEG_INFINITY;
+        // CV3's decode-stop is the WHOLE control range `SPEECH_TOKEN_SIZE..DECODER_OUT`
+        // (6561..=6760), not just the single EOS. While `step < min_len`, NONE of those
+        // control ids may be chosen — otherwise an adjacent control id (e.g. 6562) gets
+        // sampled and trips `Cv3Lm::generate`'s `top >= SPEECH_TOKEN_SIZE` stop *inside*
+        // the min_len window, ending decoding at step 0 (the live-loop "0 tokens" bug).
+        // CV2 masked only EOS because its stop set was 3 ids it happened never to hit
+        // early; CV3's wider stop set needs the wider mask to actually enforce min_len.
+        for s in logp
+            .iter_mut()
+            .take(DECODER_OUT)
+            .skip(SPEECH_TOKEN_SIZE as usize)
+        {
+            *s = f32::NEG_INFINITY;
+        }
     }
     let top = nucleus_sampling(&logp, TOP_P, TOP_K, rng);
     let start = decoded.len().saturating_sub(WIN);
