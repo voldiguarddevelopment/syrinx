@@ -12,7 +12,8 @@
 //! not), SwiGLU MLP (intermediate 4864), RoPE θ=1e6, RMSNorm eps 1e-6. The CosyVoice2
 //! head is `llm_decoder: Linear(896 -> 6564)`.
 
-use candle_core::{safetensors, DType, Device, Result, Tensor, D};
+use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
+use candle_core::{safetensors, DType, Device, Module, Result, Tensor, D};
 use std::collections::HashMap;
 
 const HIDDEN: usize = 896;
@@ -24,9 +25,53 @@ const EPS: f64 = 1e-6;
 const ROPE_THETA: f32 = 1_000_000.0;
 
 /// The real Qwen2-0.5B LM + CosyVoice2 `llm_decoder`, loaded from fp32 safetensors.
+///
+/// Two precisions share this one struct and one forward:
+///   * **fp32 (default, parity)** — every weight kept in `w` as f32; `linear` is the
+///     plain `x @ Wᵀ` reference matmul. This is [`Qwen2Lm::load`], unchanged.
+///   * **int4 (`load_quantized`)** — the big linear weights (`q/k/v/o_proj`,
+///     `gate/up/down_proj`, and the `llm_decoder` head) are quantized to GGML `Q4_0`
+///     and live in `qmm` as [`QMatMul`]; `linear` dispatches to the QMatMul (`x @ Wᵀ`,
+///     int4 weight × f32 activation). Embeddings are kept as an f16 lookup table,
+///     RMSNorm weights and the small biases stay f32. RoPE / softmax / attention math
+///     are f32 in both. The forward, sampler, KV-cache and generation loop are byte-for
+///     -byte the same code path; only the per-`linear` weight representation differs.
 pub struct Qwen2Lm {
+    /// Dense weights: norms + biases (f32) and, in the quantized build, the f16 embed
+    /// tables. In the fp32 build this holds every weight.
     w: HashMap<String, Tensor>,
+    /// Quantized linear weights, keyed by the same name as the fp32 weight. Empty for
+    /// the fp32 build; populated by [`Qwen2Lm::load_quantized`].
+    qmm: HashMap<String, QMatMul>,
+    /// Sum of the `QTensor` storage sizes (bytes) realized by quantization — 0 in the
+    /// fp32 build. Combined with the retained dense `w` to report the footprint.
+    quant_bytes: usize,
     dev: Device,
+}
+
+/// Realized on-disk-equivalent footprint of a loaded [`Qwen2Lm`], split into the
+/// quantized (int4) and dense (f16 embed + f32 norm/bias) parts. `total_bytes` is what
+/// the model actually occupies for its weights, the headline number for the README's
+/// size goal.
+#[derive(Debug, Clone, Copy)]
+pub struct Footprint {
+    /// Bytes held by the `Q4_0` quantized linear weights (0 in the fp32 build).
+    pub quant_bytes: usize,
+    /// Bytes held by the retained dense weights (embeds f16, norms/biases f32).
+    pub dense_bytes: usize,
+    /// Number of weights that were quantized to int4.
+    pub n_quantized: usize,
+}
+
+impl Footprint {
+    /// Total realized weight bytes (`quant + dense`).
+    pub fn total_bytes(&self) -> usize {
+        self.quant_bytes + self.dense_bytes
+    }
+    /// Total realized weight footprint in mebibytes.
+    pub fn total_mb(&self) -> f64 {
+        self.total_bytes() as f64 / (1024.0 * 1024.0)
+    }
 }
 
 /// Per-layer accumulated K/V for incremental (O(n)) autoregressive decoding.
@@ -93,6 +138,9 @@ impl Default for KvCache {
 
 impl Qwen2Lm {
     /// Load the converted fp32 checkpoint (`llm_fp32.safetensors`) onto `dev`.
+    ///
+    /// This is the parity build: every weight is normalised to f32 and the forward is a
+    /// clean fp32 reference match. Use [`Qwen2Lm::load_quantized`] for the int4 build.
     pub fn load(path: &str, dev: Device) -> Result<Self> {
         let raw = safetensors::load(path, &dev)?;
         // Normalise to f32 so the forward is a clean fp32 reference match.
@@ -100,7 +148,81 @@ impl Qwen2Lm {
         for (k, v) in raw {
             w.insert(k, v.to_dtype(DType::F32)?);
         }
-        Ok(Self { w, dev })
+        Ok(Self {
+            w,
+            qmm: HashMap::new(),
+            quant_bytes: 0,
+            dev,
+        })
+    }
+
+    /// Load the same `llm_fp32.safetensors`, but quantize the big linear weights to
+    /// **int4** (GGML `Q4_0`) for a ~4× smaller LM footprint (the README size goal).
+    ///
+    /// Quantized (one `QMatMul` each): every layer's `q/k/v/o_proj` and
+    /// `gate/up/down_proj`, plus the `llm_decoder` output head — these are all true
+    /// `x @ Wᵀ` matmuls, so `QMatMul::forward` is numerically the same op as the fp32
+    /// `broadcast_matmul`, just with an int4 weight. `Q4_0` blocks of 32 run along each
+    /// weight's inner (`in_features`) dim; every Qwen2 inner dim here (896 and the MLP
+    /// intermediate 4864) is a multiple of 32, so all quantize cleanly. Any weight whose
+    /// inner dim is **not** a multiple of 32 is left dense in f16 (recorded, none occur
+    /// for these dims).
+    ///
+    /// Kept dense: the embedding tables (`embed_tokens` / `llm_embedding` /
+    /// `speech_embedding`) as an **f16** lookup (an `index_select` gather, not a matmul),
+    /// the RMSNorm weights (f32, tiny) and the attention q/k/v **biases** (f32, tiny).
+    ///
+    /// int4 trades accuracy for size; the forward is otherwise identical, so the
+    /// quantized logits track but do not equal the fp32 logits (see the root
+    /// `real_lm_quant` test, which measures argmax agreement + the realized footprint).
+    pub fn load_quantized(path: &str, dev: Device) -> Result<Self> {
+        let raw = safetensors::load(path, &dev)?;
+        let mut w = HashMap::with_capacity(raw.len());
+        let mut qmm = HashMap::new();
+        let mut quant_bytes = 0usize;
+        for (k, v) in raw {
+            let vf = v.to_dtype(DType::F32)?;
+            if is_quantizable_linear(&k) {
+                let dims = vf.dims();
+                let inner = *dims.last().unwrap_or(&0);
+                // Q4_0 needs the inner dim to be a multiple of the 32-element block.
+                if dims.len() == 2 && inner % GgmlDType::Q4_0.block_size() == 0 {
+                    let qt = QTensor::quantize(&vf, GgmlDType::Q4_0)?;
+                    quant_bytes += qt.storage_size_in_bytes();
+                    qmm.insert(k, QMatMul::from_qtensor(qt)?);
+                    continue;
+                }
+                // Not block-aligned: keep this one dense in f16 (none occur for Qwen2).
+                w.insert(k, vf.to_dtype(DType::F16)?);
+                continue;
+            }
+            // Embedding tables -> f16 lookup; everything else (norms, biases) stays f32.
+            if is_embedding_table(&k) {
+                w.insert(k, vf.to_dtype(DType::F16)?);
+            } else {
+                w.insert(k, vf);
+            }
+        }
+        Ok(Self {
+            w,
+            qmm,
+            quant_bytes,
+            dev,
+        })
+    }
+
+    /// Realized weight footprint (quantized + dense bytes) of this loaded model.
+    pub fn footprint(&self) -> Footprint {
+        let dense_bytes: usize = self
+            .w
+            .values()
+            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+            .sum();
+        Footprint {
+            quant_bytes: self.quant_bytes,
+            dense_bytes,
+            n_quantized: self.qmm.len(),
+        }
     }
 
     fn g(&self, name: &str) -> Result<Tensor> {
@@ -119,9 +241,24 @@ impl Qwen2Lm {
     }
 
     /// `x @ W^T (+ b)` for a `[.., in]` input and a `[out, in]` weight.
+    ///
+    /// When a quantized `QMatMul` exists for `wname` (the int4 build) it computes the
+    /// same `x @ Wᵀ` with an int4 weight (QMatMul requires a contiguous, f32 input);
+    /// otherwise it is the dense fp32 matmul. The bias, when present, is always added in
+    /// f32. The fp32 build never has a `qmm` entry, so its path is byte-for-byte the
+    /// original reference matmul.
     fn linear(&self, x: &Tensor, wname: &str, bias: Option<&str>) -> Result<Tensor> {
-        let w = self.g(wname)?;
-        let y = x.broadcast_matmul(&w.t()?)?;
+        let y = if let Some(qm) = self.qmm.get(wname) {
+            qm.forward(&x.contiguous()?)?
+        } else {
+            let w = self.g(wname)?;
+            if w.dtype() == DType::F32 {
+                x.broadcast_matmul(&w.t()?)?
+            } else {
+                // f16 dense fallback (non-block-aligned weight): upcast for the matmul.
+                x.broadcast_matmul(&w.to_dtype(DType::F32)?.t()?)?
+            }
+        };
         match bias {
             Some(b) => y.broadcast_add(&self.g(b)?),
             None => Ok(y),
@@ -271,6 +408,9 @@ impl Qwen2Lm {
         let w = self.g(table)?; // [V, HIDDEN]
         let idx = Tensor::from_vec(ids.to_vec(), (ids.len(),), &self.dev)?;
         let rows = w.index_select(&idx, 0)?; // [n, HIDDEN]
+        // In the quantized build the table is f16; upcast the gathered rows to f32 so the
+        // whole transformer (and the QMatMul inputs) stay f32. A no-op in the fp32 build.
+        let rows = rows.to_dtype(DType::F32)?;
         rows.unsqueeze(0) // [1, n, HIDDEN]
     }
 
@@ -425,6 +565,33 @@ impl Qwen2Lm {
         // rows [t0-1 .. t0-1+n) are the n per-step last-position logits.
         logits.narrow(1, t0 - 1, n)?.reshape((n, SPEECH_VOCAB))
     }
+}
+
+// --- weight classification for the int4 (Q4_0) quantized build ---------------
+
+/// The per-layer linear-weight suffixes that are real `x @ Wᵀ` matmuls and so are
+/// quantized to int4 (their separate `.bias` entries end in `.bias` and are excluded).
+const QUANT_PROJ_SUFFIXES: [&str; 7] = [
+    "q_proj.weight",
+    "k_proj.weight",
+    "v_proj.weight",
+    "o_proj.weight",
+    "gate_proj.weight",
+    "up_proj.weight",
+    "down_proj.weight",
+];
+
+/// Whether `name` is a big linear weight to quantize: any layer projection above, or
+/// the `llm_decoder` output head. Biases, norms and embeddings are excluded.
+fn is_quantizable_linear(name: &str) -> bool {
+    name == "llm_decoder.weight" || QUANT_PROJ_SUFFIXES.iter().any(|s| name.ends_with(s))
+}
+
+/// Whether `name` is an embedding lookup table (kept as an f16 gather, not a matmul).
+fn is_embedding_table(name: &str) -> bool {
+    name == "llm.model.model.embed_tokens.weight"
+        || name == "llm_embedding.weight"
+        || name == "speech_embedding.weight"
 }
 
 // --- generation constants (from the CosyVoice2 Qwen2LM definition) -----------

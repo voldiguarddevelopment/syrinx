@@ -226,10 +226,42 @@ impl Synthesizer {
     /// audio + a measured speedup), never 1e-3 parity. CPU stays the parity
     /// device.
     pub fn load_on_device(cfg: &SynthConfig, dev: Device) -> Result<Self, SynthError> {
+        Self::load_on_device_inner(cfg, dev, false)
+    }
+
+    /// Load every sub-model, but build the LM as the **int4 (Q4_0) quantized** variant
+    /// ([`syrinx_lm::real::Qwen2Lm::load_quantized`]) for a ~4× smaller LM footprint —
+    /// the README size goal. Every other sub-model loads exactly as in [`load`]; only
+    /// the LM's big linear weights become int4.
+    ///
+    /// int4 trades quality for size; CPU stays the parity device for the **fp32** LM
+    /// ([`load`]), and the quantized LM's output quality is measured on the box (SIM-o),
+    /// not asserted to fp32 parity here.
+    pub fn load_quantized(cfg: &SynthConfig) -> Result<Self, SynthError> {
+        Self::load_on_device_inner(cfg, Device::Cpu, true)
+    }
+
+    /// [`load_quantized`](Self::load_quantized) on an explicit device (e.g. a CUDA
+    /// device from [`pick_device`] for the speed path).
+    pub fn load_quantized_on_device(cfg: &SynthConfig, dev: Device) -> Result<Self, SynthError> {
+        Self::load_on_device_inner(cfg, dev, true)
+    }
+
+    /// Shared loader for the fp32 and int4 LM paths. `quantized` selects the LM
+    /// precision; all other sub-models are identical.
+    fn load_on_device_inner(
+        cfg: &SynthConfig,
+        dev: Device,
+        quantized: bool,
+    ) -> Result<Self, SynthError> {
         let tokenizer = TextTokenizer::from_file(&cfg.tokenizer_json)?;
         let speech_tokenizer = SpeechTokenizer::load(&cfg.speech_tokenizer_onnx)?;
         let speaker = CamPlus::load(&cfg.spk_weights, dev.clone())?;
-        let lm = syrinx_lm::real::Qwen2Lm::load(&cfg.lm_weights, dev.clone())?;
+        let lm = if quantized {
+            syrinx_lm::real::Qwen2Lm::load_quantized(&cfg.lm_weights, dev.clone())?
+        } else {
+            syrinx_lm::real::Qwen2Lm::load(&cfg.lm_weights, dev.clone())?
+        };
         let flow = Flow::load(&cfg.flow_weights, dev.clone())?;
         let vocoder = HiftVocoder::load(&cfg.hift_weights, dev.clone())?;
         Ok(Self {
