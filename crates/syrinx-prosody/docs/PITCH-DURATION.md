@@ -72,6 +72,18 @@ There are exactly two training-free levers on pitch, and they are **not** equal:
      one, so `synthesize_with_plan` always rebuilds the source (pinned `s_stft` is
      ignored, exactly like the rate path).
 
+   **EMPIRICAL UPDATE (measured 2026-06-26 — corrects the optimism above).** On
+   full-generation audio, `yin` (gold-standard F0) shows the rendered pitch shift is
+   *far weaker* than the "±5–6 semitones sound clean" estimate: a **−4-semitone**
+   request moved the median F0 ≈ **0 Hz** (230→230) and a **+4** request only
+   ≈ **1.4 semitones** (230→249), not 4. The HiFT/NSF **mel filter dominates the
+   perceived pitch** much more than expected, so the F0-source lever is **not an
+   effective standalone pitch knob** training-free — it would need joint mel+source
+   resynthesis or retraining. The lever still *applies* and measurably alters the
+   signal (the `RenderPlan` + per-region machinery are correct and unit-tested); it is
+   the *perceptual transfer* that is weak. **Duration/rate (below) is unaffected and
+   remains faithful** — that is the solid prosody differentiator today.
+
 2. **Shift mel energy along the mel-bin (frequency) axis (lower fidelity — opt-in).**
    Warping the mel up/down the bin axis by the pitch ratio moves the *whole spectral
    envelope*, which **shifts the formants too** — the "chipmunk / Darth Vader"
