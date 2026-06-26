@@ -21,3 +21,11 @@ pub use stage::{embed_tokens, layer_attention, transformer_block};
 // tests are unaffected; built + verified against real weights on the GPU box.
 #[cfg(feature = "real")]
 pub mod real;
+
+// The real CosyVoice3 LM forward via Candle — the first CV3 component port. It
+// REUSES `real`'s Qwen2-0.5B body (architecturally identical: 24 layers, 14/2
+// GQA heads, head_dim 64, RoPE θ=1e6, RMSNorm eps 1e-6, sliding-window disabled)
+// and adds only the CV3-specific embedding assembly + bias-free `llm_decoder`
+// head. Same `real` feature + on-box weights/fixtures; CV2 code paths unchanged.
+#[cfg(feature = "real")]
+pub mod real_cv3;

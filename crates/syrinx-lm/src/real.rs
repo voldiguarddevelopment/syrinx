@@ -422,6 +422,15 @@ impl Qwen2Lm {
         }
     }
 
+    /// Public `x @ Wᵀ (+b)` over a **named loaded weight** — an additive seam that lets a
+    /// sibling speech LM sharing this exact Qwen2 body (the CosyVoice3 LM in `real_cv3`)
+    /// apply its own output head (`llm_decoder`, bias-free) without re-implementing the
+    /// projection. This is a thin pass-through to the private [`Qwen2Lm::linear`]; the CV2
+    /// forward paths (`forward_logits`, `attn`, `mlp`, …) are unchanged and never call it.
+    pub fn head_linear(&self, x: &Tensor, wname: &str, bias: Option<&str>) -> Result<Tensor> {
+        self.linear(x, wname, bias)
+    }
+
     fn attn(&self, x: &Tensor, layer: usize, cos: &Tensor, sin: &Tensor, mask: &Tensor) -> Result<Tensor> {
         let p = format!("llm.model.model.layers.{layer}.self_attn");
         let (b, t, _) = x.dims3()?;
