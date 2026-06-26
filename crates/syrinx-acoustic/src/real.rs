@@ -31,6 +31,66 @@ const N_TB: usize = 4; // transformer blocks per down/mid/up group
 const PRE_LOOKAHEAD: usize = 3;
 const LN_EPS: f64 = 1e-5;
 const LN_EPS_CONF: f64 = 1e-12; // conformer layernorms use eps 1e-12
+/// UpsampleConformerEncoder `up_layer.stride`: the encoder 2x-upsamples between its
+/// first-stage and up-stage conformer blocks, so the up-stage sequence length (and
+/// hence its chunk size) is `ENC_UPSAMPLE`× the first-stage's.
+const ENC_UPSAMPLE: usize = 2;
+
+/// Chunked-causal streaming configuration for [`Flow::forward_zero_shot_streaming`].
+///
+/// CosyVoice2 streams the **same** flow weights under a chunk attention mask (it does
+/// *not* swap in a different architecture): a frame in chunk `c` may attend only to
+/// chunks `[c - num_left, c]`, never the future, so finalized frames are stable as
+/// later chunks arrive. These are the knobs that define those chunk boundaries; defaults
+/// come from [`StreamCfg::cosyvoice2`].
+#[derive(Clone, Copy, Debug)]
+pub struct StreamCfg {
+    /// Conformer-encoder **first-stage** chunk size, in speech tokens (the encoder runs
+    /// pre-upsample at token rate). The up-stage runs at `ENC_UPSAMPLE`× this length and
+    /// uses `enc_chunk * ENC_UPSAMPLE` as its chunk (see [`Flow::encoder_masked`]).
+    pub enc_chunk: usize,
+    /// CFM-estimator chunk size, in mel frames (the estimator runs at mel rate, which is
+    /// `token_mel_ratio`× the token rate).
+    pub est_chunk: usize,
+    /// Number of left chunks a frame may additionally attend to (besides its own chunk).
+    /// `usize::MAX` ⇒ all left chunks (CosyVoice2's `num_decoding_left_chunks = -1`).
+    pub num_left: usize,
+}
+
+impl StreamCfg {
+    /// The CosyVoice2-0.5B defaults, read straight from `CosyVoice2-0.5B/cosyvoice2.yaml`:
+    ///
+    /// ```text
+    /// token_frame_rate: 25      token_mel_ratio: 2
+    /// chunk_size: 25            # streaming chunk, IN TOKENS
+    /// num_decoding_left_chunks: -1   # <0 ⇒ all left chunks
+    ///   encoder (UpsampleConformerEncoder).static_chunk_size: chunk_size              = 25
+    ///   estimator (CausalConditionalDecoder).static_chunk_size: chunk_size*token_mel  = 50
+    /// ```
+    ///
+    /// Derivation of the three numbers:
+    /// * `enc_chunk = 25` — the encoder's first 6 conformer layers run **pre-upsample**
+    ///   at token rate, where `static_chunk_size = chunk_size = 25` tokens. The encoder
+    ///   then 2× upsamples (`up_layer.stride = ENC_UPSAMPLE`) and its 4 up-stage layers
+    ///   mask with `static_chunk_size * stride = 25*2 = 50` frames — derived here as
+    ///   `enc_chunk * ENC_UPSAMPLE`, not stored separately.
+    /// * `est_chunk = 50` — the estimator runs on the **mel** sequence, whose length is
+    ///   `token_mel_ratio = 2`× the post-upsample token length; CV2 sets its chunk to
+    ///   `chunk_size * token_mel_ratio = 25*2 = 50` mel frames. (So the estimator chunk
+    ///   and the encoder up-stage chunk coincide at 50 — both at mel/post-upsample rate.)
+    /// * `num_left = usize::MAX` — `num_decoding_left_chunks = -1` means "all left
+    ///   chunks". (At runtime CV2's onnx-friendly `subsequent_chunk_mask` ignores the
+    ///   left limit entirely, so all-left is also what actually executes there.)
+    ///
+    /// ⚠️ The 2× upsample boundary is the most likely on-box tuning target: this assumes
+    /// the maintainer's `encoder()` upsamples exactly once by `ENC_UPSAMPLE` between the
+    /// first-stage and up-stage blocks (it does), and that the mel length the estimator
+    /// sees equals the post-upsample token length (it does: `mu_t` is `2*(Tp+Tg)`). If a
+    /// future flow variant changes either ratio, re-derive these against the yaml.
+    pub fn cosyvoice2() -> Self {
+        Self { enc_chunk: 25, est_chunk: 50, num_left: usize::MAX }
+    }
+}
 
 /// The real CosyVoice2 flow `CausalMaskedDiffWithXvec`, loaded from fp32 safetensors.
 pub struct Flow {
@@ -113,7 +173,27 @@ impl Flow {
     // ============================ ENCODER ============================
 
     /// `UpsampleConformerEncoder.forward` (streaming=False, full context, no mask).
+    ///
+    /// The parity default: a thin pass-through to [`Self::encoder_masked`] with no chunk
+    /// masks, so existing callers (and the frozen parity tests) keep the unmasked
+    /// full-context behavior byte-for-byte.
     pub fn encoder(&self, emb: &Tensor) -> Result<Tensor> {
+        self.encoder_masked(emb, None, None)
+    }
+
+    /// `UpsampleConformerEncoder.forward` with optional chunked-causal attention masks.
+    ///
+    /// `m1` masks the **first-stage** conformer layers (token length `T`); `m2` masks the
+    /// **up-stage** layers (post-2×-upsample length `2T`). Both are additive `[1,1,L,L]`
+    /// masks (see [`add_optional_chunk_mask`]); `None` ⇒ that stage is unmasked. The two
+    /// stages have different sequence lengths (the upsample 2×'s it), so they need two
+    /// separate masks built at their own lengths — a single mask cannot serve both.
+    pub fn encoder_masked(
+        &self,
+        emb: &Tensor,
+        m1: Option<&Tensor>,
+        m2: Option<&Tensor>,
+    ) -> Result<Tensor> {
         // embed: Linear -> LayerNorm(1e-5); pos enc multiplies x by sqrt(d_model)
         let mut xs = self.subsample(emb, "encoder.embed")?; // [1, T, 512]
         let t = xs.dim(1)?;
@@ -123,9 +203,9 @@ impl Flow {
         // pre-lookahead layer
         xs = self.pre_lookahead(&xs)?;
 
-        // first-stage conformer layers
+        // first-stage conformer layers (mask m1, at token length T)
         for l in 0..N_ENC {
-            xs = self.conformer_layer(&xs, &pos, &format!("encoder.encoders.{l}"))?;
+            xs = self.conformer_layer(&xs, &pos, m1, &format!("encoder.encoders.{l}"))?;
         }
 
         // upsample: transpose to [1,512,T], Upsample1D stride 2, transpose back
@@ -139,8 +219,9 @@ impl Flow {
         let pos2 = self.rel_pos_emb(t2)?;
         xs = (xs * (ENC_DIM as f64).sqrt())?;
 
+        // up-stage conformer layers (mask m2, at post-upsample length 2T)
         for l in 0..N_UPENC {
-            xs = self.conformer_layer(&xs, &pos2, &format!("encoder.up_encoders.{l}"))?;
+            xs = self.conformer_layer(&xs, &pos2, m2, &format!("encoder.up_encoders.{l}"))?;
         }
 
         // after_norm
@@ -221,10 +302,10 @@ impl Flow {
 
     /// One ConformerEncoderLayer (no macaron, no cnn module), normalize_before:
     /// x = x + selfattn(norm_mha(x)); x = x + ffn(norm_ff(x)).
-    fn conformer_layer(&self, x: &Tensor, pos: &Tensor, p: &str) -> Result<Tensor> {
+    fn conformer_layer(&self, x: &Tensor, pos: &Tensor, mask: Option<&Tensor>, p: &str) -> Result<Tensor> {
         let res = x.clone();
         let xn = self.layer_norm(x, &format!("{p}.norm_mha.weight"), &format!("{p}.norm_mha.bias"), LN_EPS_CONF)?;
-        let att = self.rel_self_attn(&xn, pos, &format!("{p}.self_attn"))?;
+        let att = self.rel_self_attn(&xn, pos, mask, &format!("{p}.self_attn"))?;
         let x = (res + att)?;
         let res = x.clone();
         let xn = self.layer_norm(&x, &format!("{p}.norm_ff.weight"), &format!("{p}.norm_ff.bias"), LN_EPS_CONF)?;
@@ -239,8 +320,10 @@ impl Flow {
         self.linear(&h, &format!("{p}.w_2.weight"), Some(&format!("{p}.w_2.bias")))
     }
 
-    /// RelPositionMultiHeadedAttention (espnet rel-pos), no mask (full context).
-    fn rel_self_attn(&self, x: &Tensor, pos: &Tensor, p: &str) -> Result<Tensor> {
+    /// RelPositionMultiHeadedAttention (espnet rel-pos). `mask`, if given, is an additive
+    /// `[1,1,t,t]` chunk-causal mask added to the scores before softmax (full context when
+    /// `None`).
+    fn rel_self_attn(&self, x: &Tensor, pos: &Tensor, mask: Option<&Tensor>, p: &str) -> Result<Tensor> {
         let (b, t, _) = x.dims3()?;
         let h = ENC_HEADS;
         let dk = ENC_HEAD_DIM;
@@ -273,6 +356,10 @@ impl Flow {
         let bd = rel_shift(&bd, t)?; // [b,h,t,t]
         let scale = 1.0 / (dk as f64).sqrt();
         let scores = ((ac + bd)? * scale)?; // [b,h,t,t]
+        let scores = match mask {
+            Some(m) => scores.broadcast_add(m)?,
+            None => scores,
+        };
         let probs = softmax_last(&scores)?;
         let ctx = probs.matmul(&v)?; // [b,h,t,dk]
         let ctx = ctx.transpose(1, 2)?.contiguous()?.reshape((b, t, h * dk))?;
@@ -332,6 +419,25 @@ impl Flow {
         z0: &Tensor,
         n_timesteps: usize,
     ) -> Result<Tensor> {
+        // Parity default: the unmasked (full-context) estimator. Thin pass-through so
+        // existing callers + frozen parity tests keep byte-identical behavior.
+        self.cfm_solve_with_cond_masked(mu, spk, cond, z0, n_timesteps, None)
+    }
+
+    /// [`Self::cfm_solve_with_cond`] with an optional chunked-causal estimator mask.
+    ///
+    /// `mask`, if given, is the additive `[1,1,L,L]` mask (built at the mel length `L`)
+    /// threaded into every estimator call so the CFM U-Net's self-attention is
+    /// chunk-causal; `None` reproduces the full-context parity path exactly.
+    pub fn cfm_solve_with_cond_masked(
+        &self,
+        mu: &Tensor,
+        spk: &Tensor,
+        cond: &Tensor,
+        z0: &Tensor,
+        n_timesteps: usize,
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let l = mu.dim(2)?;
         let mut tvals = vec![0f32; n_timesteps + 1];
         for (i, s) in tvals.iter_mut().enumerate() {
@@ -353,7 +459,7 @@ impl Flow {
             // cond[0] = prompt cond, cond[1] = zeros (the CFG-dropped branch).
             let cond_in = Tensor::cat(&[cond, &cond_zero], 0)?; // [2,80,L]
             let t_in = Tensor::from_vec(vec![t, t], (2,), &self.dev)?;
-            let dphi = self.estimator(&x_in, &mu_in, &t_in, &spk_in, &cond_in)?; // [2,80,L]
+            let dphi = self.estimator_masked(&x_in, &mu_in, &t_in, &spk_in, &cond_in, mask)?; // [2,80,L]
             let real = dphi.narrow(0, 0, 1)?;
             let uncond = dphi.narrow(0, 1, 1)?;
             let dphi_dt = ((real * (1.0 + cfg))? - (uncond * cfg)?)?;
@@ -410,6 +516,65 @@ impl Flow {
         mel_full.narrow(2, mel_len1, mel_len2)
     }
 
+    /// Chunked-causal **streaming** counterpart of [`Self::forward_zero_shot`].
+    ///
+    /// Identical conditioning, weights, noise, and ODE as `forward_zero_shot`, but the
+    /// conformer encoder and the CFM estimator run under chunk-causal attention masks
+    /// built from `cfg`: a finalized frame never attends to the future, so re-running on
+    /// a grown token prefix leaves already-finalized frames bit-stable — the property
+    /// that makes streaming sample-faithful (see `docs/STREAMING.md`). With
+    /// `cfg.enc_chunk`/`cfg.est_chunk` set huge this reduces to the unmasked path; with
+    /// [`StreamCfg::cosyvoice2`] it matches CosyVoice2's `inference(streaming=True)`.
+    ///
+    /// Returns the generated mel `[1, 80, 2*Tg]`, same shape/semantics as the non-stream.
+    pub fn forward_zero_shot_streaming(
+        &self,
+        prompt_token: &Tensor,
+        token: &Tensor,
+        prompt_feat: &Tensor,
+        embedding: &Tensor,
+        z: &Tensor,
+        n_timesteps: usize,
+        cfg: StreamCfg,
+    ) -> Result<Tensor> {
+        let spk = self.spk_proj(embedding)?; // [1, 80]
+
+        let tok_cat = Tensor::cat(&[prompt_token, token], 1)?; // [1, Tp+Tg]
+        let enc_t = tok_cat.dim(1)?; // T = encoder first-stage (token-rate) length
+
+        // Encoder masks: the first 6 conformer layers run at token length T with chunk
+        // `enc_chunk`; after the 2× upsample the 4 up-stage layers run at length
+        // `T*ENC_UPSAMPLE` with chunk `enc_chunk*ENC_UPSAMPLE`. Built at their own lengths.
+        let m_enc1 = add_optional_chunk_mask(enc_t, cfg.enc_chunk, cfg.num_left, &self.dev)?;
+        let m_enc2 = add_optional_chunk_mask(
+            enc_t * ENC_UPSAMPLE,
+            cfg.enc_chunk * ENC_UPSAMPLE,
+            cfg.num_left,
+            &self.dev,
+        )?;
+
+        let emb = self.input_embedding(&tok_cat)?; // [1, T, 512]
+        let h = self.encoder_masked(&emb, Some(&m_enc1), Some(&m_enc2))?; // [1, 2T, 512]
+        let mu = self.linear(&h, "encoder_proj.weight", Some("encoder_proj.bias"))?; // [1, 2T, 80]
+        let mu_t = mu.transpose(1, 2)?.contiguous()?; // [1, 80, 2T]
+
+        let total = mu_t.dim(2)?; // 2*(Tp+Tg) == mel length
+        let mel_len1 = prompt_feat.dim(1)?; // == 2*Tp
+        let mel_len2 = total - mel_len1; // == 2*Tg
+
+        let prompt_ct = prompt_feat.transpose(1, 2)?.contiguous()?; // [1, 80, mel_len1]
+        let cond_tail = Tensor::zeros((1, MEL, mel_len2), DType::F32, &self.dev)?;
+        let cond = Tensor::cat(&[&prompt_ct, &cond_tail], 2)?; // [1, 80, total]
+
+        // Estimator mask: built at the mel length `total` with chunk `est_chunk`.
+        let m_est = add_optional_chunk_mask(total, cfg.est_chunk, cfg.num_left, &self.dev)?;
+
+        let mel_full =
+            self.cfm_solve_with_cond_masked(&mu_t, &spk, &cond, z, n_timesteps, Some(&m_est))?;
+        // drop the prompt-mel prefix; keep only the generated mel.
+        mel_full.narrow(2, mel_len1, mel_len2)
+    }
+
     /// Convenience: solve using the design noise buffer reconstructed via the
     /// reference fixture is preferred; this variant uses a provided z explicitly.
     pub fn cfm_solve(&self, mu: &Tensor, spk: &Tensor, n_timesteps: usize) -> Result<Tensor> {
@@ -422,7 +587,19 @@ impl Flow {
 
     /// CausalConditionalDecoder.forward (the estimator), streaming=False, no mask.
     /// Inputs are the CFG-stacked `[2, .., L]` tensors. Returns `[2, 80, L]`.
+    ///
+    /// Parity default: a thin pass-through to [`Self::estimator_masked`] with no chunk
+    /// mask, so existing callers (and the frozen parity tests) stay byte-identical.
     pub fn estimator(&self, x: &Tensor, mu: &Tensor, t: &Tensor, spks: &Tensor, cond: &Tensor) -> Result<Tensor> {
+        self.estimator_masked(x, mu, t, spks, cond, None)
+    }
+
+    /// CausalConditionalDecoder.forward with an optional chunked-causal attention mask.
+    ///
+    /// `mask`, if given, is the additive `[1,1,L,L]` mask (built at the mel length `L`)
+    /// threaded into every `transformer_stack` so the U-Net's down/mid/up self-attention
+    /// is chunk-causal; `None` reproduces the full-context path exactly.
+    pub fn estimator_masked(&self, x: &Tensor, mu: &Tensor, t: &Tensor, spks: &Tensor, cond: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
         let l = x.dim(2)?;
         // time embedding: SinusoidalPosEmb(in_channels=320) then time_mlp
         let temb = self.time_embed(t)?; // [2, 1024]
@@ -434,7 +611,7 @@ impl Flow {
         let mut hiddens: Vec<Tensor> = Vec::new();
         // down block (channels=[256] -> single down, is_last, downsample=CausalConv1d k=3)
         h = self.causal_resnet(&h, &temb, "decoder.estimator.down_blocks.0.0")?; // [2,256,L]
-        h = self.transformer_stack(&h, &temb, "decoder.estimator.down_blocks.0.1")?;
+        h = self.transformer_stack(&h, &temb, mask, "decoder.estimator.down_blocks.0.1")?;
         hiddens.push(h.clone());
         // downsample: CausalConv1d (pad left 2, k=3, stride 1) -> same length
         h = self.causal_conv(&h, "decoder.estimator.down_blocks.0.2", 3)?;
@@ -442,14 +619,14 @@ impl Flow {
         // mid blocks
         for m in 0..N_MID {
             h = self.causal_resnet(&h, &temb, &format!("decoder.estimator.mid_blocks.{m}.0"))?;
-            h = self.transformer_stack(&h, &temb, &format!("decoder.estimator.mid_blocks.{m}.1"))?;
+            h = self.transformer_stack(&h, &temb, mask, &format!("decoder.estimator.mid_blocks.{m}.1"))?;
         }
 
         // up block (single, is_last, upsample=CausalConv1d k=3). input is cat(x, skip)=512
         let skip = hiddens.pop().unwrap();
         let cat = Tensor::cat(&[&h, &skip], 1)?; // [2,512,L]
         h = self.causal_resnet(&cat, &temb, "decoder.estimator.up_blocks.0.0")?; // [2,256,L]
-        h = self.transformer_stack(&h, &temb, "decoder.estimator.up_blocks.0.1")?;
+        h = self.transformer_stack(&h, &temb, mask, "decoder.estimator.up_blocks.0.1")?;
         h = self.causal_conv(&h, "decoder.estimator.up_blocks.0.2", 3)?;
 
         // final_block (CausalBlock1D) + final_proj (Conv1d k=1)
@@ -521,20 +698,20 @@ impl Flow {
 
     /// N_TB BasicTransformerBlocks. Input/out are channel-first `[b, c, L]`;
     /// rearranged to `[b, L, c]` internally.
-    fn transformer_stack(&self, x: &Tensor, temb: &Tensor, p: &str) -> Result<Tensor> {
+    fn transformer_stack(&self, x: &Tensor, temb: &Tensor, mask: Option<&Tensor>, p: &str) -> Result<Tensor> {
         let _ = temb; // norm here is plain LayerNorm (no ada-norm); timestep unused
         let mut h = x.transpose(1, 2)?.contiguous()?; // [b, L, c]
         for i in 0..N_TB {
-            h = self.basic_transformer_block(&h, &format!("{p}.{i}"))?;
+            h = self.basic_transformer_block(&h, mask, &format!("{p}.{i}"))?;
         }
         h.transpose(1, 2)?.contiguous()
     }
 
     /// diffusers BasicTransformerBlock (self-attn only, layer_norm, gelu FF).
-    fn basic_transformer_block(&self, x: &Tensor, p: &str) -> Result<Tensor> {
+    fn basic_transformer_block(&self, x: &Tensor, mask: Option<&Tensor>, p: &str) -> Result<Tensor> {
         // 1. self-attn: norm1 -> attn1 -> +residual
         let n1 = self.layer_norm(x, &format!("{p}.norm1.weight"), &format!("{p}.norm1.bias"), LN_EPS)?;
-        let att = self.diffusers_attn(&n1, &format!("{p}.attn1"))?;
+        let att = self.diffusers_attn(&n1, mask, &format!("{p}.attn1"))?;
         let x = (att + x)?;
         // 3. feed-forward: norm3 -> ff -> +residual
         let n3 = self.layer_norm(&x, &format!("{p}.norm3.weight"), &format!("{p}.norm3.bias"), LN_EPS)?;
@@ -542,8 +719,10 @@ impl Flow {
         ff + x
     }
 
-    /// diffusers Attention (self-attn, no bias on q/k/v, bias on to_out.0).
-    fn diffusers_attn(&self, x: &Tensor, p: &str) -> Result<Tensor> {
+    /// diffusers Attention (self-attn, no bias on q/k/v, bias on to_out.0). `mask`, if
+    /// given, is an additive `[1,1,t,t]` chunk-causal mask added to the scores before
+    /// softmax (full context when `None`).
+    fn diffusers_attn(&self, x: &Tensor, mask: Option<&Tensor>, p: &str) -> Result<Tensor> {
         let (b, t, _) = x.dims3()?;
         let h = EST_HEADS;
         let dk = EST_HEAD_DIM;
@@ -555,6 +734,10 @@ impl Flow {
         let v = v.reshape((b, t, h, dk))?.transpose(1, 2)?.contiguous()?;
         let scale = 1.0 / (dk as f64).sqrt();
         let scores = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?;
+        let scores = match mask {
+            Some(m) => scores.broadcast_add(m)?,
+            None => scores,
+        };
         let probs = softmax_last(&scores)?;
         let ctx = probs.matmul(&v)?;
         let ctx = ctx.transpose(1, 2)?.contiguous()?.reshape((b, t, h * dk))?;
@@ -891,6 +1074,38 @@ fn gelu(x: &Tensor) -> Result<Tensor> {
 
 fn softmax_last(x: &Tensor) -> Result<Tensor> {
     candle_nn::ops::softmax(x, D::Minus1)
+}
+
+/// Build CosyVoice2's additive chunked-causal attention mask `[1, 1, t, t]`.
+///
+/// Position `i` lives in chunk `c = i / chunk_size`; it may attend to position `j`
+/// (chunk `cj = j / chunk_size`) iff `c - num_left <= cj <= c` — i.e. its own chunk and
+/// up to `num_left` chunks of left context, **never the future**. Allowed entries are
+/// `0.0`; disallowed are `f32::NEG_INFINITY`, so adding this to pre-softmax scores zeros
+/// out the forbidden positions. Because every row always includes its own chunk (`cj = c`,
+/// which contains `i` itself), no row is fully masked, so the softmax never sees an
+/// all-`-inf` row (no NaN).
+///
+/// `num_left == usize::MAX` (saturating) ⇒ all left chunks (CosyVoice2's
+/// `num_decoding_left_chunks = -1`). A `chunk_size` larger than `t` ⇒ a single chunk ⇒
+/// an all-zeros mask (no masking) — which is why the non-streaming path passes `None`
+/// rather than a degenerate mask. `chunk_size == 0` is treated as no masking too.
+fn add_optional_chunk_mask(t: usize, chunk_size: usize, num_left: usize, dev: &Device) -> Result<Tensor> {
+    let mut data = vec![0f32; t * t];
+    if chunk_size > 0 {
+        for i in 0..t {
+            let ci = i / chunk_size;
+            let start_chunk = ci.saturating_sub(num_left); // num_left==MAX ⇒ 0 (all left)
+            let row = i * t;
+            for j in 0..t {
+                let cj = j / chunk_size;
+                if cj < start_chunk || cj > ci {
+                    data[row + j] = f32::NEG_INFINITY;
+                }
+            }
+        }
+    }
+    Tensor::from_vec(data, (1, 1, t, t), dev)
 }
 
 /// espnet rel_shift: input `[b,h,t,2t-1]` -> `[b,h,t,t]`.
