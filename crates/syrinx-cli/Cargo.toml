@@ -3,3 +3,23 @@ name = "syrinx-cli"
 version = "0.0.0"
 edition = "2021"
 publish = false
+
+[[bin]]
+name = "syrinx"
+path = "src/main.rs"
+
+[features]
+# The real `synth` command: loads the CosyVoice2 `Synthesizer` (via syrinx-serve's
+# `real` capstone) and renders `text + reference voice -> 24 kHz WAV`. Off by
+# default so the scaffold build stays Candle-free; enabled on the model box.
+real = ["dep:syrinx-serve", "syrinx-serve/real"]
+# GPU (CUDA) speed path for `synth --cuda`: pulls syrinx-serve's `cuda` feature so
+# `pick_device`/`load_on_device` can open `cuda:i`. Output is not bit-equal to the
+# CPU reference — CUDA is for speed only.
+cuda = ["real", "syrinx-serve/cuda"]
+
+[dependencies]
+# The synthesizer + WAV-I/O helpers live behind syrinx-serve's `real` feature;
+# pulled in only under this crate's `real` feature. Args are hand-rolled (no clap)
+# and the WAV codec is reused from syrinx-serve (`wavio`), keeping deps minimal.
+syrinx-serve = { path = "../syrinx-serve", optional = true }

@@ -15,6 +15,11 @@ use std::sync::Arc;
 #[cfg(feature = "real")]
 pub mod synth;
 
+// WAV read/resample/encode helpers for the `real` surfaces (shared with the CLI).
+// Candle-free in shape but `hound`-backed, so it rides the same `real` gate.
+#[cfg(feature = "real")]
+pub mod wavio;
+
 use axum::body::{Body, Bytes};
 use axum::extract::State;
 use axum::http::{header, StatusCode};
@@ -62,6 +67,104 @@ impl Synth for SilentSynth {
     }
 }
 
+/// The **real** synth: drives the CosyVoice2 [`Synthesizer`](crate::synth::Synthesizer)
+/// for every request and returns the 24 kHz audio encoded as WAV bytes.
+///
+/// The OpenAI-style [`SpeechRequest`] carries only `input` text and a named
+/// `voice` — there is no per-request reference clip — so a `RealSynth` is
+/// constructed **bound to one reference voice** (the prompt transcript + its
+/// already-resampled 16 kHz/24 kHz waveforms). Each request synthesizes
+/// `req.input` *in that voice*; `req.model`/`req.voice` are currently advisory
+/// (single configured voice). Use [`wavio::read_ref_wav`](crate::wavio::read_ref_wav)
+/// to load the reference clip.
+///
+/// [`Synthesizer::synthesize`](crate::synth::Synthesizer::synthesize) takes
+/// `&mut self`, so the loaded models live behind a [`std::sync::Mutex`]; requests
+/// to a single `RealSynth` are therefore serialized (the sensible default for a
+/// single-GPU/CPU TTS box).
+#[cfg(feature = "real")]
+pub struct RealSynth {
+    synth: std::sync::Mutex<crate::synth::Synthesizer>,
+    prompt_text: String,
+    ref_wav_16k: Vec<f32>,
+    ref_wav_24k: Vec<f32>,
+    seed: u64,
+    max_gen_steps: Option<usize>,
+}
+
+#[cfg(feature = "real")]
+impl RealSynth {
+    /// Build a `RealSynth` from a loaded [`Synthesizer`](crate::synth::Synthesizer)
+    /// and a reference voice (`prompt_text` + its resampled 16 kHz/24 kHz mono
+    /// waveforms). Defaults: `seed = 0`, no live-LM step cap (the real ratio).
+    pub fn new(
+        synth: crate::synth::Synthesizer,
+        prompt_text: impl Into<String>,
+        ref_wav_16k: Vec<f32>,
+        ref_wav_24k: Vec<f32>,
+    ) -> Self {
+        Self {
+            synth: std::sync::Mutex::new(synth),
+            prompt_text: prompt_text.into(),
+            ref_wav_16k,
+            ref_wav_24k,
+            seed: 0,
+            max_gen_steps: None,
+        }
+    }
+
+    /// Set the LM sampling seed (default `0`).
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = seed;
+        self
+    }
+
+    /// Cap the live LM generation steps (default `None` = the real `(text)*20`
+    /// ratio). A cap keeps CPU runs tractable; see `synth::SynthInputs`.
+    pub fn with_max_gen_steps(mut self, max_gen_steps: Option<usize>) -> Self {
+        self.max_gen_steps = max_gen_steps;
+        self
+    }
+}
+
+#[cfg(feature = "real")]
+impl Synth for RealSynth {
+    fn synthesize(&self, req: &SpeechRequest) -> Vec<u8> {
+        use crate::synth::SynthInputs;
+        let inputs = SynthInputs {
+            lm_seed: self.seed,
+            max_gen_steps: self.max_gen_steps,
+            ..Default::default()
+        };
+        // The Synth trait has no error channel; on a poisoned lock or a synth
+        // failure we log and return an empty body rather than panic the handler.
+        let mut synth = match self.synth.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let wav = match synth.synthesize(
+            &req.input,
+            &self.prompt_text,
+            &self.ref_wav_16k,
+            &self.ref_wav_24k,
+            &inputs,
+        ) {
+            Ok(wav) => wav,
+            Err(e) => {
+                eprintln!("syrinx-serve: synthesis failed: {e}");
+                return Vec::new();
+            }
+        };
+        match crate::wavio::encode_wav_24k(&wav) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                eprintln!("syrinx-serve: wav encode failed: {e}");
+                Vec::new()
+            }
+        }
+    }
+}
+
 /// The typed JSON error body returned for a malformed request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ApiError {
@@ -96,6 +199,14 @@ pub fn router_with_synth(synth: Arc<dyn Synth>) -> Router {
         .route("/v1/audio/speech", post(speech))
         .route("/v1/health", get(health))
         .with_state(synth)
+}
+
+/// Build the audio router wired to a [`RealSynth`], so `POST /v1/audio/speech`
+/// returns **real** CosyVoice2 audio (24 kHz WAV) in the configured reference
+/// voice instead of the silent stub. Convenience over [`router_with_synth`].
+#[cfg(feature = "real")]
+pub fn router_with_real_synth(synth: RealSynth) -> Router {
+    router_with_synth(Arc::new(synth))
 }
 
 /// Handle `GET /v1/health`: return 200 with the documented typed JSON health body
