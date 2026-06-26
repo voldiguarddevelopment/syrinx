@@ -8,5 +8,6 @@ pub mod pitch;
 pub mod plan;
 pub mod rate;
 pub mod render;
+pub mod render_plan;
 pub mod roundtrip;
 pub mod volume;

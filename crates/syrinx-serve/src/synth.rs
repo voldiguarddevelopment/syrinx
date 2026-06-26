@@ -538,9 +538,18 @@ impl Synthesizer {
     pub fn deterministic_source_stft(&self, mel: &Tensor) -> Result<Tensor, SynthError> {
         let f0 = self.vocoder.f0_predict(mel)?; // [1, T]
         let f0v: Vec<f32> = f0.flatten_all()?.to_vec1::<f32>()?;
+        self.f0_to_source_stft(&f0v)
+    }
+
+    /// Build the deterministic zero-phase HiFT source STFT `[1, 18, T]` from an
+    /// explicit per-mel-frame F0 vector `f0v` (Hz). This is the F0→source half of
+    /// [`Synthesizer::deterministic_source_stft`], factored out so a prosody plan
+    /// can retune the F0 (pitch control) before the source is built: nearest
+    /// upsample by 480 → single-harmonic `sine_amp·sin(2π·cumsum(f0/sr))` → STFT.
+    fn f0_to_source_stft(&self, f0v: &[f32]) -> Result<Tensor, SynthError> {
         // Upsample F0 by nearest (Upsample(scale_factor=480)) to the source rate.
         let mut f0_up: Vec<f64> = Vec::with_capacity(f0v.len() * F0_UPSAMPLE);
-        for &v in &f0v {
+        for &v in f0v {
             for _ in 0..F0_UPSAMPLE {
                 f0_up.push(v as f64);
             }
@@ -728,6 +737,127 @@ impl Synthesizer {
     }
 }
 
+// ============================================================================
+// Editable prosody-plan control (additive — pitch + duration, DESIGN §6 Phase 3).
+//
+// `synthesize_with_plan` applies a `syrinx_prosody::render_plan::RenderPlan` to the
+// generated mel (duration = frame-axis time-warp; pitch = F0-source retune, plus an
+// opt-in mel-bin formant shift) BEFORE the HiFT vocoder. Kept in its own `impl`
+// block + helpers, separate from the core pipeline and the rate hook above. Like
+// the rate hook it always uses the deterministic (live z=zeros, deterministic F0)
+// source — a pinned `inputs.s_stft` is length/pitch-locked to the unscaled mel and
+// cannot describe a retuned/rescaled one, so it is ignored here; `inputs` is still
+// honoured for `pinned_speech_token`, `lm_seed`, and `max_gen_steps`. The existing
+// `synthesize` / `synthesize_with_rate` are untouched.
+// ============================================================================
+impl Synthesizer {
+    /// Synthesize `tts_text` in the reference voice under an editable
+    /// [`RenderPlan`](syrinx_prosody::render_plan::RenderPlan), returning the 24 kHz
+    /// waveform.
+    ///
+    /// The plan is applied to the flow's generated mel before the vocoder:
+    ///   * **duration** — the mel frame axis is time-warped by the plan's global +
+    ///     per-region rate (pitch-preserving length regulation);
+    ///   * **pitch** — the HiFT F0 predicted from the (warped) mel is multiplied by
+    ///     the plan's per-frame F0 ratio (global + per-region semitone shift) before
+    ///     the sine source is built — a formant-preserving pitch shift via the NSF
+    ///     source; with `mel_envelope_shift` the mel is also bin-warped (formant
+    ///     shifting, opt-in).
+    ///
+    /// [`RenderPlan::identity`](syrinx_prosody::render_plan::RenderPlan::identity)
+    /// reproduces the default-speed [`Synthesizer::synthesize`] audio (up to mel
+    /// rounding). A plan that fails validation against the generated mel length
+    /// returns [`SynthError::Candle`] describing the bad knob.
+    pub fn synthesize_with_plan(
+        &mut self,
+        tts_text: &str,
+        prompt_text: &str,
+        ref_wav_16k: &[f32],
+        ref_wav_24k: &[f32],
+        inputs: &SynthInputs,
+        plan: &syrinx_prosody::render_plan::RenderPlan,
+    ) -> Result<Vec<f32>, SynthError> {
+        let cond = self.prompt_cond(tts_text, prompt_text, ref_wav_16k, ref_wav_24k)?;
+        let speech_token = match &inputs.pinned_speech_token {
+            Some(ids) => ids_i64_to_tensor(ids, &self.dev)?,
+            None => self.generate_speech_token(&cond, inputs.lm_seed, inputs.max_gen_steps)?,
+        };
+
+        // CFM noise z: pinned or zeros (the deterministic functional fallback).
+        let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
+        let z = match &inputs.z {
+            Some(z) => z.clone(),
+            None => Tensor::zeros((1, MEL_NUM_MELS, total), DType::F32, &self.dev)?,
+        };
+
+        // Flow -> generated mel [1, 80, 2*Tg].
+        let mel = self.flow.forward_zero_shot(
+            &cond.prompt_token,
+            &speech_token,
+            &cond.prompt_feat,
+            &cond.spk_embedding,
+            &z,
+            N_TIMESTEPS,
+        )?;
+
+        // Apply the plan to the mel grid: time-warp (duration) + per-output-frame
+        // F0 multiplier (pitch) + opt-in mel-bin formant shift.
+        let grid = mel_tensor_to_grid(&mel)?;
+        let (scaled_grid, f0_mult) = plan
+            .apply(&grid)
+            .map_err(|e| SynthError::Candle(format!("prosody plan apply failed: {e:?}")))?;
+        let scaled_mel = grid_to_mel_tensor(&scaled_grid, &self.dev)?; // [1, 80, T_out]
+
+        // Predict F0 from the warped mel, retune it by the per-frame ratio, build
+        // the source, then vocode.
+        let f0 = self.vocoder.f0_predict(&scaled_mel)?; // [1, T_out]
+        let mut f0v: Vec<f32> = f0.flatten_all()?.to_vec1::<f32>()?;
+        if f0v.len() != f0_mult.len() {
+            return Err(SynthError::Candle(format!(
+                "prosody plan F0 length mismatch: f0={} mult={}",
+                f0v.len(),
+                f0_mult.len()
+            )));
+        }
+        for (v, m) in f0v.iter_mut().zip(f0_mult.iter()) {
+            *v = (*v as f64 * *m) as f32;
+        }
+        let s = self.f0_to_source_stft(&f0v)?;
+        let audio = self.vocoder.decode(&scaled_mel, &s)?;
+        let wav: Vec<f32> = audio.flatten_all()?.to_vec1::<f32>()?;
+        Ok(wav)
+    }
+}
+
+/// Convert a `[1, n_mels, T]` Candle mel tensor to a `[n_mels][T]` row-major grid
+/// for the pure-Rust `syrinx-prosody` transforms (keeping that crate Candle-free).
+fn mel_tensor_to_grid(mel: &Tensor) -> Result<Vec<Vec<f32>>, SynthError> {
+    let (b, n_mels, t_in) = mel.dims3()?;
+    if b != 1 {
+        return Err(SynthError::Candle(format!(
+            "mel grid conversion expects batch 1, got {b}"
+        )));
+    }
+    let m2 = mel.squeeze(0)?; // [n_mels, T]
+    let flat: Vec<f32> = m2.flatten_all()?.to_vec1::<f32>()?;
+    let mut grid: Vec<Vec<f32>> = Vec::with_capacity(n_mels);
+    for row in 0..n_mels {
+        grid.push(flat[row * t_in..(row + 1) * t_in].to_vec());
+    }
+    Ok(grid)
+}
+
+/// Rebuild a `[1, n_mels, T]` Candle mel tensor from a `[n_mels][T]` grid on `dev`.
+fn grid_to_mel_tensor(grid: &[Vec<f32>], dev: &Device) -> Result<Tensor, SynthError> {
+    let n_mels = grid.len();
+    let t = if n_mels == 0 { 0 } else { grid[0].len() };
+    let mut flat: Vec<f32> = Vec::with_capacity(n_mels * t);
+    for row in grid {
+        flat.extend_from_slice(row);
+    }
+    Ok(Tensor::from_vec(flat, (1, n_mels, t), dev)?)
+}
+
 /// Time-scale a `[1, n_mels, T]` Candle mel tensor by speech-rate `rate` using
 /// [`syrinx_prosody::render::time_scale_mel`], returning `[1, n_mels, T_out]`.
 ///
@@ -739,30 +869,10 @@ fn time_scale_mel_tensor(
     rate: f64,
     dev: &Device,
 ) -> Result<Tensor, SynthError> {
-    let (b, n_mels, t_in) = mel.dims3()?;
-    if b != 1 {
-        return Err(SynthError::Candle(format!(
-            "rate mel time-scale expects batch 1, got {b}"
-        )));
-    }
-    // [1, n_mels, T] -> [n_mels, T] -> Vec<Vec<f32>> rows.
-    let m2 = mel.squeeze(0)?; // [n_mels, T]
-    let flat: Vec<f32> = m2.flatten_all()?.to_vec1::<f32>()?;
-    let mut grid: Vec<Vec<f32>> = Vec::with_capacity(n_mels);
-    for row in 0..n_mels {
-        grid.push(flat[row * t_in..(row + 1) * t_in].to_vec());
-    }
-
+    let grid = mel_tensor_to_grid(mel)?; // [n_mels][T]
     let scaled = syrinx_prosody::render::time_scale_mel(&grid, rate)
         .map_err(|e| SynthError::Candle(format!("mel time-scale failed: {e:?}")))?;
-
-    let t_out = scaled[0].len();
-    let mut out_flat: Vec<f32> = Vec::with_capacity(n_mels * t_out);
-    for row in &scaled {
-        out_flat.extend_from_slice(row);
-    }
-    let out = Tensor::from_vec(out_flat, (1, n_mels, t_out), dev)?;
-    Ok(out)
+    grid_to_mel_tensor(&scaled, dev)
 }
 
 // ---- free helpers ------------------------------------------------------------
