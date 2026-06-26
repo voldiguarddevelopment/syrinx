@@ -262,6 +262,21 @@ impl SpeechTokenizer {
         })
     }
 
+    /// Build a tokenizer from the CosyVoice3 `speech_tokenizer_v3.onnx` file.
+    ///
+    /// The v3 tokenizer's ONNX graph I/O was verified (via `onnx.load`) to be
+    /// byte-identical to v2: inputs `feats: f32 [1,128,T]` + `feats_length: i32 [1]`,
+    /// output `indices` (int32 token ids). The feature it consumes is the same
+    /// `whisper.log_mel_spectrogram(n_mels=128)` that v2 uses — CV3's
+    /// `_extract_speech_token` is the v2 method unchanged. So the full v2 session +
+    /// log-mel path applies as-is; this constructor is a v3-named alias of [`load`]
+    /// that documents that equivalence at the call site.
+    ///
+    /// [`load`]: SpeechTokenizer::load
+    pub fn load_cv3(onnx_path: impl AsRef<Path>) -> Result<Self, SpeechTokenError> {
+        Self::load(onnx_path)
+    }
+
     /// Run the tokenizer on a precomputed whisper log-mel `[N_MELS, T]` feature
     /// and return the flat token id sequence.
     pub fn tokens_from_mel(&mut self, mel: &Array2<f32>) -> Result<Vec<i32>, SpeechTokenError> {
