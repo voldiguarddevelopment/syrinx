@@ -15,6 +15,11 @@
 #[cfg(feature = "real")]
 pub mod real;
 
+// The real CosyVoice3 CausalHiFTGenerator forward via Candle (causal convs + f64
+// f0_predictor). Additive to the CV2 `real` module; same `real` feature gate.
+#[cfg(feature = "real")]
+pub mod real_cv3;
+
 /// Band-limit `input` with a length-`taps` moving-average (boxcar) low-pass.
 ///
 /// Each output sample is the mean of the `taps` input samples starting at that
