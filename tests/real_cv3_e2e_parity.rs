@@ -130,23 +130,33 @@ fn real_cv3_e2e_frontend_chain_and_smoke() {
 
     // The 16 kHz prompt the reference conditioning was derived from.
     let ref_wav_16k = wav(&r, "prompt_wav_16k");
-    // The 24 kHz prompt for `prompt_feat`: prefer an exact reference-resampled buffer;
-    // CosyVoice resamples the 16 kHz prompt to 24 kHz internally, so fall back to a
-    // windowed-sinc resample of the 16 kHz wav when the ref does not carry a 24 kHz one.
-    let (ref_wav_24k, resampled_24k) = match r.get("prompt_wav_24k") {
-        Some(_) => (wav(&r, "prompt_wav_24k"), false),
-        None => (
-            syrinx_serve::wavio::resample(&ref_wav_16k, 16_000, 24_000),
-            true,
-        ),
+    // The 24 kHz prompt for `prompt_feat`. CV3's `_extract_speech_feat` runs the matcha
+    // mel on `load_wav(prompt, 24000)` — the EXACT reference-resampled 24 kHz prompt. A
+    // local 16k->24k resample misaligns STFT frames and blows the log-mel diff (~5.8 was
+    // observed on box from the resample path), so the dump's `prompt_wav_24k` MUST be used
+    // when present; the resample is only a loud last-resort fallback. The eprintln below
+    // records which path ran, so a box failure cleanly isolates resample-vs-mel.
+    let ref_wav_24k = match r.get("prompt_wav_24k") {
+        Some(_) => {
+            let w = wav(&r, "prompt_wav_24k");
+            eprintln!(
+                "prompt_wav_24k: using EXACT reference 24 kHz prompt ({} samples, {:.2}s)",
+                w.len(),
+                w.len() as f32 / 24_000.0
+            );
+            w
+        }
+        None => {
+            let w = syrinx_serve::wavio::resample(&ref_wav_16k, 16_000, 24_000);
+            eprintln!(
+                "WARN: e2e ref has no `prompt_wav_24k`; resampled the 16 kHz prompt 16k->24k \
+                 (windowed-sinc, {} samples). prompt_feat will likely exceed 1e-3 due to STFT \
+                 frame misalignment — add the exact `load_wav(prompt, 24000)` to the dump.",
+                w.len()
+            );
+            w
+        }
     };
-    if resampled_24k {
-        eprintln!(
-            "note: e2e ref has no `prompt_wav_24k`; resampled the 16 kHz prompt 16k->24k \
-             (windowed-sinc) for prompt_feat. If prompt_feat exceeds 1e-3 on box, add the \
-             reference-resampled 24 kHz prompt to the dump."
-        );
-    }
 
     let mut synth = Cv3Synthesizer::load(&env.cfg).expect("load all CV3 sub-models");
 
@@ -173,9 +183,18 @@ fn real_cv3_e2e_frontend_chain_and_smoke() {
 
     // prompt_feat: within 1e-3 ([1, Mp, 80] frame-major).
     let ref_pf = get(&r, "prompt_feat");
-    assert_eq!(cond.prompt_feat.dims(), ref_pf.dims(), "prompt_feat shape");
+    assert_eq!(
+        cond.prompt_feat.dims(),
+        ref_pf.dims(),
+        "prompt_feat shape: ours={:?} ref={:?}",
+        cond.prompt_feat.dims(),
+        ref_pf.dims()
+    );
     let d_pf = max_abs_diff(&cond.prompt_feat, &ref_pf);
-    eprintln!("prompt_feat max-abs-diff = {d_pf:.3e}");
+    eprintln!(
+        "prompt_feat max-abs-diff = {d_pf:.3e}  (shape {:?})",
+        cond.prompt_feat.dims()
+    );
     assert!(d_pf < 1e-3, "CV3 prompt_feat diff {d_pf:.3e} exceeds 1e-3");
 
     // ---- (2) deterministic chain anchor: frontend -> flow -> mel ----
