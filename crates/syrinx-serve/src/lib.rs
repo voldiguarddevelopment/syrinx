@@ -15,6 +15,13 @@ use std::sync::Arc;
 #[cfg(feature = "real")]
 pub mod synth;
 
+// The real CosyVoice3 end-to-end synthesizer: ties the four parity-verified CV3
+// component ports (v3 speech tokenizer, Cv3Lm, Cv3Flow, Cv3Hift) plus the reused CV2
+// frontend pieces into one `text + voice -> 24 kHz audio` pipeline. Additive to (and
+// mirrors the structure of) `synth`; same `real` gate, on the model box.
+#[cfg(feature = "real")]
+pub mod synth_cv3;
+
 // WAV read/resample/encode helpers for the `real` surfaces (shared with the CLI).
 // Candle-free in shape but `hound`-backed, so it rides the same `real` gate.
 #[cfg(feature = "real")]
