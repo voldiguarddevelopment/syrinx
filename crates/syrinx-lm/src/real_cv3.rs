@@ -27,7 +27,7 @@
 //! Gated behind the `real` cargo feature; the parity test (`tests/real_cv3_lm_parity.rs`)
 //! skips cleanly when the on-box weights/fixture are absent.
 
-use crate::real::{KvCache, Qwen2Lm};
+use crate::real::{Footprint, KvCache, Qwen2Lm};
 use candle_core::{Device, Result, Tensor};
 
 /// `sos` row index into `speech_embedding` (CV3: the start-of-sequence embedding is a
@@ -62,6 +62,55 @@ impl Cv3Lm {
         Ok(Self {
             body: Qwen2Lm::load(path, dev)?,
         })
+    }
+
+    /// Load the same CV3 `llm_fp32.safetensors`, but quantize the LM to **int4** (GGML
+    /// `Q4_0` big linears + per-row int4 embeddings) for a ~4× smaller LM footprint — the
+    /// README size goal, the CV3 analogue of [`Qwen2Lm::load_quantized`].
+    ///
+    /// CV3's speech LM is the *same* Qwen2-0.5B backbone + speech head as CV2, so the int4
+    /// scheme is reused verbatim through the shared body: every layer's `q/k/v/o_proj` and
+    /// `gate/up/down_proj` plus the `llm_decoder` head become `Q4_0` `QMatMul`s, and the
+    /// embedding tables (`embed_tokens` / `speech_embedding`) become per-row int4
+    /// dequant-on-gather tables. RMSNorm weights and the q/k/v biases stay f32. (CV3 has no
+    /// separate `llm_embedding` table — `sos`/`task_id` are rows of `speech_embedding` — so
+    /// that name is simply absent; nothing else changes.)
+    ///
+    /// ★ CV3 `lm_head` is **tied to `embed_tokens`**: in this checkpoint
+    /// `llm.model.lm_head.weight` is byte-identical to `llm.model.model.embed_tokens.weight`
+    /// (verified on the model box), i.e. the *shared text embedding*, not CV2's distinct
+    /// ~520 MB dead-weight matrix. The shared body's loader drops the `lm_head`-named copy,
+    /// but that is **lossless here**: the very same weights are retained — and int4-quantized
+    /// — under `embed_tokens` (the table the speech path actually gathers from via
+    /// `text_embed`). So the shared text embedding is preserved in the footprint; only the
+    /// redundant duplicate of it is not resident twice. The CV3 speech forward
+    /// (`forward_hidden` → `llm_decoder`) never calls `lm_head`, so dropping the duplicate
+    /// changes no output.
+    ///
+    /// int4 trades accuracy for size; the forward is otherwise the identical code path, so
+    /// quantized logits track but do not equal the fp32 logits. ⚠️ Like CV2's, this int4
+    /// path is an **opt-in size win, not a speed win** — the per-row int4 embedding is
+    /// dequantized on every gather (a load-time-dominant cost), so inference stalls vs the
+    /// fp32 [`Cv3Lm::load`]; choose it for footprint, not latency.
+    pub fn load_quantized(path: &str, dev: Device) -> Result<Self> {
+        Ok(Self {
+            body: Qwen2Lm::load_quantized(path, dev)?,
+        })
+    }
+
+    /// Realized weight footprint (int4 quant + per-row int4 embeds + dense f32) of this
+    /// loaded CV3 LM — a thin pass-through to the shared body's [`Qwen2Lm::footprint`]. In
+    /// the fp32 [`Cv3Lm::load`] build every weight is dense (`quant_bytes == 0`).
+    pub fn footprint(&self) -> Footprint {
+        self.body.footprint()
+    }
+
+    /// Per-tensor `(name, bytes)` of every retained **dense** weight, largest first — the
+    /// instrumentation that surfaces whatever (if anything) is left un-quantized. A
+    /// pass-through to [`Qwen2Lm::dense_breakdown`]; in the int4 build this should be only
+    /// the tiny RMSNorm weights + attention biases (the tied `lm_head` duplicate is gone).
+    pub fn dense_breakdown(&self) -> Vec<(String, usize)> {
+        self.body.dense_breakdown()
     }
 
     /// Assemble the step-0 LM input exactly as CosyVoice3 `Qwen2LM.inference`:

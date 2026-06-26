@@ -179,6 +179,45 @@ impl Cv3Synthesizer {
         })
     }
 
+    /// Load every CV3 sub-model from `cfg` in its **int4-quantized** variant onto the CPU —
+    /// the README ~270 MB size-goal capstone for the end-to-end CV3 pipeline.
+    pub fn load_quantized(cfg: &Cv3SynthConfig) -> Result<Self, SynthError> {
+        Self::load_quantized_on_device(cfg, Device::Cpu)
+    }
+
+    /// Load every CV3 sub-model from `cfg` int4-quantized onto an explicit `dev`.
+    ///
+    /// The quantized analogue of [`Self::load_on_device`]: each Candle sub-model is loaded
+    /// through its `load_quantized` (LM int4 `Q4_0` linears + int4 embeds via
+    /// [`Cv3Lm::load_quantized`]; flow `Q4_0` DiT linears via [`Cv3Flow::load_quantized`];
+    /// HiFT `Q4_0` decode conv kernels via [`Cv3Hift::load_quantized`]; CAM++ `Q4_0` kernels
+    /// via [`CamPlus::load_quantized`], shared with CV2). The Qwen BPE text tokenizer and
+    /// the v3 speech-token ONNX runtime are unchanged (no weights to quantize). Forward math
+    /// is the identical code path on the dequantized weights; int4 trades accuracy for size
+    /// (an opt-in **size**, not speed, tradeoff — dequant-on-fetch stalls inference), so this
+    /// output tracks but does not equal the fp32 [`Self::load_on_device`] output. The fp32
+    /// loaders + the quality/instruct paths are byte-unchanged.
+    pub fn load_quantized_on_device(
+        cfg: &Cv3SynthConfig,
+        dev: Device,
+    ) -> Result<Self, SynthError> {
+        let tokenizer = TextTokenizer::from_file(&cfg.tokenizer_json)?;
+        let speech_tokenizer = SpeechTokenizer::load_cv3(&cfg.speech_tokenizer_onnx)?;
+        let speaker = CamPlus::load_quantized(&cfg.spk_weights, dev.clone())?;
+        let lm = Cv3Lm::load_quantized(&cfg.lm_weights, dev.clone())?;
+        let flow = Cv3Flow::load_quantized(&cfg.flow_weights, dev.clone())?;
+        let vocoder = Cv3Hift::load_quantized(&cfg.hift_weights, dev.clone())?;
+        Ok(Self {
+            tokenizer,
+            speech_tokenizer,
+            speaker,
+            lm,
+            flow,
+            vocoder,
+            dev,
+        })
+    }
+
     /// Load every CV3 sub-model, **overriding only the LM weight path** — the entry point
     /// for the **RL post-trained LM** (`llm.rl_fp32.safetensors`).
     ///
