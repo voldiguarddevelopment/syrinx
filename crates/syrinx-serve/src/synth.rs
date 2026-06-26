@@ -1065,11 +1065,20 @@ impl Synthesizer {
             None => self.generate_speech_token(&cond, inputs.lm_seed, inputs.max_gen_steps)?,
         };
 
-        // CFM noise z: pinned or zeros (the deterministic functional fallback).
+        // CFM noise z: pinned, else a SEEDED standard-normal init — the model's CFM
+        // `rand_noise` (torch.randn's *distribution*, not its byte stream), reproducible
+        // from `source_seed`. Far more natural than the zeros fallback, which gives the
+        // degenerate mean trajectory of the flow ODE (a likely MOS limiter on the
+        // deterministic path). `synthesize` keeps zeros (parity/smoke default).
         let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
         let z = match &inputs.z {
             Some(z) => z.clone(),
-            None => Tensor::zeros((1, MEL_NUM_MELS, total), DType::F32, &self.dev)?,
+            None => {
+                let n = MEL_NUM_MELS * total;
+                let mut rng = SplitMix64::new(source_seed ^ 0x5DEE_CE66_C0DE_F10D);
+                let zv: Vec<f32> = (0..n).map(|_| rng.next_gauss() as f32).collect();
+                Tensor::from_vec(zv, (1, MEL_NUM_MELS, total), &self.dev)?
+            }
         };
 
         // Flow -> generated mel, random-phase NSF source from it, then vocode.
