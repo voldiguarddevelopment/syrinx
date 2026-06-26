@@ -222,14 +222,14 @@ the harness will not mark a task done on belief.
 - [x] **CLI + server** — `syrinx synth|serve|stream`; OpenAI-compatible `POST /v1/audio/speech` returns real audio
 - [x] **Text normalization** — wetext-style zh+en (~95% match to the reference), wired into the real path (`tn` feature)
 - [x] **Editable prosody** — speech-rate (faithful, ≈1/rate) + a typed `RenderPlan`; **pitch is a weak training-free lever** (the HiFT mel filter dominates perceived pitch — measured + documented)
-- [x] **Measured eval** — SIM-o clone fidelity (≈0.74), RTF, TTFB, and **WER** (Whisper CER, ≈0% on a clean clone via the eval-side ASR helper); only MOS-proxy is `null` (needs a MOS-prediction model)
+- [x] **Measured eval — 5/5, no stub constants** — SIM-o clone fidelity (≈0.74), **WER** (Whisper CER ≈0%), **MOS-proxy** (UTMOS), RTF, TTFB. WER/MOS run via eval-side helper models (Whisper / UTMOS); the inference path stays pure-Rust
 - [x] **int4 (Q4_0) LM quant** — ~2.5× (2449 → 986 MB, SIM-o 0.72 preserved); the f16 embedding tables are the remaining bulk
 - [x] **Output watermark** — spread-spectrum, imperceptible + detectable after light processing (see *Ethics*)
 
 **Not yet (honest):**
 - [x] **Sample-faithful streaming** — CV2's chunked-causal attention mask (same weights) makes the streamed mel frames **bit-stable** (`real_flow_stream_consistency`: 0.0 diff vs 0.53 for the old non-causal path), and the **streamed audio is intelligible — Whisper CER 0.0**, identical to batch. (Streamed audio is *not* sample-identical to the batch — CV2's streaming cross-fades by design; details in [`STREAMING.md`](crates/syrinx-acoustic/docs/STREAMING.md).) Sub-200 ms TTFB remains a design target (CPU TTFB is LM-bound).
 - [ ] **Emotion / paralinguistic control** — needs the CosyVoice2 **instruct checkpoint** (not in the base 0.5B); research-tracked.
-- [ ] **Perceptual-MOS eval** — needs a MOS-prediction model (UTMOS/DNSMOS). (WER is now wired via Whisper; cross-lingual eval can reuse the same ASR.)
+- [ ] **Cross-lingual eval set** — the SIM-o/WER/MOS harness already handles it; just needs a multilingual frozen eval set + a sweep (the Whisper helper is language-aware).
 - [ ] **Smaller footprint** — quantize the embedding tables + the flow to approach a ~270 MB target.
 - [ ] **Consolidation** — retire the orphaned deterministic spec-engine modules (frontend normalize/G2P/SSML, toy prosody) now superseded by the real pipeline.
 

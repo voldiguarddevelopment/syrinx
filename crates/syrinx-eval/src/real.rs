@@ -136,35 +136,35 @@ pub fn evaluate(
 
     Ok(Metrics {
         sim_o,
-        // WER via an external Whisper ASR helper (QA-side only — the inference path
-        // stays pure-Rust); `None` when `SYRINX_WER_HELPER` is unset.
-        wer: wer_via_helper(&wav, input.text),
-        mos_proxy: None, // needs a MOS-prediction model (UTMOS/DNSMOS) — not built.
+        // WER (Whisper ASR) + MOS-proxy (UTMOS) via external eval helpers — QA-side only,
+        // the inference path stays pure-Rust. Each is `None` when its env var is unset.
+        wer: audio_helper(&wav, "SYRINX_WER_HELPER", Some(input.text)),
+        mos_proxy: audio_helper(&wav, "SYRINX_MOS_HELPER", None),
         ttfb_ms,
         rtf,
     })
 }
 
-/// Optional WER/CER via an external ASR helper. `SYRINX_WER_HELPER` is a command
-/// prefix (e.g. `"micromamba run -n syrinx python scripts/eval_wer.py"`); the synth
-/// output WAV path and the reference text are appended, and the helper prints the
-/// error rate as a float on its last stdout line. Returns `None` if the var is unset
-/// or the helper fails — the pure-Rust path never depends on it.
-fn wer_via_helper(wav: &[f32], reference: &str) -> Option<f64> {
-    let cmd = std::env::var("SYRINX_WER_HELPER").ok().filter(|s| !s.is_empty())?;
-    let tmp = std::env::temp_dir().join("syrinx_wer_eval.wav");
+/// Run an external audio-eval helper and parse a float from its last stdout line.
+/// `env_var` holds a command prefix (e.g. `"micromamba run -n syrinx python scripts/eval_mos.py"`);
+/// the synth output WAV path is appended, plus `extra` (the reference text, for WER) when given.
+/// Used for both WER (`SYRINX_WER_HELPER` + reference) and MOS-proxy (`SYRINX_MOS_HELPER`, no extra).
+/// Returns `None` if the var is unset or the helper fails — the pure-Rust path never depends on it.
+fn audio_helper(wav: &[f32], env_var: &str, extra: Option<&str>) -> Option<f64> {
+    let cmd = std::env::var(env_var).ok().filter(|s| !s.is_empty())?;
+    let tmp = std::env::temp_dir().join("syrinx_eval_audio.wav");
     wavio::write_wav_24k(&tmp, wav).ok()?;
     let mut parts = cmd.split_whitespace();
     let prog = parts.next()?;
-    let out = std::process::Command::new(prog)
-        .args(parts)
-        .arg(&tmp)
-        .arg(reference)
-        .output()
-        .ok()?;
+    let mut command = std::process::Command::new(prog);
+    command.args(parts).arg(&tmp);
+    if let Some(e) = extra {
+        command.arg(e);
+    }
+    let out = command.output().ok()?;
     if !out.status.success() {
         eprintln!(
-            "syrinx-eval: WER helper failed: {}",
+            "syrinx-eval: {env_var} helper failed: {}",
             String::from_utf8_lossy(&out.stderr)
         );
         return None;

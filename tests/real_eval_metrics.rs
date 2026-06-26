@@ -94,5 +94,14 @@ fn real_eval_metrics_are_measured() {
         (Some(_), None) => eprintln!("note: SYRINX_WER_HELPER set but the helper returned no rate"),
         (None, w) => assert!(w.is_none(), "wer must be null without SYRINX_WER_HELPER: {w:?}"),
     }
-    assert!(m.mos_proxy.is_none(), "mos_proxy must be null until a MOS model is wired");
+    // MOS-proxy is measured only when the UTMOS helper is configured (SYRINX_MOS_HELPER);
+    // otherwise it is an honest null. A valid MOS sits in [1, 5].
+    match (env("SYRINX_MOS_HELPER"), m.mos_proxy) {
+        (Some(_), Some(mos)) => assert!(
+            mos.is_finite() && (1.0..=5.0).contains(&mos),
+            "mos_proxy out of [1,5]: {mos}"
+        ),
+        (Some(_), None) => eprintln!("note: SYRINX_MOS_HELPER set but the helper returned no score"),
+        (None, m) => assert!(m.is_none(), "mos_proxy must be null without SYRINX_MOS_HELPER: {m:?}"),
+    }
 }
