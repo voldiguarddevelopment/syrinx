@@ -222,14 +222,14 @@ the harness will not mark a task done on belief.
 - [x] **CLI + server** — `syrinx synth|serve|stream`; OpenAI-compatible `POST /v1/audio/speech` returns real audio
 - [x] **Text normalization** — wetext-style zh+en (~95% match to the reference), wired into the real path (`tn` feature)
 - [x] **Editable prosody** — speech-rate (faithful, ≈1/rate) + a typed `RenderPlan`; **pitch is a weak training-free lever** (the HiFT mel filter dominates perceived pitch — measured + documented)
-- [x] **Measured eval** — SIM-o clone fidelity (≈0.74), RTF, TTFB (WER/MOS report honest `null` — need ASR/MOS models)
+- [x] **Measured eval** — SIM-o clone fidelity (≈0.74), RTF, TTFB, and **WER** (Whisper CER, ≈0% on a clean clone via the eval-side ASR helper); only MOS-proxy is `null` (needs a MOS-prediction model)
 - [x] **int4 (Q4_0) LM quant** — ~2.5× (2449 → 986 MB, SIM-o 0.72 preserved); the f16 embedding tables are the remaining bulk
 - [x] **Output watermark** — spread-spectrum, imperceptible + detectable after light processing (see *Ethics*)
 
 **Not yet (honest):**
-- [ ] **Sample-faithful streaming** — streaming works + is correct-length, but is *not* sample-identical to the non-streaming path; needs a **causal cached flow** (CosyVoice2 `flow_cache`). Sub-200 ms TTFB is a design target, not a measured result (CPU TTFB is LM-bound).
+- [ ] **Sample-faithful streaming** — streaming works + is correct-length but is *not* sample-identical to the batch path; the fix is CV2's **chunked-causal attention mask** in the flow (same weights). Concrete implementation plan: [`crates/syrinx-acoustic/docs/STREAMING.md`](crates/syrinx-acoustic/docs/STREAMING.md). Sub-200 ms TTFB is a design target, not a measured result (CPU TTFB is LM-bound).
 - [ ] **Emotion / paralinguistic control** — needs the CosyVoice2 **instruct checkpoint** (not in the base 0.5B); research-tracked.
-- [ ] **Cross-lingual / WER / perceptual-MOS eval** — needs an ASR + a MOS-prediction model on the eval box.
+- [ ] **Perceptual-MOS eval** — needs a MOS-prediction model (UTMOS/DNSMOS). (WER is now wired via Whisper; cross-lingual eval can reuse the same ASR.)
 - [ ] **Smaller footprint** — quantize the embedding tables + the flow to approach a ~270 MB target.
 - [ ] **Consolidation** — retire the orphaned deterministic spec-engine modules (frontend normalize/G2P/SSML, toy prosody) now superseded by the real pipeline.
 
