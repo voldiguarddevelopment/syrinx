@@ -15,6 +15,7 @@
 use std::time::Instant;
 
 use syrinx_serve::synth::{SynthInputs, Synthesizer};
+use syrinx_serve::synth_cv3::{Cv3SynthInputs, Cv3Synthesizer};
 use syrinx_serve::wavio;
 
 const SR_24K: u32 = 24_000;
@@ -163,6 +164,82 @@ pub fn evaluate(
         sim_o,
         // WER (Whisper ASR) + MOS-proxy (UTMOS) via external eval helpers — QA-side only,
         // the inference path stays pure-Rust. Each is `None` when its env var is unset.
+        wer: audio_helper(&wav, "SYRINX_WER_HELPER", Some(input.text)),
+        mos_proxy: audio_helper(&wav, "SYRINX_MOS_HELPER", None),
+        ttfb_ms,
+        rtf,
+    })
+}
+
+/// Evaluate one input on the **CosyVoice3** [`Cv3Synthesizer`], measuring the SAME
+/// five metrics as the CV2 [`evaluate`] — `sim_o` / `wer` / `mos_proxy` / `rtf` /
+/// `ttfb_ms` — on CV3 output. This mirrors CV2's eval path with the CV3 synthesizer
+/// swapped in; everything else (the CAM++ `speaker_embedding` SIM-o, the WER/MOS
+/// helper-shelling, the JSON shape) is reused unchanged.
+///
+/// `sim_o`     — CAM++ speaker cosine between the reference clip and the CV3 output
+///               (the same `speaker_embedding` path CV2 uses, here on `Cv3Synthesizer`);
+/// `rtf`       — synthesis wall-time / output audio duration;
+/// `ttfb_ms`   — time to the first audio. The current [`Cv3Synthesizer`] API exposes
+///               only the **batch** `synthesize` (no streaming entry point), so the
+///               whole clip is produced in one call: time-to-first-audio therefore
+///               equals the full synthesis wall-time. It is a real, finite, positive
+///               measurement (not a stub), it just cannot be smaller than `rtf`'s
+///               numerator for a non-streaming synth;
+/// `wer`       — `scripts/eval_wer.py` (Whisper) via `SYRINX_WER_HELPER`, on the CV3 WAV;
+/// `mos_proxy` — `scripts/eval_mos.py` (UTMOS) via `SYRINX_MOS_HELPER`, on the CV3 WAV.
+///
+/// `wer`/`mos_proxy` stay honest `None` when their helper env var is unset. `max_gen_steps`
+/// caps live LM decoding so CPU runs stay tractable (`None` = the real `|tts_text|*20` ratio).
+pub fn evaluate_cv3(
+    synth: &mut Cv3Synthesizer,
+    input: &EvalInput<'_>,
+    max_gen_steps: Option<usize>,
+) -> Result<Metrics, String> {
+    let inputs = Cv3SynthInputs {
+        lm_seed: 0,
+        max_gen_steps,
+        ..Default::default()
+    };
+
+    // --- RTF + TTFB: one batch synthesis. Wall-time drives RTF; for the non-streaming
+    //     CV3 API the whole clip is the "first chunk", so TTFB = the same wall-time. ---
+    let t0 = Instant::now();
+    let wav = synth
+        .synthesize(
+            input.text,
+            input.prompt_text,
+            input.ref_wav_16k,
+            input.ref_wav_24k,
+            &inputs,
+        )
+        .map_err(|e| e.to_string())?;
+    let synth_secs = t0.elapsed().as_secs_f64();
+    let audio_secs = wav.len() as f64 / SR_24K as f64;
+    let rtf = (audio_secs > 0.0).then(|| synth_secs / audio_secs);
+    let ttfb_ms = Some(synth_secs * 1000.0);
+
+    // --- SIM-o: speaker cosine between the reference and the CV3 output, both embedded
+    //     through the same CAM++ `speaker_embedding` path CV2 uses. ---
+    let out_16k = wavio::resample(&wav, SR_24K, SR_16K);
+    let ref_emb = synth
+        .speaker_embedding(input.ref_wav_16k)
+        .map_err(|e| e.to_string())?;
+    let out_emb = synth.speaker_embedding(&out_16k).map_err(|e| e.to_string())?;
+    let ref_v: Vec<f32> = ref_emb
+        .flatten_all()
+        .and_then(|t| t.to_vec1())
+        .map_err(|e| e.to_string())?;
+    let out_v: Vec<f32> = out_emb
+        .flatten_all()
+        .and_then(|t| t.to_vec1())
+        .map_err(|e| e.to_string())?;
+    let sim_o = Some(cosine(&ref_v, &out_v));
+
+    Ok(Metrics {
+        sim_o,
+        // WER (Whisper ASR) + MOS-proxy (UTMOS) via the SAME external eval helpers as CV2,
+        // unchanged — each is `None` when its env var is unset.
         wer: audio_helper(&wav, "SYRINX_WER_HELPER", Some(input.text)),
         mos_proxy: audio_helper(&wav, "SYRINX_MOS_HELPER", None),
         ttfb_ms,
