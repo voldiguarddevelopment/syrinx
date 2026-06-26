@@ -46,6 +46,45 @@ const CONV_POS_GROUPS: usize = 16; // grouped conv
 const LN_EPS_DIT: f64 = 1e-6; // DiT's elementwise_affine=False LayerNorms
 const CFG_RATE: f64 = 0.7; // inference_cfg_rate
 
+/// Chunked-causal streaming configuration for [`Cv3Flow::forward_zero_shot_streaming`].
+///
+/// CosyVoice3 streams the **same** `CausalMaskedDiffWithDiT` weights under a chunk
+/// attention mask in its DiT estimator (it does *not* swap in a different architecture):
+/// a mel frame in chunk `c` may attend only to chunks `[c - num_left, c]`, never the
+/// future, so finalized frames stay bit-stable as later chunks arrive. Unlike CV2 there is
+/// **no conformer encoder** to mask — the CV3 front-end (`input_embedding ->
+/// pre_lookahead -> repeat_interleave`) is convolution-only, so the DiT estimator is the
+/// sole attention stage that needs a chunk mask. Defaults come from [`Cv3StreamCfg::cosyvoice3`].
+#[derive(Clone, Copy, Debug)]
+pub struct Cv3StreamCfg {
+    /// DiT-estimator chunk size, in **mel frames** (the estimator runs at mel rate, which
+    /// is `token_mel_ratio = 2`× the token rate).
+    pub est_chunk: usize,
+    /// Number of left chunks a frame may additionally attend to (besides its own chunk).
+    /// `usize::MAX` ⇒ all left chunks (CosyVoice3's `num_decoding_left_chunks = -1`).
+    pub num_left: usize,
+}
+
+impl Cv3StreamCfg {
+    /// The CosyVoice3-0.5B defaults, read straight from the box reference
+    /// (`cosyvoice/flow/DiT/dit.py`):
+    ///
+    /// ```text
+    ///   DiT.static_chunk_size = 50            # the estimator chunk, IN MEL FRAMES
+    ///   DiT.forward(streaming=True):
+    ///     add_optional_chunk_mask(x, mask, ..., static_chunk_size=50, num_left=-1)
+    /// ```
+    ///
+    /// * `est_chunk = 50` — `DiT.static_chunk_size`. The DiT runs on the **mel** sequence
+    ///   (length `2*(Tp+Tg)`); CV3 sets its streaming chunk to 50 mel frames (= 25 tokens
+    ///   × `token_mel_ratio`), matching the LM/flow `token_hop_len = 25`.
+    /// * `num_left = usize::MAX` — at the call site the DiT passes `num_decoding_left_chunks
+    ///   = -1` (all left chunks) regardless of the stored `2`, exactly as CV2's runtime does.
+    pub fn cosyvoice3() -> Self {
+        Self { est_chunk: 50, num_left: usize::MAX }
+    }
+}
+
 /// The real CosyVoice3 flow `CausalMaskedDiffWithDiT`, loaded from fp32 safetensors.
 ///
 /// Two precisions share one struct + one forward, exactly like the CV2 [`crate::real::Flow`]:
@@ -267,6 +306,26 @@ impl Cv3Flow {
         spks: &Tensor,
         cond: &Tensor,
     ) -> Result<Tensor> {
+        // Parity default: the unmasked (full-context) DiT, so existing callers and the
+        // frozen `real_cv3_flow_parity` test stay byte-identical.
+        self.estimator_masked(x, mu, t, spks, cond, None)
+    }
+
+    /// [`Self::estimator`] with an optional chunked-causal attention mask.
+    ///
+    /// `mask`, if given, is the additive `[1,1,L,L]` mask (built at the mel length `L`)
+    /// threaded into every DiT block's self-attention so the 22 transformer blocks are
+    /// chunk-causal (the CV3 `DiT.forward(streaming=True)` path); `None` reproduces the
+    /// full-context batch path exactly.
+    pub fn estimator_masked(
+        &self,
+        x: &Tensor,
+        mu: &Tensor,
+        t: &Tensor,
+        spks: &Tensor,
+        cond: &Tensor,
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let p = "decoder.estimator";
         let (b, _c, l) = x.dims3()?;
 
@@ -296,7 +355,7 @@ impl Cv3Flow {
 
         // 22 DiT blocks.
         for i in 0..DIT_DEPTH {
-            h = self.dit_block(&h, &temb, &rope_cos, &rope_sin, &format!("{p}.transformer_blocks.{i}"))?;
+            h = self.dit_block(&h, &temb, &rope_cos, &rope_sin, mask, &format!("{p}.transformer_blocks.{i}"))?;
         }
 
         // AdaLayerNormZero_Final + proj_out.
@@ -389,12 +448,13 @@ impl Cv3Flow {
         temb: &Tensor,
         rope_cos: &Tensor,
         rope_sin: &Tensor,
+        mask: Option<&Tensor>,
         p: &str,
     ) -> Result<Tensor> {
         // attn_norm = AdaLayerNormZero: returns modulated `norm` + the 4 mlp/gate params.
         let (norm, gate_msa, shift_mlp, scale_mlp, gate_mlp) =
             self.adaln_zero(x, temb, &format!("{p}.attn_norm"))?;
-        let attn = self.dit_attn(&norm, rope_cos, rope_sin, &format!("{p}.attn"))?;
+        let attn = self.dit_attn(&norm, rope_cos, rope_sin, mask, &format!("{p}.attn"))?;
         // x = x + gate_msa[:,None] * attn
         let x = (x + gate_msa.unsqueeze(1)?.broadcast_mul(&attn)?)?;
 
@@ -453,7 +513,14 @@ impl Cv3Flow {
     /// per head.) Instrumenting the real `apply_rotary_pos_emb` confirmed exactly
     /// **64/1024 query channels change** (query ndim=3, rot_dim=64), and `use_xpos=False`
     /// so the xpos scale is the identity 1.0.
-    fn dit_attn(&self, x: &Tensor, rope_cos: &Tensor, rope_sin: &Tensor, p: &str) -> Result<Tensor> {
+    fn dit_attn(
+        &self,
+        x: &Tensor,
+        rope_cos: &Tensor,
+        rope_sin: &Tensor,
+        mask: Option<&Tensor>,
+        p: &str,
+    ) -> Result<Tensor> {
         let (b, n, _) = x.dims3()?;
         let q = self.linear(x, &format!("{p}.to_q.weight"), Some(&format!("{p}.to_q.bias")))?; // [B,N,1024]
         let k = self.linear(x, &format!("{p}.to_k.weight"), Some(&format!("{p}.to_k.bias")))?;
@@ -469,6 +536,14 @@ impl Cv3Flow {
         let v = v.reshape((b, n, h, dk))?.transpose(1, 2)?.contiguous()?;
         let scale = 1.0 / (dk as f64).sqrt();
         let scores = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? * scale)?; // [B,H,N,N]
+        // Chunked-causal mask (streaming): the additive `[1,1,N,N]` 0/-inf mask is added to
+        // the scores before softmax so a finalized frame never attends to the future — the
+        // CV3 `DiT.forward(streaming=True)` `add_optional_chunk_mask` path. `None` ⇒ the
+        // full-context batch path (byte-unchanged).
+        let scores = match mask {
+            Some(m) => scores.broadcast_add(m)?,
+            None => scores,
+        };
         let probs = softmax_last(&scores)?;
         let ctx = probs.matmul(&v)?; // [B,H,N,dk]
         let ctx = ctx.transpose(1, 2)?.contiguous()?.reshape((b, n, h * dk))?;
@@ -498,6 +573,23 @@ impl Cv3Flow {
         z0: &Tensor,
         n_timesteps: usize,
     ) -> Result<Tensor> {
+        // Parity default: the unmasked (full-context) estimator, byte-identical for the
+        // batch path + the frozen parity test.
+        self.cfm_solve_masked(mu, spk, cond, z0, n_timesteps, None)
+    }
+
+    /// [`Self::cfm_solve`] with an optional chunked-causal estimator mask threaded into
+    /// every Euler step's DiT call. `mask` is the additive `[1,1,L,L]` chunk mask built at
+    /// the mel length `L`; `None` reproduces the full-context parity path exactly.
+    pub fn cfm_solve_masked(
+        &self,
+        mu: &Tensor,
+        spk: &Tensor,
+        cond: &Tensor,
+        z0: &Tensor,
+        n_timesteps: usize,
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
         let l = mu.dim(2)?;
         // t_span: cosine schedule 1 - cos(linspace(0,1,n+1) * 0.5*pi).
         let mut tvals = vec![0f32; n_timesteps + 1];
@@ -516,7 +608,7 @@ impl Cv3Flow {
             let spk_in = Tensor::cat(&[spk, &zero_spk], 0)?; // [2,80]
             let cond_in = Tensor::cat(&[cond, &zero_cond], 0)?; // [2,80,L]
             let t_in = Tensor::from_vec(vec![t, t], (2,), &self.dev)?;
-            let dphi = self.estimator(&x_in, &mu_in, &t_in, &spk_in, &cond_in)?; // [2,80,L]
+            let dphi = self.estimator_masked(&x_in, &mu_in, &t_in, &spk_in, &cond_in, mask)?; // [2,80,L]
             let real = dphi.narrow(0, 0, 1)?;
             let uncond = dphi.narrow(0, 1, 1)?;
             let dphi_dt = ((real * (1.0 + CFG_RATE))? - (uncond * CFG_RATE)?)?;
@@ -554,6 +646,53 @@ impl Cv3Flow {
         let cond = Tensor::cat(&[&prompt_ct, &cond_tail], 2)?; // [1,80,total]
 
         let mel_full = self.cfm_solve(&mu, &spk, &cond, z, n_timesteps)?; // [1,80,total]
+        mel_full.narrow(2, mel_len1, mel_len2) // drop prompt-mel prefix
+    }
+
+    /// Chunked-causal **streaming** counterpart of [`Self::forward`].
+    ///
+    /// Identical conditioning, weights, noise, and CFM ODE as `forward`, but the DiT
+    /// estimator runs under a chunk-causal attention mask built from `cfg`: a finalized
+    /// mel frame never attends to the future, so re-running on a grown token prefix leaves
+    /// already-finalized frames **bit-stable** — the property that makes streaming
+    /// sample-faithful (the CV3 analogue of CV2's `forward_zero_shot_streaming`; see
+    /// `syrinx-acoustic/docs/STREAMING.md`). With `cfg.est_chunk` set huge this reduces to
+    /// the unmasked path; with [`Cv3StreamCfg::cosyvoice3`] it matches CosyVoice3's
+    /// `flow.inference(streaming=True)` / `DiT.forward(streaming=True)`.
+    ///
+    /// CV3 has no conformer encoder, so — unlike CV2 — the only masked stage is the DiT
+    /// estimator (the `input_embedding -> pre_lookahead -> repeat_interleave` front-end is
+    /// convolution-only and carries its own causal/lookahead padding). `forward` (the
+    /// non-streaming batch path) is byte-unchanged.
+    ///
+    /// Returns the generated mel `[1, 80, 2*Tg]`, same shape/semantics as `forward`.
+    pub fn forward_zero_shot_streaming(
+        &self,
+        prompt_token: &Tensor,
+        token: &Tensor,
+        prompt_feat: &Tensor,
+        embedding: &Tensor,
+        z: &Tensor,
+        n_timesteps: usize,
+        cfg: Cv3StreamCfg,
+    ) -> Result<Tensor> {
+        let spk = self.spk_proj(embedding)?; // [1,80]
+        let tok_cat = Tensor::cat(&[prompt_token, token], 1)?; // [1, Tp+Tg]
+        let mu = self.token_to_mu(&tok_cat)?; // [1,80, 2*(Tp+Tg)]
+
+        let total = mu.dim(2)?;
+        let mel_len1 = prompt_feat.dim(1)?; // 2*Tp
+        let mel_len2 = total - mel_len1; // 2*Tg
+
+        let prompt_ct = prompt_feat.transpose(1, 2)?.contiguous()?; // [1,80,mel_len1]
+        let cond_tail = Tensor::zeros((1, MEL, mel_len2), DType::F32, &self.dev)?;
+        let cond = Tensor::cat(&[&prompt_ct, &cond_tail], 2)?; // [1,80,total]
+
+        // Estimator mask: built at the mel length `total` with chunk `est_chunk`. A frame
+        // in chunk `c` attends only to chunks `[0, c]` (num_left = all-left), never future.
+        let m_est = add_optional_chunk_mask(total, cfg.est_chunk, cfg.num_left, &self.dev)?;
+
+        let mel_full = self.cfm_solve_masked(&mu, &spk, &cond, z, n_timesteps, Some(&m_est))?;
         mel_full.narrow(2, mel_len1, mel_len2) // drop prompt-mel prefix
     }
 }
@@ -664,4 +803,44 @@ fn gelu_tanh(x: &Tensor) -> Result<Tensor> {
 
 fn softmax_last(x: &Tensor) -> Result<Tensor> {
     candle_nn::ops::softmax(x, D::Minus1)
+}
+
+/// Build CosyVoice3's additive chunked-causal attention mask `[1, 1, t, t]` for the DiT
+/// estimator — the Rust analogue of `add_optional_chunk_mask` +
+/// `subsequent_chunk_mask` (`cosyvoice/utils/mask.py`) as invoked by
+/// `DiT.forward(streaming=True)`.
+///
+/// Position `i` lives in chunk `c = i / chunk_size`; it may attend to position `j`
+/// (chunk `cj = j / chunk_size`) iff `c - num_left <= cj <= c` — its own chunk and up to
+/// `num_left` chunks of left context, **never the future**. Allowed entries are `0.0`;
+/// disallowed are `f32::NEG_INFINITY`, so adding this to pre-softmax scores zeros out the
+/// forbidden positions. Every row always includes its own chunk (`cj = c`, which contains
+/// `i`), so no row is fully masked and the softmax never sees an all-`-inf` row (no NaN) —
+/// matching the reference's "force set to true" all-false guard.
+///
+/// `num_left == usize::MAX` (saturating) ⇒ all left chunks (CosyVoice3's
+/// `num_decoding_left_chunks = -1`, which is what the DiT passes at runtime). A
+/// `chunk_size` larger than `t` ⇒ a single chunk ⇒ an all-zeros mask (no masking), and
+/// `chunk_size == 0` is treated as no masking too — so the non-streaming path passes `None`.
+fn add_optional_chunk_mask(
+    t: usize,
+    chunk_size: usize,
+    num_left: usize,
+    dev: &Device,
+) -> Result<Tensor> {
+    let mut data = vec![0f32; t * t];
+    if chunk_size > 0 {
+        for i in 0..t {
+            let ci = i / chunk_size;
+            let start_chunk = ci.saturating_sub(num_left); // num_left==MAX ⇒ 0 (all left)
+            let row = i * t;
+            for j in 0..t {
+                let cj = j / chunk_size;
+                if cj < start_chunk || cj > ci {
+                    data[row + j] = f32::NEG_INFINITY;
+                }
+            }
+        }
+    }
+    Tensor::from_vec(data, (1, 1, t, t), dev)
 }
