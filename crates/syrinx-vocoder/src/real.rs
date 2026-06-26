@@ -32,8 +32,14 @@
 //! input, and this port reproduces `decode` exactly. The F0 predictor (fully
 //! deterministic) is also ported and checked separately.
 
+use candle_core::quantized::{GgmlDType, QTensor};
 use candle_core::{safetensors, DType, Device, Result, Tensor, D};
 use std::collections::HashMap;
+
+/// Smallest weight (in elements) worth quantizing in [`HiftVocoder::load_quantized`].
+/// Below this the Q4_0 per-block scale overhead dominates and the tiny weight is left
+/// f32 (keeps small/sensitive params — the head `conv_post`-adjacent tensors — exact).
+const QUANT_MIN_ELEMS: usize = 4096;
 
 const N_FFT: usize = 16;
 const HOP: usize = 4;
@@ -45,10 +51,53 @@ const UPSAMPLE_RATES: [usize; 3] = [8, 5, 3];
 const RESBLOCK_KERNELS: [usize; 3] = [3, 7, 11];
 const RESBLOCK_DILATIONS: [usize; 3] = [1, 3, 5];
 
+/// A `Q4_0`-quantized weight stored for **dequant-on-fetch**: the forward is unchanged
+/// (it asks [`HiftVocoder::g`] for an f32 tensor and gets one back), only the *resident*
+/// storage is the int4 `QTensor`. The original logical shape (conv kernels are 3-D
+/// `[out,in,k]`) is kept so `g` can restore it after dequantizing the 2-D block store.
+struct QStore {
+    qt: QTensor,
+    shape: Vec<usize>,
+}
+
 /// The real HiFT vocoder, loaded from a folded fp32 safetensors checkpoint.
+///
+/// Two precisions share one struct + one forward, like the LM/flow:
+///   * **fp32 (default, parity)** — [`HiftVocoder::load`], every weight in `w` as f32,
+///     byte-unchanged.
+///   * **int4 (`load_quantized`)** — the large weight *matrices* (conv kernels reshaped
+///     to `[out, in*k]` and any linear) are stored Q4_0 in `qw` and dequantized on fetch;
+///     biases, Snake `alpha`s and other 1-D / small params stay f32 in `w`.
 pub struct HiftVocoder {
     w: HashMap<String, Tensor>,
+    /// Q4_0 dequant-on-fetch weights (empty in the fp32 build).
+    qw: HashMap<String, QStore>,
+    /// Sum of the `QTensor` storage bytes realized by quantization (0 in the fp32 build).
+    quant_bytes: usize,
     dev: Device,
+}
+
+/// Realized weight footprint of a loaded [`HiftVocoder`], split into the int4-quantized
+/// and retained dense (f32) parts.
+#[derive(Debug, Clone, Copy)]
+pub struct HiftFootprint {
+    /// Bytes held by the `Q4_0` quantized weights (0 in the fp32 build).
+    pub quant_bytes: usize,
+    /// Bytes held by the retained dense f32 weights (biases, alphas, small/odd kernels).
+    pub dense_bytes: usize,
+    /// Number of weights quantized to int4.
+    pub n_quantized: usize,
+}
+
+impl HiftFootprint {
+    /// Total realized weight bytes (`quant + dense`).
+    pub fn total_bytes(&self) -> usize {
+        self.quant_bytes + self.dense_bytes
+    }
+    /// Total realized weight footprint in mebibytes.
+    pub fn total_mb(&self) -> f64 {
+        self.total_bytes() as f64 / (1024.0 * 1024.0)
+    }
 }
 
 impl HiftVocoder {
@@ -59,14 +108,67 @@ impl HiftVocoder {
         for (k, v) in raw {
             w.insert(k, v.to_dtype(DType::F32)?);
         }
-        Ok(Self { w, dev })
+        Ok(Self { w, qw: HashMap::new(), quant_bytes: 0, dev })
+    }
+
+    /// Load the same checkpoint but quantize the large weight **matrices** to GGML `Q4_0`
+    /// for a smaller vocoder footprint (the README size goal; goal #3 of the quant pass).
+    ///
+    /// Quantized (dequant-on-fetch, [`QStore`]): every weight whose flattened
+    /// `[out, in*k]` matrix has a 32-aligned inner dim and ≥ [`QUANT_MIN_ELEMS`] elements —
+    /// i.e. the HiFi-GAN upsample `ConvTranspose1d` kernels and the Snake `ResBlock`
+    /// `Conv1d` kernels (the footprint bulk). They are reshaped to a 2-D block store, int4
+    /// quantized, and reconstructed to their original `[out,in,k]` shape on lookup, so the
+    /// `decode`/`f0_predict` math is byte-for-byte the fp32 code path on the dequantized
+    /// weight.
+    ///
+    /// Kept dense (f32): all biases, the Snake channel `alpha`s, and any small or
+    /// non-32-aligned kernel (e.g. `conv_pre` `[512,80,7]`, `in*k = 560`).
+    ///
+    /// NOTE: this **does** quantize convolution kernels (not just pure linears) — the only
+    /// way the vocoder's conv-dominated weights yield a real size win. int4 on conv
+    /// kernels trades quality for size; the on-box SIM-o eval is the arbiter, and the fp32
+    /// [`load`](Self::load) path stays available for full quality.
+    pub fn load_quantized(path: &str, dev: Device) -> Result<Self> {
+        let raw = safetensors::load(path, &dev)?;
+        let mut w = HashMap::with_capacity(raw.len());
+        let mut qw = HashMap::new();
+        let mut quant_bytes = 0usize;
+        for (k, v) in raw {
+            let vf = v.to_dtype(DType::F32)?;
+            if let Some(qs) = maybe_quantize_weight(&vf)? {
+                quant_bytes += qs.qt.storage_size_in_bytes();
+                qw.insert(k, qs);
+            } else {
+                w.insert(k, vf);
+            }
+        }
+        Ok(Self { w, qw, quant_bytes, dev })
+    }
+
+    /// Realized weight footprint (quantized + dense) of this loaded vocoder.
+    pub fn footprint(&self) -> HiftFootprint {
+        let dense_bytes: usize = self
+            .w
+            .values()
+            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+            .sum();
+        HiftFootprint {
+            quant_bytes: self.quant_bytes,
+            dense_bytes,
+            n_quantized: self.qw.len(),
+        }
     }
 
     fn g(&self, name: &str) -> Result<Tensor> {
-        self.w
-            .get(name)
-            .ok_or_else(|| candle_core::Error::Msg(format!("missing weight: {name}")))
-            .cloned()
+        if let Some(t) = self.w.get(name) {
+            return Ok(t.clone());
+        }
+        if let Some(q) = self.qw.get(name) {
+            // Dequantize the 2-D block store and restore the original logical shape.
+            return q.qt.dequantize(&self.dev)?.reshape(q.shape.clone());
+        }
+        Err(candle_core::Error::Msg(format!("missing weight: {name}")))
     }
 
     /// Plain `Conv1d`: `[B, Cin, T]` -> `[B, Cout, T']` with the given padding,
@@ -248,6 +350,28 @@ impl HiftVocoder {
         let b: f32 = b.flatten_all()?.to_vec1::<f32>()?[0];
         Ok((w, b))
     }
+}
+
+/// Decide whether a weight `vf` is a large block-aligned matrix worth quantizing to
+/// `Q4_0` (dequant-on-fetch), returning its [`QStore`] if so, else `None` (keep f32).
+///
+/// A conv kernel `[out,in,k]` (or a 2-D linear `[out,in]`) flattens to `[out, in*k]`;
+/// it is quantized when `in*k` is a multiple of the 32-element `Q4_0` block and the
+/// tensor has at least [`QUANT_MIN_ELEMS`] elements. 1-D weights (biases, Snake `alpha`s)
+/// and small/odd kernels stay dense.
+fn maybe_quantize_weight(vf: &Tensor) -> Result<Option<QStore>> {
+    let dims = vf.dims().to_vec();
+    if dims.len() < 2 || vf.elem_count() < QUANT_MIN_ELEMS {
+        return Ok(None);
+    }
+    let out = dims[0];
+    let inner: usize = dims[1..].iter().product(); // in * k (conv) or in (linear)
+    if inner % GgmlDType::Q4_0.block_size() != 0 {
+        return Ok(None);
+    }
+    let mat = vf.reshape((out, inner))?; // 2-D block store
+    let qt = QTensor::quantize(&mat, GgmlDType::Q4_0)?;
+    Ok(Some(QStore { qt, shape: dims }))
 }
 
 /// `(padding, stride)` for upsample stage `i` (`padding=(k-u)//2`).

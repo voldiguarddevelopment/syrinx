@@ -32,10 +32,12 @@ const ROPE_THETA: f32 = 1_000_000.0;
 ///   * **int4 (`load_quantized`)** — the big linear weights (`q/k/v/o_proj`,
 ///     `gate/up/down_proj`, and the `llm_decoder` head) are quantized to GGML `Q4_0`
 ///     and live in `qmm` as [`QMatMul`]; `linear` dispatches to the QMatMul (`x @ Wᵀ`,
-///     int4 weight × f32 activation). Embeddings are kept as an f16 lookup table,
-///     RMSNorm weights and the small biases stay f32. RoPE / softmax / attention math
-///     are f32 in both. The forward, sampler, KV-cache and generation loop are byte-for
-///     -byte the same code path; only the per-`linear` weight representation differs.
+///     int4 weight × f32 activation). Embeddings are quantized per-row to int4 (default;
+///     see [`DEFAULT_EMBED_SCHEME`]) for dequant-on-gather, RMSNorm weights and the small
+///     biases stay f32, and the unused Qwen2 `lm_head` (the ~520 MB dense remainder) is
+///     dropped entirely. RoPE / softmax / attention math are f32 in both. The forward,
+///     sampler, KV-cache and generation loop are byte-for-byte the same code path; only
+///     the per-`linear` weight representation differs.
 pub struct Qwen2Lm {
     /// Dense weights: norms + biases (f32). In the fp32 build this holds every weight
     /// (embeds included, as f32); in the quantized build the embeds move to `qembed`.
@@ -52,27 +54,65 @@ pub struct Qwen2Lm {
     dev: Device,
 }
 
-/// A per-row symmetric **int8**-quantized embedding table, supporting a
-/// *dequant-on-gather* lookup: an embedding is a row lookup (`index_select`), not a
-/// matmul, so there is no `QMatMul` here — we `index_select` the needed rows of the
-/// int8 store + their per-row scales, **then** dequantize only those few rows to f32.
-/// The full f32 table is never reconstructed.
+/// The per-row quantization scheme for an embedding table.
+///
+/// Both are symmetric, per-row, dequant-on-gather quantizers; they differ only in the
+/// bit width (and so the storage and the quality cost the on-box SIM-o eval measures).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbedScheme {
+    /// 8-bit: one byte per weight (`q+128`), `scale = max(|row|)/127`. Half the f16 table.
+    Int8,
+    /// 4-bit: two weights packed per byte (`q+8` nibbles), `scale = max(|row|)/7`. A
+    /// quarter of the f16 table — half of [`EmbedScheme::Int8`] — at a higher quality cost.
+    Int4,
+}
+
+/// The **default** embedding-table quantization for [`Qwen2Lm::load_quantized`].
+///
+/// int4 is the default (the README ~270 MB size goal: it halves the int8 embed bulk —
+/// ~136 → ~68 MB for the 151936×896 token table). Flip this to [`EmbedScheme::Int8`] to
+/// trade size back for embedding fidelity; the on-box SIM-o eval measures the difference.
+pub const DEFAULT_EMBED_SCHEME: EmbedScheme = EmbedScheme::Int4;
+
+/// A per-row symmetric quantized embedding table, supporting a *dequant-on-gather*
+/// lookup: an embedding is a row lookup (`index_select`), not a matmul, so there is no
+/// `QMatMul` here — we gather the needed rows of the quantized store + their per-row
+/// scales, **then** dequantize only those few rows to f32. The full f32 table is never
+/// reconstructed. Stores either int8 (one u8/weight) or int4 (two nibbles/u8) per
+/// [`QEmbed::scheme`].
 struct QEmbed {
-    /// `[V, H]` u8: each signed int8 weight `q ∈ [-127,127]` stored as `q + 128`
-    /// (range `[1,255]`) so it fits U8 — candle's only 1-byte dtype. One byte per
-    /// element ⇒ exactly half the f16 table it replaces.
+    /// Which bit width this table is stored at (selects the (de)quant + pack path).
+    scheme: EmbedScheme,
+    /// Packed weights. **Int8**: `[V, H]` u8, each `q ∈ [-127,127]` stored as `q+128`
+    /// (range `[1,255]`). **Int4**: `[V, H/2]` u8, two weights `q ∈ [-7,7]` per byte,
+    /// each stored as the nibble `q+8` (range `[1,15]`); element `2i` is the low nibble,
+    /// `2i+1` the high nibble. U8 is candle's only 1-byte dtype.
     q: Tensor,
-    /// `[V, 1]` f32 per-row scale `max(|row|)/127`; dequant of a row is `(q-128)*scale`.
+    /// `[V, 1]` f32 per-row scale. Int8: `max(|row|)/127`; Int4: `max(|row|)/7`.
     scale: Tensor,
+    /// Logical row width `H` (Int4 packs two per byte, so `q`'s last dim is `H/2`).
+    h: usize,
     /// Realized storage bytes (`q` u8 + `scale` f32).
     bytes: usize,
 }
 
-/// Per-row symmetric int8-quantize an `[V, H]` f32 embedding table for
-/// dequant-on-gather. Each row carries its own scale `max(|row|)/127`; its weights are
-/// `round(row/scale)` clamped to `[-127,127]`, stored `+128` as u8. An all-zero row
-/// quantizes to all-`128` (the `+1e-12` keeps the `0/0` finite) ⇒ dequantizes to zeros.
+/// Per-row symmetric quantize an `[V, H]` f32 embedding table for dequant-on-gather,
+/// at the requested bit width. Each row carries its own scale; an all-zero row's
+/// `+1e-12` keeps the `0/0` finite ⇒ it dequantizes back to zeros.
+fn quantize_embed(table: &Tensor, scheme: EmbedScheme) -> Result<QEmbed> {
+    match scheme {
+        EmbedScheme::Int8 => quantize_embed_int8(table),
+        // int4 needs an even row width to pack two-per-byte; fall back to int8 otherwise
+        // (no Qwen2/CosyVoice2 embed table has an odd hidden dim — 896 is even).
+        EmbedScheme::Int4 if table.dim(D::Minus1)? % 2 == 0 => quantize_embed_int4(table),
+        EmbedScheme::Int4 => quantize_embed_int8(table),
+    }
+}
+
+/// Per-row symmetric int8-quantize: weights `round(row/scale)` clamped to `[-127,127]`,
+/// `scale = max(|row|)/127`, stored `+128` as u8 (`[V, H]`).
 fn quantize_embed_int8(table: &Tensor) -> Result<QEmbed> {
+    let (_v, h) = table.dims2()?;
     let amax = table.abs()?.max_keepdim(D::Minus1)?; // [V, 1]
     let scale = ((amax / 127.0)? + 1e-12)?; // [V, 1], f32; +eps guards an all-zero row
     let q = table
@@ -81,7 +121,35 @@ fn quantize_embed_int8(table: &Tensor) -> Result<QEmbed> {
         .clamp(-127f32, 127f32)?; // [V, H], integer-valued f32 in [-127,127]
     let q = (q + 128.0)?.to_dtype(DType::U8)?; // store offset by +128 (range [1,255])
     let bytes = q.elem_count() + scale.elem_count() * DType::F32.size_in_bytes();
-    Ok(QEmbed { q, scale, bytes })
+    Ok(QEmbed { scheme: EmbedScheme::Int8, q, scale, h, bytes })
+}
+
+/// Per-row symmetric int4-quantize: weights `round(row/scale)` clamped to `[-7,7]`,
+/// `scale = max(|row|)/7`, two weights packed per byte as nibbles `q+8` (`[V, H/2]`).
+/// `H` must be even (caller guarantees via [`quantize_embed`]).
+fn quantize_embed_int4(table: &Tensor) -> Result<QEmbed> {
+    let (v, h) = table.dims2()?;
+    let amax = table.abs()?.max_keepdim(D::Minus1)?; // [V, 1]
+    let scale = ((amax / 7.0)? + 1e-12)?; // [V, 1], f32; +eps guards an all-zero row
+    // integer-valued f32 in [-7,7], flattened row-major to pack on the host.
+    let qf: Vec<f32> = table
+        .broadcast_div(&scale)?
+        .round()?
+        .clamp(-7f32, 7f32)?
+        .flatten_all()?
+        .to_vec1()?;
+    let hp = h / 2;
+    let mut packed = vec![0u8; v * hp];
+    for i in 0..v {
+        for j in 0..hp {
+            let lo = (qf[i * h + 2 * j] as i32 + 8) as u8 & 0x0F; // element 2j -> low nibble
+            let hi = (qf[i * h + 2 * j + 1] as i32 + 8) as u8 & 0x0F; // element 2j+1 -> high
+            packed[i * hp + j] = lo | (hi << 4);
+        }
+    }
+    let q = Tensor::from_vec(packed, (v, hp), table.device())?;
+    let bytes = q.elem_count() + scale.elem_count() * DType::F32.size_in_bytes();
+    Ok(QEmbed { scheme: EmbedScheme::Int4, q, scale, h, bytes })
 }
 
 /// Realized on-disk-equivalent footprint of a loaded [`Qwen2Lm`], split into the
@@ -92,8 +160,8 @@ fn quantize_embed_int8(table: &Tensor) -> Result<QEmbed> {
 pub struct Footprint {
     /// Bytes held by the `Q4_0` quantized linear weights (0 in the fp32 build).
     pub quant_bytes: usize,
-    /// Bytes held by the int8-quantized embedding tables (0 in the fp32 build, where
-    /// the embeds live in `dense_bytes` as f32 instead).
+    /// Bytes held by the per-row quantized embedding tables ([`DEFAULT_EMBED_SCHEME`],
+    /// int4 by default; 0 in the fp32 build, where the embeds live in `dense_bytes` as f32).
     pub embed_bytes: usize,
     /// Bytes held by the retained dense weights (norms/biases f32, plus the f32 embeds
     /// in the fp32 build).
@@ -103,7 +171,7 @@ pub struct Footprint {
 }
 
 impl Footprint {
-    /// Total realized weight bytes (`quant + int8-embed + dense`).
+    /// Total realized weight bytes (`quant + embed + dense`).
     pub fn total_bytes(&self) -> usize {
         self.quant_bytes + self.embed_bytes + self.dense_bytes
     }
@@ -208,11 +276,17 @@ impl Qwen2Lm {
     /// inner dim is **not** a multiple of 32 is left dense in f16 (recorded, none occur
     /// for these dims).
     ///
-    /// Quantized to **int8** (per-row symmetric, [`QEmbed`]): the embedding tables
-    /// (`embed_tokens` / `llm_embedding` / `speech_embedding`). These are `index_select`
-    /// gathers, not matmuls, so they are *not* `QMatMul`s — the gathered rows are
-    /// dequantized on lookup (see [`Qwen2Lm::embed_rows`]). int8 halves the f16 tables
-    /// (1 byte/elem + a tiny per-row scale) — the embeds were the post-int4 footprint bulk.
+    /// Quantized per-row (symmetric, [`QEmbed`]) at [`DEFAULT_EMBED_SCHEME`] — **int4** by
+    /// default: the embedding tables (`embed_tokens` / `llm_embedding` / `speech_embedding`).
+    /// These are `index_select` gathers, not matmuls, so they are *not* `QMatMul`s — the
+    /// gathered rows are dequantized on lookup (see [`Qwen2Lm::embed_rows`]). int4 stores
+    /// the 151936×896 token table at ~68 MB (two 4-bit weights/byte + a tiny per-row
+    /// scale), a quarter of the f16 table; int8 (~136 MB) is available via the scheme const.
+    ///
+    /// **Dropped:** the untied Qwen2 `lm_head` (text-token output projection) — a full
+    /// `[vocab, 896]` f32 matrix ≈ 519.6 MB that the speech path never uses (it decodes
+    /// via `llm_decoder`). It is the entire post-int4 "dense remainder"; dropping it is
+    /// the single biggest size win.
     ///
     /// Kept dense: the RMSNorm weights (f32, tiny) and the attention q/k/v **biases**
     /// (f32, tiny).
@@ -227,28 +301,45 @@ impl Qwen2Lm {
         let mut qembed = HashMap::new();
         let mut quant_bytes = 0usize;
         for (k, v) in raw {
+            // DROP the unused Qwen2 text-token output head (`lm_head`). The checkpoint
+            // exports it untied — a full `[vocab=151936, 896]` f32 matrix ≈ 519.6 MB,
+            // the entire "dense remainder" of the post-int4 footprint. CosyVoice2's
+            // speech path produces speech tokens through `llm_decoder` and *never* calls
+            // `lm_head` (see `forward_logits`), so it is dead weight here: not loaded,
+            // not quantized. This is the single biggest size win. (fp32 `load()` keeps
+            // it, so the parity path is byte-unchanged.)
+            if is_unused_text_head(&k) {
+                continue;
+            }
             let vf = v.to_dtype(DType::F32)?;
-            if is_quantizable_linear(&k) {
-                let dims = vf.dims();
-                let inner = *dims.last().unwrap_or(&0);
-                // Q4_0 needs the inner dim to be a multiple of the 32-element block.
-                if dims.len() == 2 && inner % GgmlDType::Q4_0.block_size() == 0 {
-                    let qt = QTensor::quantize(&vf, GgmlDType::Q4_0)?;
-                    quant_bytes += qt.storage_size_in_bytes();
-                    qmm.insert(k, QMatMul::from_qtensor(qt)?);
-                    continue;
-                }
-                // Not block-aligned: keep this one dense in f16 (none occur for Qwen2).
+            // Embedding tables -> per-row dequant-on-gather lookup (int4 by default; see
+            // `DEFAULT_EMBED_SCHEME`). These are `index_select` gathers, not matmuls.
+            if is_embedding_table(&k) {
+                qembed.insert(k, quantize_embed(&vf, DEFAULT_EMBED_SCHEME)?);
+                continue;
+            }
+            // Every remaining 2-D weight is a real `x @ Wᵀ` matmul (the per-layer
+            // q/k/v/o + gate/up/down projections and the `llm_decoder` head), so it
+            // quantizes to GGML `Q4_0` as a `QMatMul`. A generic 2-D test (rather than a
+            // name allowlist) means *no* large dense matmul can be silently left in f32 —
+            // any future weight is caught here. `Q4_0` runs 32-wide blocks along the
+            // inner (`in_features`) dim; the few weights whose inner dim is not a multiple
+            // of 32 stay dense in f16 (none occur for Qwen2: 896 and 4864 are both ×32).
+            let dims = vf.dims();
+            let inner = *dims.last().unwrap_or(&0);
+            if dims.len() == 2 && inner % GgmlDType::Q4_0.block_size() == 0 {
+                let qt = QTensor::quantize(&vf, GgmlDType::Q4_0)?;
+                quant_bytes += qt.storage_size_in_bytes();
+                qmm.insert(k, QMatMul::from_qtensor(qt)?);
+                continue;
+            }
+            if dims.len() == 2 {
+                // 2-D but not block-aligned: keep dense in f16 (none occur for Qwen2).
                 w.insert(k, vf.to_dtype(DType::F16)?);
                 continue;
             }
-            // Embedding tables -> per-row int8 dequant-on-gather lookup; everything else
-            // (norms, biases) stays f32.
-            if is_embedding_table(&k) {
-                qembed.insert(k, quantize_embed_int8(&vf)?);
-            } else {
-                w.insert(k, vf);
-            }
+            // 1-D weights (RMSNorm weights, q/k/v biases): stay f32 (tiny).
+            w.insert(k, vf);
         }
         Ok(Self {
             w,
@@ -273,6 +364,22 @@ impl Qwen2Lm {
             dense_bytes,
             n_quantized: self.qmm.len(),
         }
+    }
+
+    /// Per-tensor `(name, bytes)` of every retained **dense** weight, largest first.
+    ///
+    /// The instrumentation that surfaces exactly what (if anything) is *not* quantized —
+    /// the tool used to identify the ~520 MB `lm_head` remainder. In the quantized build
+    /// this should be only the tiny RMSNorm weights + attention biases; any large entry
+    /// here is an un-quantized matmul that should be investigated.
+    pub fn dense_breakdown(&self) -> Vec<(String, usize)> {
+        let mut v: Vec<(String, usize)> = self
+            .w
+            .iter()
+            .map(|(k, t)| (k.clone(), t.elem_count() * t.dtype().size_in_bytes()))
+            .collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1));
+        v
     }
 
     fn g(&self, name: &str) -> Result<Tensor> {
@@ -462,10 +569,45 @@ impl Qwen2Lm {
     fn embed_rows(&self, table: &str, ids: &[u32]) -> Result<Tensor> {
         let idx = Tensor::from_vec(ids.to_vec(), (ids.len(),), &self.dev)?;
         if let Some(qe) = self.qembed.get(table) {
-            let q = qe.q.index_select(&idx, 0)?.to_dtype(DType::F32)?; // [n, HIDDEN]
-            let s = qe.scale.index_select(&idx, 0)?; // [n, 1]
-            let rows = (q - 128.0)?.broadcast_mul(&s)?; // [n, HIDDEN], dequantized
-            return rows.unsqueeze(0); // [1, n, HIDDEN]
+            match qe.scheme {
+                EmbedScheme::Int8 => {
+                    let q = qe.q.index_select(&idx, 0)?.to_dtype(DType::F32)?; // [n, HIDDEN]
+                    let s = qe.scale.index_select(&idx, 0)?; // [n, 1]
+                    let rows = (q - 128.0)?.broadcast_mul(&s)?; // [n, HIDDEN], dequantized
+                    return rows.unsqueeze(0); // [1, n, HIDDEN]
+                }
+                EmbedScheme::Int4 => {
+                    // Gather the packed nibble-rows + per-row scales, then unpack +
+                    // dequantize on the host (only `n` rows, so this is cheap): each byte
+                    // holds two weights — low nibble is element 2j, high nibble 2j+1.
+                    let n = ids.len();
+                    let h = qe.h;
+                    let hp = h / 2;
+                    let packed: Vec<u8> = qe
+                        .q
+                        .index_select(&idx, 0)?
+                        .flatten_all()?
+                        .to_vec1()?; // [n*hp]
+                    let scales: Vec<f32> = qe
+                        .scale
+                        .index_select(&idx, 0)?
+                        .flatten_all()?
+                        .to_vec1()?; // [n]
+                    let mut out = vec![0f32; n * h];
+                    for r in 0..n {
+                        let s = scales[r];
+                        for j in 0..hp {
+                            let byte = packed[r * hp + j];
+                            let lo = (byte & 0x0F) as i32 - 8; // element 2j
+                            let hi = (byte >> 4) as i32 - 8; // element 2j+1
+                            out[r * h + 2 * j] = lo as f32 * s;
+                            out[r * h + 2 * j + 1] = hi as f32 * s;
+                        }
+                    }
+                    let rows = Tensor::from_vec(out, (n, h), &self.dev)?;
+                    return rows.unsqueeze(0); // [1, n, HIDDEN]
+                }
+            }
         }
         let w = self.g(table)?; // [V, HIDDEN]
         let rows = w.index_select(&idx, 0)?; // [n, HIDDEN]
@@ -628,22 +770,17 @@ impl Qwen2Lm {
 
 // --- weight classification for the int4 (Q4_0) quantized build ---------------
 
-/// The per-layer linear-weight suffixes that are real `x @ Wᵀ` matmuls and so are
-/// quantized to int4 (their separate `.bias` entries end in `.bias` and are excluded).
-const QUANT_PROJ_SUFFIXES: [&str; 7] = [
-    "q_proj.weight",
-    "k_proj.weight",
-    "v_proj.weight",
-    "o_proj.weight",
-    "gate_proj.weight",
-    "up_proj.weight",
-    "down_proj.weight",
-];
-
-/// Whether `name` is a big linear weight to quantize: any layer projection above, or
-/// the `llm_decoder` output head. Biases, norms and embeddings are excluded.
-fn is_quantizable_linear(name: &str) -> bool {
-    name == "llm_decoder.weight" || QUANT_PROJ_SUFFIXES.iter().any(|s| name.ends_with(s))
+/// Whether `name` is the unused Qwen2 text-token output head (`lm_head`).
+///
+/// CosyVoice2 decodes *speech* tokens through `llm_decoder`; the base Qwen2's `lm_head`
+/// (text vocabulary) is never on the speech forward path, yet the checkpoint exports it
+/// untied as a full `[vocab, hidden]` matrix — the ~520 MB "dense remainder". The
+/// quantized build drops it (see [`Qwen2Lm::load_quantized`]). Matched by substring so
+/// it catches whatever module prefix the export uses (`llm.model.lm_head.weight` etc.);
+/// nothing on the live forward path contains `lm_head` (it uses `llm_decoder`,
+/// `embed_tokens`, `layers`, `norm`, `*_embedding`).
+fn is_unused_text_head(name: &str) -> bool {
+    name.contains("lm_head")
 }
 
 /// Whether `name` is an embedding lookup table (kept as an f16 gather, not a matmul).

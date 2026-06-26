@@ -238,13 +238,14 @@ impl Synthesizer {
 
     /// Load every sub-model in its **quantized** variant for the README ~270 MB size
     /// goal: the LM via [`syrinx_lm::real::Qwen2Lm::load_quantized`] (int4 big linears +
-    /// int8 dequant-on-gather embedding tables) and the flow via [`Flow::load_quantized`]
-    /// (Q4_0 `linear()` weights). The CAM++ speaker, HiFT vocoder and tokenizers load
-    /// exactly as in [`load`] (small / not the footprint bulk).
+    /// int4 dequant-on-gather embedding tables + dropped `lm_head`), the flow via
+    /// [`Flow::load_quantized`] (Q4_0 `linear()` weights), the HiFT vocoder via
+    /// `HiftVocoder::load_quantized` and the CAM++ speaker via `CamPlus::load_quantized`
+    /// (Q4_0 dequant-on-fetch conv/linear kernels). Tokenizers load exactly as in [`load`].
     ///
-    /// int4/int8 trade quality for size; CPU stays the parity device for the **fp32**
-    /// path ([`load`]), and the quantized quality is measured on the box (SIM-o), not
-    /// asserted to fp32 parity here.
+    /// int4 trades quality for size; CPU stays the parity device for the **fp32** path
+    /// ([`load`]), and the quantized quality is measured on the box (SIM-o), not asserted
+    /// to fp32 parity here.
     pub fn load_quantized(cfg: &SynthConfig) -> Result<Self, SynthError> {
         Self::load_on_device_inner(cfg, Device::Cpu, true)
     }
@@ -265,7 +266,11 @@ impl Synthesizer {
     ) -> Result<Self, SynthError> {
         let tokenizer = TextTokenizer::from_file(&cfg.tokenizer_json)?;
         let speech_tokenizer = SpeechTokenizer::load(&cfg.speech_tokenizer_onnx)?;
-        let speaker = CamPlus::load(&cfg.spk_weights, dev.clone())?;
+        let speaker = if quantized {
+            CamPlus::load_quantized(&cfg.spk_weights, dev.clone())?
+        } else {
+            CamPlus::load(&cfg.spk_weights, dev.clone())?
+        };
         let lm = if quantized {
             syrinx_lm::real::Qwen2Lm::load_quantized(&cfg.lm_weights, dev.clone())?
         } else {
@@ -276,7 +281,11 @@ impl Synthesizer {
         } else {
             Flow::load(&cfg.flow_weights, dev.clone())?
         };
-        let vocoder = HiftVocoder::load(&cfg.hift_weights, dev.clone())?;
+        let vocoder = if quantized {
+            HiftVocoder::load_quantized(&cfg.hift_weights, dev.clone())?
+        } else {
+            HiftVocoder::load(&cfg.hift_weights, dev.clone())?
+        };
         Ok(Self {
             tokenizer,
             speech_tokenizer,

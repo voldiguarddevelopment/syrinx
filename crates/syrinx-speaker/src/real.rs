@@ -38,11 +38,15 @@
 //! All BatchNorm is inference-mode: `(x - mean)/sqrt(var+eps) * gamma + beta`,
 //! eps 1e-5. All matmuls/accumulations are f32 (CPU), enough for the 1e-3 parity bar.
 
+use candle_core::quantized::{GgmlDType, QTensor};
 use candle_core::{safetensors, DType, Device, Result, Tensor, D};
 use std::collections::HashMap;
 
 const BN_EPS: f64 = 1e-5;
 const SEG: usize = 100; // CAM segment pooling window (kernel=stride=100, ceil mode)
+/// Smallest weight (in elements) worth quantizing in [`CamPlus::load_quantized`]. Below
+/// this the Q4_0 per-block scale overhead dominates; tiny params stay exact f32.
+const QUANT_MIN_ELEMS: usize = 4096;
 
 /// Per-block CAMDenseTDNN config: (num layers, dilation, kernel padding).
 /// dilation 1 -> pad 1 (block1); dilation 2 -> pad 2 (block2/3). kernel size is 3.
@@ -52,11 +56,45 @@ const BLOCKS: [(&str, usize, usize); 3] = [
     ("block3", 16, 2), // dilation 2
 ];
 
+/// A `Q4_0`-quantized weight stored for **dequant-on-fetch** (see [`HiftVocoder`]'s twin):
+/// the forward is unchanged, only the resident storage is int4; the original logical
+/// shape (conv kernels are 3-D/4-D) is restored on lookup.
+struct QStore {
+    qt: QTensor,
+    shape: Vec<usize>,
+}
+
 /// The real CAM++ speaker encoder, loaded from fp32 safetensors (ONNX-exported).
 pub struct CamPlus {
     w: HashMap<String, Tensor>,
+    /// Q4_0 dequant-on-fetch weights (empty in the fp32 / f64 builds).
+    qw: HashMap<String, QStore>,
+    /// Sum of the `QTensor` storage bytes realized by quantization (0 in the fp32 build).
+    quant_bytes: usize,
     dev: Device,
     dtype: DType,
+}
+
+/// Realized weight footprint of a loaded [`CamPlus`], split int4-quantized vs dense f32.
+#[derive(Debug, Clone, Copy)]
+pub struct SpeakerFootprint {
+    /// Bytes held by the `Q4_0` quantized weights (0 in the fp32 build).
+    pub quant_bytes: usize,
+    /// Bytes held by the retained dense f32 weights (biases, BN stats, small kernels).
+    pub dense_bytes: usize,
+    /// Number of weights quantized to int4.
+    pub n_quantized: usize,
+}
+
+impl SpeakerFootprint {
+    /// Total realized weight bytes (`quant + dense`).
+    pub fn total_bytes(&self) -> usize {
+        self.quant_bytes + self.dense_bytes
+    }
+    /// Total realized weight footprint in mebibytes.
+    pub fn total_mb(&self) -> f64 {
+        self.total_bytes() as f64 / (1024.0 * 1024.0)
+    }
 }
 
 impl CamPlus {
@@ -77,18 +115,66 @@ impl CamPlus {
         for (k, v) in raw {
             w.insert(k, v.to_dtype(dtype)?);
         }
-        Ok(Self { w, dev, dtype })
+        Ok(Self { w, qw: HashMap::new(), quant_bytes: 0, dev, dtype })
+    }
+
+    /// Load the campplus weights but quantize the large block-aligned weight matrices to
+    /// GGML `Q4_0` (dequant-on-fetch) for a smaller speaker footprint (quant pass goal #4).
+    ///
+    /// Quantized: every weight whose flattened `[out, rest]` matrix has a 32-aligned inner
+    /// dim and ≥ [`QUANT_MIN_ELEMS`] elements — the CAM-DenseTDNN conv1d kernels, the FCM
+    /// head conv2d kernels, and the transit/dense linears (the footprint bulk). They are
+    /// reshaped to a 2-D block store, int4 quantized, and reconstructed to the original
+    /// shape on lookup, so the forward is byte-for-byte the f32 path on the dequantized
+    /// weight. Biases, BatchNorm running stats and small/odd kernels stay dense f32.
+    ///
+    /// Compute dtype is F32 (the dequantized weights are f32); the high-precision f64
+    /// reference path stays on the fp32/f64 [`load`](Self::load) loaders. int4 trades
+    /// quality for size; the on-box SIM-o eval is the arbiter.
+    pub fn load_quantized(path: &str, dev: Device) -> Result<Self> {
+        let raw = safetensors::load(path, &dev)?;
+        let mut w = HashMap::with_capacity(raw.len());
+        let mut qw = HashMap::new();
+        let mut quant_bytes = 0usize;
+        for (k, v) in raw {
+            let vf = v.to_dtype(DType::F32)?;
+            if let Some(qs) = maybe_quantize_weight(&vf)? {
+                quant_bytes += qs.qt.storage_size_in_bytes();
+                qw.insert(k, qs);
+            } else {
+                w.insert(k, vf);
+            }
+        }
+        Ok(Self { w, qw, quant_bytes, dev, dtype: DType::F32 })
+    }
+
+    /// Realized weight footprint (quantized + dense) of this loaded encoder.
+    pub fn footprint(&self) -> SpeakerFootprint {
+        let dense_bytes: usize = self
+            .w
+            .values()
+            .map(|t| t.elem_count() * t.dtype().size_in_bytes())
+            .sum();
+        SpeakerFootprint {
+            quant_bytes: self.quant_bytes,
+            dense_bytes,
+            n_quantized: self.qw.len(),
+        }
     }
 
     fn g(&self, name: &str) -> Result<Tensor> {
-        self.w
-            .get(name)
-            .ok_or_else(|| candle_core::Error::Msg(format!("missing weight: {name}")))
-            .cloned()
+        if let Some(t) = self.w.get(name) {
+            return Ok(t.clone());
+        }
+        if let Some(q) = self.qw.get(name) {
+            // Dequantize (-> f32) and restore the original logical shape.
+            return q.qt.dequantize(&self.dev)?.reshape(q.shape.clone());
+        }
+        Err(candle_core::Error::Msg(format!("missing weight: {name}")))
     }
 
     fn has(&self, name: &str) -> bool {
-        self.w.contains_key(name)
+        self.w.contains_key(name) || self.qw.contains_key(name)
     }
 
     // ---- primitive ops -------------------------------------------------------
@@ -340,6 +426,28 @@ impl CamPlus {
 }
 
 // ---- free helpers -----------------------------------------------------------
+
+/// Decide whether a weight `vf` is a large block-aligned matrix worth quantizing to
+/// `Q4_0` (dequant-on-fetch), returning its [`QStore`] if so, else `None` (keep f32).
+///
+/// A conv kernel `[out, in, ...]` (or a 2-D linear `[out, in]`) flattens to `[out, rest]`
+/// where `rest` is the product of all but the first dim; it is quantized when `rest` is a
+/// multiple of the 32-element `Q4_0` block and the tensor has ≥ [`QUANT_MIN_ELEMS`]
+/// elements. 1-D weights (biases, BatchNorm stats) and small/odd kernels stay dense.
+fn maybe_quantize_weight(vf: &Tensor) -> Result<Option<QStore>> {
+    let dims = vf.dims().to_vec();
+    if dims.len() < 2 || vf.elem_count() < QUANT_MIN_ELEMS {
+        return Ok(None);
+    }
+    let out = dims[0];
+    let inner: usize = dims[1..].iter().product();
+    if inner % GgmlDType::Q4_0.block_size() != 0 {
+        return Ok(None);
+    }
+    let mat = vf.reshape((out, inner))?;
+    let qt = QTensor::quantize(&mat, GgmlDType::Q4_0)?;
+    Ok(Some(QStore { qt, shape: dims }))
+}
 
 /// Sigmoid via candle (`1 / (1 + exp(-x))`).
 fn sigmoid(x: &Tensor) -> Result<Tensor> {
