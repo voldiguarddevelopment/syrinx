@@ -136,9 +136,44 @@ pub fn evaluate(
 
     Ok(Metrics {
         sim_o,
-        wer: None,       // needs an ASR (Whisper) model — none on the box yet.
+        // WER via an external Whisper ASR helper (QA-side only — the inference path
+        // stays pure-Rust); `None` when `SYRINX_WER_HELPER` is unset.
+        wer: wer_via_helper(&wav, input.text),
         mos_proxy: None, // needs a MOS-prediction model (UTMOS/DNSMOS) — not built.
         ttfb_ms,
         rtf,
     })
+}
+
+/// Optional WER/CER via an external ASR helper. `SYRINX_WER_HELPER` is a command
+/// prefix (e.g. `"micromamba run -n syrinx python scripts/eval_wer.py"`); the synth
+/// output WAV path and the reference text are appended, and the helper prints the
+/// error rate as a float on its last stdout line. Returns `None` if the var is unset
+/// or the helper fails — the pure-Rust path never depends on it.
+fn wer_via_helper(wav: &[f32], reference: &str) -> Option<f64> {
+    let cmd = std::env::var("SYRINX_WER_HELPER").ok().filter(|s| !s.is_empty())?;
+    let tmp = std::env::temp_dir().join("syrinx_wer_eval.wav");
+    wavio::write_wav_24k(&tmp, wav).ok()?;
+    let mut parts = cmd.split_whitespace();
+    let prog = parts.next()?;
+    let out = std::process::Command::new(prog)
+        .args(parts)
+        .arg(&tmp)
+        .arg(reference)
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        eprintln!(
+            "syrinx-eval: WER helper failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        return None;
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .lines()
+        .last()?
+        .trim()
+        .parse::<f64>()
+        .ok()
 }

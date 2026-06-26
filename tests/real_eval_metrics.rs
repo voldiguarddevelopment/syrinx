@@ -84,7 +84,15 @@ fn real_eval_metrics_are_measured() {
     let ttfb = m.ttfb_ms.expect("ttfb_ms measured");
     assert!(ttfb.is_finite() && ttfb > 0.0, "ttfb_ms must be a positive number: {ttfb}");
 
-    // The un-implemented metrics are honest nulls, never fake constants.
-    assert!(m.wer.is_none(), "wer must be null until an ASR model is wired");
+    // WER is measured only when the Whisper ASR helper is configured (SYRINX_WER_HELPER);
+    // otherwise it is an honest null. MOS-proxy is always null (no MOS model wired).
+    match (env("SYRINX_WER_HELPER"), m.wer) {
+        (Some(_), Some(w)) => assert!(
+            w.is_finite() && (0.0..=2.0).contains(&w),
+            "wer out of range: {w}"
+        ),
+        (Some(_), None) => eprintln!("note: SYRINX_WER_HELPER set but the helper returned no rate"),
+        (None, w) => assert!(w.is_none(), "wer must be null without SYRINX_WER_HELPER: {w:?}"),
+    }
     assert!(m.mos_proxy.is_none(), "mos_proxy must be null until a MOS model is wired");
 }
