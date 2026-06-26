@@ -49,7 +49,14 @@ fn real_eval_metrics_are_measured() {
         }
     };
 
-    let mut synth = Synthesizer::load(&cfg).expect("load synthesizer");
+    // SYRINX_QUANT=1 evaluates the int4-quantized LM path (SIM-o then tells us
+    // whether the clone survives 4-bit); unset uses the fp32 parity path.
+    let mut synth = if env("SYRINX_QUANT").is_some() {
+        eprintln!("real_eval_metrics: using the int4-quantized LM (load_quantized)");
+        Synthesizer::load_quantized(&cfg).expect("load quantized synthesizer")
+    } else {
+        Synthesizer::load(&cfg).expect("load synthesizer")
+    };
     let (r16, r24) = wavio::read_ref_wav(Path::new(&ref_wav)).expect("read reference WAV");
     let max_steps = env("SYRINX_SYNTH_MAXSTEPS").and_then(|s| s.parse::<usize>().ok());
 
