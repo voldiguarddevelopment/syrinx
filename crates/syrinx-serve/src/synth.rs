@@ -96,8 +96,15 @@ const HIFT_HOP: usize = 4;
 const HIFT_BINS: usize = HIFT_N_FFT / 2 + 1; // 9
 /// Upsample product * istft hop = 8*5*3 * 4 = 480: the f0 -> source upsample factor.
 const F0_UPSAMPLE: usize = 480;
-/// SineGen sine amplitude (`sine_amp`, CosyVoice2 default).
+/// SineGen sine amplitude (`sine_amp` / `nsf_alpha`, CosyVoice2 default).
 const SINE_AMP: f64 = 0.1;
+/// SineGen additive-noise std for *voiced* frames (`noise_std` / `nsf_sigma`).
+const NSF_NOISE_STD: f64 = 0.003;
+/// Number of harmonic overtones above the fundamental (`nb_harmonics`); the source
+/// has `NB_HARMONICS + 1 = 9` sine components (fundamental + 8 overtones).
+const NB_HARMONICS: usize = 8;
+/// F0 threshold (Hz) for the voiced/unvoiced mask (`nsf_voiced_threshold`).
+const NSF_VOICED_THRESHOLD: f64 = 10.0;
 
 /// Paths to every sub-model's on-disk weights / assets. All are required for a
 /// real synthesizer; parameterized so tests + callers point at the model box.
@@ -622,6 +629,89 @@ impl Synthesizer {
         self.source_stft(&source)
     }
 
+    /// Build the **random-phase NSF** HiFT source STFT `[1, 18, T]` from a generated
+    /// mel — a faithful port of CosyVoice2's `SourceModuleHnNSF` (`SineGen`) source,
+    /// for the perceptual-quality path. Unlike [`deterministic_source_stft`] (a
+    /// single zero-phase harmonic, no noise), this reproduces every stochastic and
+    /// multi-harmonic element of the real excitation:
+    ///
+    ///   * **`NB_HARMONICS + 1 = 9` sines** — fundamental + 8 overtones, the `i`-th
+    ///     at instantaneous phase `(i+1)·θ(t)` where `θ(t) = 2π·cumsum(f0_up/sr)` is
+    ///     the shared zero-phase ramp (the same per-sample cumulative phase the
+    ///     deterministic source uses);
+    ///   * **random initial phase per harmonic** — a constant offset `φ_i ∈ (-π, π]`
+    ///     added to each overtone (the fundamental keeps `φ_0 = 0`, exactly as
+    ///     `SineGen`'s `phase_vec[:,0,:] = 0`), decorrelating the overtones so the
+    ///     source is no longer a single rigidly phase-locked buzz;
+    ///   * **voiced/unvoiced mask** `uv = f0 > NSF_VOICED_THRESHOLD (10 Hz)` — the
+    ///     harmonic sines are gated to zero in unvoiced frames;
+    ///   * **additive Gaussian noise** at `noise_amp = uv·noise_std + (1-uv)·sine_amp/3`
+    ///     — quiet (`σ=0.003`) breath in voiced frames, and `sine_amp/3 ≈ 0.033`
+    ///     broadband noise replacing the (masked-out) sines in unvoiced frames;
+    ///   * **learned harmonic merge** — the 9 components are fused by the checkpoint's
+    ///     `m_source.l_linear` `Linear(9→1)` + `tanh`, the real `SourceModuleHnNSF`
+    ///     merge, yielding the single-channel excitation that is then STFT'd.
+    ///
+    /// All randomness comes from a **seeded** SplitMix64 stream keyed by `seed`
+    /// (never system RNG), so a given `(mel, seed)` is bit-reproducible across runs —
+    /// the A/B harness can pin a seed and the result is stable.
+    ///
+    /// Honesty note: the 24 kHz config technically instantiates `SineGen2`, whose
+    /// `_f02sine` accumulates phase at *frame* rate and linearly interpolates back up
+    /// (an anti-aliasing detail); its steady-state output equals the per-sample
+    /// `cumsum` ramp used here, and the perceptually load-bearing elements (the
+    /// random per-harmonic phase, the 9 harmonics, the noise, the uv mask, and the
+    /// learned merge) are identical between the two. This is a perceptual-quality
+    /// source, not a bit-parity source — the model's RNG draw order is not portable.
+    pub fn random_phase_source_stft(
+        &self,
+        mel: &Tensor,
+        seed: u64,
+    ) -> Result<Tensor, SynthError> {
+        let f0 = self.vocoder.f0_predict(mel)?; // [1, T]
+        let f0v: Vec<f32> = f0.flatten_all()?.to_vec1::<f32>()?;
+        let (merge_w, merge_b) = self.vocoder.source_merge_linear()?; // ([9], b)
+        if merge_w.len() != NB_HARMONICS + 1 {
+            return Err(SynthError::Candle(format!(
+                "m_source.l_linear expects {} weights, got {}",
+                NB_HARMONICS + 1,
+                merge_w.len()
+            )));
+        }
+
+        let n = f0v.len() * F0_UPSAMPLE; // source samples = mel frames * 480
+        let mut rng = SplitMix64::new(seed);
+
+        // Random initial phase per harmonic: φ_0 = 0 (fundamental), φ_i ∈ (-π, π].
+        let n_comp = NB_HARMONICS + 1;
+        let mut phi = vec![0f64; n_comp];
+        for p in phi.iter_mut().skip(1) {
+            *p = (rng.next_f64() * 2.0 - 1.0) * std::f64::consts::PI;
+        }
+
+        // Single-channel merged excitation, sample by sample.
+        let mut source: Vec<f32> = Vec::with_capacity(n);
+        let mut base_phase = 0.0f64; // θ(t) = 2π·cumsum(f0_up/sr), built incrementally
+        let two_pi = 2.0 * std::f64::consts::PI;
+        for s in 0..n {
+            let fhz = f0v[s / F0_UPSAMPLE] as f64; // nearest-upsample of f0 by 480
+            base_phase += two_pi * (fhz / MEL_SR as f64);
+            let uv = if fhz > NSF_VOICED_THRESHOLD { 1.0 } else { 0.0 };
+            let noise_amp = uv * NSF_NOISE_STD + (1.0 - uv) * SINE_AMP / 3.0;
+            // 9 harmonic components -> learned linear(9->1) + tanh merge.
+            let mut acc = merge_b as f64;
+            for (i, &w) in merge_w.iter().enumerate() {
+                let h = (i + 1) as f64; // harmonic multiplier (fundamental = 1)
+                let sine = SINE_AMP * (h * base_phase + phi[i]).sin();
+                let noise = noise_amp * rng.next_gauss();
+                let comp = sine * uv + noise; // SineGen: sine_waves * uv + noise
+                acc += w as f64 * comp;
+            }
+            source.push(acc.tanh() as f32);
+        }
+        self.source_stft(&source)
+    }
+
     /// Build the **streaming** HiFT source for one mel chunk with *global F0-phase
     /// continuity* (the faithfulness fix). Same deterministic F0 -> single-harmonic
     /// sine -> STFT core as [`Synthesizer::deterministic_source_stft`], but:
@@ -922,6 +1012,120 @@ impl Synthesizer {
         let mut wav = self.synthesize(tts_text, prompt_text, ref_wav_16k, ref_wav_24k, inputs)?;
         crate::watermark::embed_watermark(&mut wav, key, payload);
         Ok(wav)
+    }
+}
+
+// ============================================================================
+// Perceptual-quality synthesis (additive — random-phase NSF source).
+//
+// `synthesize_quality` is byte-for-byte `synthesize`'s flow + vocoder, except the
+// HiFT excitation is built by `random_phase_source_stft` (CosyVoice2's real
+// `SourceModuleHnNSF`: 9 harmonics + random per-harmonic phase + Gaussian noise +
+// uv mask + learned merge) instead of the deterministic zero-phase smoke source.
+// The deterministic source is buzzy (a single rigidly phase-locked harmonic, no
+// noise) and is the main reason the functional UTMOS came out low (~2.03); the
+// random-phase source restores the natural harmonic decorrelation + breath the
+// HiFT filter expects, which should raise MOS. Kept in its own `impl` block so the
+// parity-default `synthesize` and the existing smoke tests are untouched. A pinned
+// `inputs.s_stft` is ignored here (this path *is* the source choice); `inputs` is
+// still honoured for `pinned_speech_token`, `z`, `lm_seed`, and `max_gen_steps`.
+// ============================================================================
+impl Synthesizer {
+    /// Full synthesis with the **random-phase NSF source** (perceptual-quality
+    /// path), returning the 24 kHz waveform. Same pipeline as
+    /// [`Synthesizer::synthesize`] but the HiFT source is
+    /// [`Synthesizer::random_phase_source_stft`] (seeded by `source_seed`) instead
+    /// of the deterministic zero-phase source.
+    ///
+    /// `source_seed` makes the (otherwise stochastic) source reproducible: the same
+    /// `source_seed` + same tokens yields the same waveform. `inputs.z` is honoured
+    /// (pinned or zeros fallback) exactly as in `synthesize`; any `inputs.s_stft` is
+    /// ignored (this method builds the source itself).
+    pub fn synthesize_quality(
+        &mut self,
+        tts_text: &str,
+        prompt_text: &str,
+        ref_wav_16k: &[f32],
+        ref_wav_24k: &[f32],
+        inputs: &SynthInputs,
+        source_seed: u64,
+    ) -> Result<Vec<f32>, SynthError> {
+        let cond = self.prompt_cond(tts_text, prompt_text, ref_wav_16k, ref_wav_24k)?;
+        let speech_token = match &inputs.pinned_speech_token {
+            Some(ids) => ids_i64_to_tensor(ids, &self.dev)?,
+            None => self.generate_speech_token(&cond, inputs.lm_seed, inputs.max_gen_steps)?,
+        };
+
+        // CFM noise z: pinned or zeros (the deterministic functional fallback).
+        let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
+        let z = match &inputs.z {
+            Some(z) => z.clone(),
+            None => Tensor::zeros((1, MEL_NUM_MELS, total), DType::F32, &self.dev)?,
+        };
+
+        // Flow -> generated mel, random-phase NSF source from it, then vocode.
+        let mel = self.flow.forward_zero_shot(
+            &cond.prompt_token,
+            &speech_token,
+            &cond.prompt_feat,
+            &cond.spk_embedding,
+            &z,
+            N_TIMESTEPS,
+        )?;
+        let s = self.random_phase_source_stft(&mel, source_seed)?;
+        let audio = self.vocoder.decode(&mel, &s)?;
+        let wav: Vec<f32> = audio.flatten_all()?.to_vec1::<f32>()?;
+        Ok(wav)
+    }
+}
+
+/// Minimal seeded **SplitMix64** PRNG — the source builder's *only* randomness, so
+/// the random-phase source is reproducible from its `seed` (never system RNG).
+///
+/// SplitMix64 is the standard fast seeding generator (the one Rust's `StdRng` and
+/// xoshiro use to expand a seed); a single stream here drives both the per-harmonic
+/// initial phases (uniform) and the additive Gaussian noise (Box–Muller).
+struct SplitMix64 {
+    state: u64,
+    /// Cached second Box–Muller normal (generated in pairs).
+    spare: Option<f64>,
+}
+
+impl SplitMix64 {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: seed,
+            spare: None,
+        }
+    }
+
+    /// Next raw 64-bit value (the canonical SplitMix64 mix).
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform `f64` in `[0, 1)` (top 53 bits, the standard construction).
+    fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+
+    /// Standard normal `N(0, 1)` via Box–Muller, generating two at a time and
+    /// caching the spare (matches `torch.randn`'s distribution, not its byte stream).
+    fn next_gauss(&mut self) -> f64 {
+        if let Some(v) = self.spare.take() {
+            return v;
+        }
+        // Guard u1 away from 0 so ln is finite.
+        let u1 = self.next_f64().max(f64::MIN_POSITIVE);
+        let u2 = self.next_f64();
+        let r = (-2.0 * u1.ln()).sqrt();
+        let theta = 2.0 * std::f64::consts::PI * u2;
+        self.spare = Some(r * theta.sin());
+        r * theta.cos()
     }
 }
 

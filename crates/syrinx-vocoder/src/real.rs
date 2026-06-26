@@ -234,6 +234,20 @@ impl HiftVocoder {
         let y = x.broadcast_matmul(&w.t()?)?.broadcast_add(&b)?; // [B, T, 1]
         y.squeeze(D::Minus1)?.abs()
     }
+
+    /// The `SourceModuleHnNSF.l_linear` harmonic-merge weights: a learned
+    /// `Linear(nb_harmonics+1 -> 1)` that fuses the per-harmonic sine excitations
+    /// `[.., 9]` (fundamental + 8 overtones) into the single-channel NSF source the
+    /// vocoder consumes, followed by `tanh`. Returns `(weight[9], bias)` so the
+    /// random-phase source builder can reproduce CosyVoice2's `m_source` merge
+    /// exactly. The deterministic single-harmonic smoke source does not use these.
+    pub fn source_merge_linear(&self) -> Result<(Vec<f32>, f32)> {
+        let w = self.g("m_source.l_linear.weight")?; // [1, 9]
+        let b = self.g("m_source.l_linear.bias")?; // [1]
+        let w: Vec<f32> = w.flatten_all()?.to_vec1::<f32>()?;
+        let b: f32 = b.flatten_all()?.to_vec1::<f32>()?[0];
+        Ok((w, b))
+    }
 }
 
 /// `(padding, stride)` for upsample stage `i` (`padding=(k-u)//2`).
