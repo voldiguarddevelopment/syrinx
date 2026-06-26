@@ -4,5 +4,14 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+# Real measured metrics (`real` module): SIM-o (CAM++ cosine), RTF, and TTFB are
+# computed by running the real CosyVoice2 `Synthesizer`. Off by default so the
+# harness skeleton + checksum mechanism stay Candle-free; enabled on the model box.
+real = ["dep:syrinx-serve", "syrinx-serve/real"]
+
 [dependencies]
 sha2 = "0.10"
+# The real synthesizer (+ its WAV resampler) the measured metrics drive. Optional,
+# only pulled in by this crate's `real` feature.
+syrinx-serve = { path = "../syrinx-serve", optional = true }

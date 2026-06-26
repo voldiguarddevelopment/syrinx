@@ -12,6 +12,10 @@
 //! omitted); a metric set that omits a required key is a typed [`EvalError`],
 //! with no partial file written.
 
+/// Real measured metrics (SIM-o / RTF / TTFB), behind the `real` feature.
+#[cfg(feature = "real")]
+pub mod real;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 

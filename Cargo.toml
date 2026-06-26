@@ -96,6 +96,9 @@ syrinx-frontend = { path = "crates/syrinx-frontend", optional = true }
 # feature can toggle `syrinx-serve/real` for the end-to-end synthesizer parity
 # tests at the repo root. Mirrors how syrinx-frontend is wired.
 syrinx-serve = { path = "crates/syrinx-serve", optional = true }
+# Optional normal dep (in addition to the dev-dep above) so the root `real` feature
+# can toggle `syrinx-eval/real` for the measured-metrics test (`tests/real_eval_metrics.rs`).
+syrinx-eval = { path = "crates/syrinx-eval", optional = true }
 candle-core = { version = "0.8", optional = true }
 
 [features]
@@ -112,6 +115,8 @@ real = [
     "syrinx-vocoder/real",
     "syrinx-frontend/real",
     "syrinx-serve/real",
+    "dep:syrinx-eval",
+    "syrinx-eval/real",
 ]
 # Text-normalizer parity track: enables `syrinx-frontend/textnorm` for the root
 # `tests/real_textnorm_parity.rs` test. Lightweight (pure Rust, no model deps), so

@@ -319,6 +319,18 @@ impl Synthesizer {
         })
     }
 
+    /// CAM++ speaker x-vector `[1, 192]` for a 16 kHz mono waveform, via the same
+    /// kaldi-fbank -> per-time mean-subtraction -> CAM++ path used for zero-shot
+    /// conditioning. Exposed for evaluation — e.g. SIM-o (speaker cosine) between a
+    /// reference clip and a synthesized clip.
+    pub fn speaker_embedding(&self, audio_16k: &[f32]) -> Result<Tensor, SynthError> {
+        let fbank_grid = kaldi_fbank(audio_16k, SR_16K, FBANK_MELS);
+        let fbank = grid_to_tensor(&fbank_grid, &self.dev)?;
+        let fbank = subtract_time_mean(&fbank)?;
+        let fbank = fbank.unsqueeze(0)?;
+        Ok(self.speaker.forward(&fbank)?)
+    }
+
     /// Generate the speech-token sequence with the **live** LM (pinned-PRNG sampling).
     /// Returns the ids as i64 `[1, N]` ready for the flow.
     pub fn generate_speech_token(
