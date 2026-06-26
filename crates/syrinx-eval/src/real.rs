@@ -250,8 +250,16 @@ pub fn evaluate_cv3(
     // generation (`synthesize_quality`) instead of the deterministic single-harmonic
     // placeholder + cap — the fair quality A/B. The pin-ref diagnostic forces the
     // pinned-token `synthesize` path (quality always live-generates, ignoring the pin).
+    // SYRINX_CV3_INSTRUCT=<instruction> evaluates the emotion/instruct path
+    // (`synthesize_instruct`) — A/B different emotions via the same MOS/SIM-o metrics.
     let t0 = Instant::now();
-    let wav = if std::env::var("SYRINX_CV3_QUALITY").is_ok() && !pin_ref {
+    let wav = if let Some(instruct) = std::env::var("SYRINX_CV3_INSTRUCT")
+        .ok()
+        .filter(|s| !s.is_empty() && !pin_ref)
+    {
+        eprintln!("evaluate_cv3: instruct = {instruct:?}");
+        synth.synthesize_instruct(input.text, &instruct, input.ref_wav_16k, input.ref_wav_24k)
+    } else if std::env::var("SYRINX_CV3_QUALITY").is_ok() && !pin_ref {
         synth.synthesize_quality(
             input.text,
             input.prompt_text,
