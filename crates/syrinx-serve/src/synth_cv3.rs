@@ -36,7 +36,10 @@
 //! `z` (the flow's fixed `rand_noise` design buffer) and the HiFT SineGen `source`. For
 //! a deterministic chain check the caller injects `z` (see [`Cv3SynthInputs`] +
 //! [`Cv3Synthesizer::flow_from_reference_tokens`]). When not injected,
-//! [`Cv3Synthesizer::synthesize`] falls back to `z = zeros` (a valid ODE init) and a
+//! [`Cv3Synthesizer::synthesize`] now fills `z` with a **seeded standard-normal** init
+//! (the flow's `rand_noise` *distribution*, reproducible from `lm_seed`) instead of the
+//! degenerate `z = zeros` (which collapses the CFM ODE onto its mean trajectory — a
+//! smeared mel, the measured ~0.3-MOS live-quality loss CV2 hit), and a
 //! **deterministic, zero-phase, single-harmonic** HiFT source built from the CV3 HiFT
 //! F0 predictor (see [`Cv3Synthesizer::deterministic_source`]). CV3's `Cv3Hift::decode`
 //! consumes the source **waveform** `[1,1,L]` (it computes the STFT internally), unlike
@@ -49,7 +52,7 @@
 //! (`tests/real_cv3_e2e_parity.rs`) skips cleanly when the fixtures are absent. The CV2
 //! [`crate::synth`] module is left byte-unchanged — this is purely additive.
 
-use candle_core::{DType, Device, Tensor};
+use candle_core::{safetensors, DType, Device, Tensor};
 
 use syrinx_acoustic::real_cv3::Cv3Flow;
 use syrinx_frontend::feat::{kaldi_fbank, prompt_mel};
@@ -129,7 +132,10 @@ pub struct Cv3SynthInputs {
     /// Pinned generated speech-token ids (i64), bypassing live LM sampling.
     pub pinned_speech_token: Option<Vec<i64>>,
     /// Pinned CFM noise `z` `[1, 80, total]` (the flow's `rand_noise` slice). When
-    /// `None`, a zeros init is used (a valid ODE start, not the reference's noise).
+    /// `None`, [`Cv3Synthesizer::synthesize`] fills a **seeded standard-normal** `z`
+    /// (the flow's `rand_noise` distribution, seeded from `lm_seed`) — NOT a zeros init.
+    /// A zeros init is the degenerate mean-ODE start and measurably degrades live quality;
+    /// pin `z` explicitly only for the deterministic parity chain (the reference's noise).
     pub z: Option<Tensor>,
     /// LM sampling seed (live path only). Defaults to 0.
     pub lm_seed: u64,
@@ -197,10 +203,7 @@ impl Cv3Synthesizer {
     /// (an opt-in **size**, not speed, tradeoff — dequant-on-fetch stalls inference), so this
     /// output tracks but does not equal the fp32 [`Self::load_on_device`] output. The fp32
     /// loaders + the quality/instruct paths are byte-unchanged.
-    pub fn load_quantized_on_device(
-        cfg: &Cv3SynthConfig,
-        dev: Device,
-    ) -> Result<Self, SynthError> {
+    pub fn load_quantized_on_device(cfg: &Cv3SynthConfig, dev: Device) -> Result<Self, SynthError> {
         let tokenizer = TextTokenizer::from_file(&cfg.tokenizer_json)?;
         let speech_tokenizer = SpeechTokenizer::load_cv3(&cfg.speech_tokenizer_onnx)?;
         let speaker = CamPlus::load_quantized(&cfg.spk_weights, dev.clone())?;
@@ -363,13 +366,29 @@ impl Cv3Synthesizer {
             None => self.generate_speech_token(&cond, inputs.lm_seed, inputs.max_gen_steps)?,
         };
 
-        let audio = self.token2wav(&cond, &speech_token, inputs.z.as_ref())?; // [1, L]
+        // CFM noise z: a pinned z (parity chain), else a SEEDED standard-normal init. The
+        // old zeros fallback collapsed the CFM ODE onto its mean trajectory (a smeared,
+        // low-detail mel — the live-quality defect); a standard normal is the flow's
+        // `rand_noise` *distribution*, reproducible from `lm_seed`. token2wav's own `None`
+        // branch keeps an explicit zeros init available for callers that need it.
+        let z = match inputs.z.as_ref() {
+            Some(z) => z.clone(),
+            None => {
+                let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
+                self.seeded_normal_z(total, inputs.lm_seed)?
+            }
+        };
+        let audio = self.token2wav(&cond, &speech_token, Some(&z))?; // [1, L]
         let wav: Vec<f32> = audio.flatten_all()?.to_vec1::<f32>()?;
         Ok(wav)
     }
 
     /// The flow + vocoder half: speech tokens -> mel -> audio `[1, L]`. `z` is the CFM
-    /// noise (pinned, else a zeros init); the HiFT source is the deterministic F0 source.
+    /// noise; the HiFT source is the deterministic F0 source. A `Some(z)` is used as-is;
+    /// a `None` falls back to an **explicit zeros** init — the degenerate mean-ODE start,
+    /// retained only for callers that deliberately want it (parity). The live
+    /// [`Cv3Synthesizer::synthesize`] no longer passes `None`: it fills a seeded
+    /// standard-normal `z` first (see [`Cv3Synthesizer::seeded_normal_z`]).
     pub fn token2wav(
         &self,
         cond: &PromptCond,
@@ -385,6 +404,22 @@ impl Cv3Synthesizer {
         let mel = self.flow_forward(cond, speech_token, &z, N_TIMESTEPS)?; // [1,80,2*Tg]
         let source = self.deterministic_source(&mel)?; // [1, 1, L_src]
         self.vocode(&mel, &source) // [1, L]
+    }
+
+    /// Build the default CFM noise `z` `[1, 80, total]`: a **seeded standard-normal** init
+    /// (the flow's `rand_noise` *distribution*, matched in distribution to `torch.randn`,
+    /// not its byte stream). This is the live default `synthesize` / `synthesize_quality` /
+    /// `synthesize_instruct` now use in place of the degenerate zeros init: a zeros `z`
+    /// starts the CFM ODE at the conditional mean and integrates to a low-detail, smeared
+    /// mel (the live-quality defect), whereas a true Gaussian draw is the distribution the
+    /// flow was trained to denoise. Seeded (never system RNG), so a given `(tokens, seed)`
+    /// is bit-reproducible. The byte-exact reference `z` is still injectable via
+    /// [`Cv3SynthInputs::z`] for the deterministic parity chain.
+    fn seeded_normal_z(&self, total: usize, seed: u64) -> Result<Tensor, SynthError> {
+        let nz = MEL_NUM_MELS * total;
+        let mut rng = SplitMix64::new(seed ^ 0x5DEE_CE66_C0DE_F10D);
+        let zv: Vec<f32> = (0..nz).map(|_| rng.next_gauss() as f32).collect();
+        Ok(Tensor::from_vec(zv, (1, MEL_NUM_MELS, total), &self.dev)?)
     }
 
     /// Run only the CV3 flow CFM mel decoder for live conditioning: feeds `cond`'s
@@ -556,12 +591,9 @@ impl Cv3Synthesizer {
         let speech_token = self.generate_speech_token(&cond, source_seed, None)?;
 
         // CFM noise z: a SEEDED standard-normal init (torch.randn's distribution, not its
-        // byte stream), far more natural than the zeros fallback `synthesize` uses.
+        // byte stream). Now the same default `synthesize` uses (see `seeded_normal_z`).
         let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
-        let nz = MEL_NUM_MELS * total;
-        let mut rng = SplitMix64::new(source_seed ^ 0x5DEE_CE66_C0DE_F10D);
-        let zv: Vec<f32> = (0..nz).map(|_| rng.next_gauss() as f32).collect();
-        let z = Tensor::from_vec(zv, (1, MEL_NUM_MELS, total), &self.dev)?;
+        let z = self.seeded_normal_z(total, source_seed)?;
 
         let mel = self.flow_forward(&cond, &speech_token, &z, N_TIMESTEPS)?; // [1,80,2*Tg]
         let source = self.quality_source(&mel, source_seed)?; // [1,1,L]
@@ -619,7 +651,10 @@ impl Cv3Synthesizer {
         let speech_token = ids_i64_to_tensor(&ids, &self.dev)?;
 
         // flow + vocoder exactly as `synthesize` (ref prompt_token/feat/spk kept; det source).
-        let audio = self.token2wav(&cond, &speech_token, None)?; // [1, L]
+        // Use the same seeded standard-normal CFM init as `synthesize` (seed 0), not zeros.
+        let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
+        let z = self.seeded_normal_z(total, 0)?;
+        let audio = self.token2wav(&cond, &speech_token, Some(&z))?; // [1, L]
         Ok(audio.flatten_all()?.to_vec1::<f32>()?)
     }
 }
@@ -721,4 +756,27 @@ fn ids_i64_to_tensor(ids: &[i64], dev: &Device) -> candle_core::Result<Tensor> {
 fn tensor_ids_u32(t: &Tensor) -> candle_core::Result<Vec<u32>> {
     let flat = t.flatten_all()?.to_dtype(DType::U32)?;
     flat.to_vec1::<u32>()
+}
+
+/// Load a flat `Vec<i64>` from a safetensors `key` (any int dtype is coerced to i64) —
+/// the loader behind the `evaluate_cv3` pin-ref diagnostic (e.g. the e2e reference
+/// `speech_token`). Kept here (not in `syrinx-eval`) so that crate stays Candle-free.
+pub fn load_ref_i64(path: &str, key: &str) -> Result<Vec<i64>, SynthError> {
+    let map = safetensors::load(path, &Device::Cpu)?;
+    let t = map
+        .get(key)
+        .ok_or_else(|| SynthError::Candle(format!("safetensors `{path}` has no tensor `{key}`")))?;
+    let flat = t.flatten_all()?.to_dtype(DType::I64)?;
+    Ok(flat.to_vec1::<i64>()?)
+}
+
+/// Load an f32 `Tensor` (its on-disk shape preserved) from a safetensors `key` onto `dev`
+/// — the loader behind the optional pin-`z` arm of the `evaluate_cv3` pin-ref diagnostic
+/// (e.g. the flow reference `z` `[1, 80, total]`).
+pub fn load_ref_tensor(path: &str, key: &str, dev: &Device) -> Result<Tensor, SynthError> {
+    let map = safetensors::load(path, dev)?;
+    let t = map
+        .get(key)
+        .ok_or_else(|| SynthError::Candle(format!("safetensors `{path}` has no tensor `{key}`")))?;
+    Ok(t.to_dtype(DType::F32)?)
 }

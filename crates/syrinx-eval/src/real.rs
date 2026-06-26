@@ -36,7 +36,10 @@ impl Metrics {
     /// Serialize to the canonical five-key JSON object (each value a finite number
     /// or `null`), in [`crate::REQUIRED_KEYS`] order.
     pub fn to_json(&self) -> String {
-        let f = |v: Option<f64>| v.map(|x| x.to_string()).unwrap_or_else(|| "null".to_string());
+        let f = |v: Option<f64>| {
+            v.map(|x| x.to_string())
+                .unwrap_or_else(|| "null".to_string())
+        };
         format!(
             "{{\"sim_o\":{},\"wer\":{},\"mos_proxy\":{},\"ttfb_ms\":{},\"rtf\":{}}}",
             f(self.sim_o),
@@ -91,7 +94,10 @@ pub fn evaluate(
     // (`synthesize_instruct`, the instruction takes the prompt-text role) — so MOS/SIM-o
     // A/B different emotions. Else SYRINX_QUALITY_SOURCE picks the random-phase source.
     let t0 = Instant::now();
-    let wav = if let Some(instruct) = std::env::var("SYRINX_INSTRUCT").ok().filter(|s| !s.is_empty()) {
+    let wav = if let Some(instruct) = std::env::var("SYRINX_INSTRUCT")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
         eprintln!("real_eval_metrics: instruct = {instruct:?}");
         synth.synthesize_instruct(
             input.text,
@@ -129,7 +135,9 @@ pub fn evaluate(
     let ref_emb = synth
         .speaker_embedding(input.ref_wav_16k)
         .map_err(|e| e.to_string())?;
-    let out_emb = synth.speaker_embedding(&out_16k).map_err(|e| e.to_string())?;
+    let out_emb = synth
+        .speaker_embedding(&out_16k)
+        .map_err(|e| e.to_string())?;
     let ref_v: Vec<f32> = ref_emb
         .flatten_all()
         .and_then(|t| t.to_vec1())
@@ -196,19 +204,54 @@ pub fn evaluate_cv3(
     input: &EvalInput<'_>,
     max_gen_steps: Option<usize>,
 ) -> Result<Metrics, String> {
-    let inputs = Cv3SynthInputs {
+    let mut inputs = Cv3SynthInputs {
         lm_seed: 0,
         max_gen_steps,
         ..Default::default()
     };
 
+    // --- Pin-ref diagnostic (additive, opt-in): isolate Suspect 2 (live AR drift) from
+    //     Suspect 1 (z/flow/source). When SYRINX_CV3_PIN_REF is set, bypass live LM
+    //     generation and PIN the reference `speech_token` (i64) loaded from the safetensors
+    //     at SYRINX_CV3_E2E_REF (key `speech_token`). Optionally also pin the CFM noise `z`
+    //     from SYRINX_CV3_PIN_Z (key `z`, e.g. the flow reference) for the byte-exact chain.
+    //     Reading: if pinned-ref sim_o JUMPS to ~0.7, the defect is the LIVE GENERATION
+    //     (focus Suspect 2); if it stays ~0.24, it is the z / flow / source path. ---
+    let pin_ref = std::env::var("SYRINX_CV3_PIN_REF")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .is_some();
+    if pin_ref {
+        let ref_path = std::env::var("SYRINX_CV3_E2E_REF").map_err(|_| {
+            "SYRINX_CV3_PIN_REF set but SYRINX_CV3_E2E_REF (reference safetensors path) is unset"
+                .to_string()
+        })?;
+        let ids = syrinx_serve::synth_cv3::load_ref_i64(&ref_path, "speech_token")
+            .map_err(|e| e.to_string())?;
+        eprintln!(
+            "evaluate_cv3: PIN_REF -> pinned {} reference speech tokens from {ref_path}",
+            ids.len()
+        );
+        inputs.pinned_speech_token = Some(ids);
+        if let Some(zpath) = std::env::var("SYRINX_CV3_PIN_Z")
+            .ok()
+            .filter(|s| !s.is_empty())
+        {
+            let z = syrinx_serve::synth_cv3::load_ref_tensor(&zpath, "z", synth.device())
+                .map_err(|e| e.to_string())?;
+            eprintln!("evaluate_cv3: PIN_REF -> pinned CFM noise z from {zpath}");
+            inputs.z = Some(z);
+        }
+    }
+
     // --- RTF + TTFB: one batch synthesis. Wall-time drives RTF; for the non-streaming
     //     CV3 API the whole clip is the "first chunk", so TTFB = the same wall-time. ---
     // SYRINX_CV3_QUALITY=1 uses the real random-phase NSF SineGen source + full
     // generation (`synthesize_quality`) instead of the deterministic single-harmonic
-    // placeholder + cap — the fair quality A/B.
+    // placeholder + cap — the fair quality A/B. The pin-ref diagnostic forces the
+    // pinned-token `synthesize` path (quality always live-generates, ignoring the pin).
     let t0 = Instant::now();
-    let wav = if std::env::var("SYRINX_CV3_QUALITY").is_ok() {
+    let wav = if std::env::var("SYRINX_CV3_QUALITY").is_ok() && !pin_ref {
         synth.synthesize_quality(
             input.text,
             input.prompt_text,
@@ -237,7 +280,9 @@ pub fn evaluate_cv3(
     let ref_emb = synth
         .speaker_embedding(input.ref_wav_16k)
         .map_err(|e| e.to_string())?;
-    let out_emb = synth.speaker_embedding(&out_16k).map_err(|e| e.to_string())?;
+    let out_emb = synth
+        .speaker_embedding(&out_16k)
+        .map_err(|e| e.to_string())?;
     let ref_v: Vec<f32> = ref_emb
         .flatten_all()
         .and_then(|t| t.to_vec1())
