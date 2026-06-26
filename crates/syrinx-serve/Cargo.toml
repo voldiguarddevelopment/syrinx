@@ -46,6 +46,10 @@ futures-util = "0.3"
 # optional and only pulled in by `real`, keeping the scaffold build dependency-light.
 candle-core = { version = "0.8", optional = true }
 syrinx-lm = { path = "../syrinx-lm" }
+# Prosody control layer: Candle-free (pure data + DSP), so it is a plain
+# non-optional dep — the paralinguistic-markup API is usable even in the scaffold
+# build; the synth `real` path additionally uses its render-time rate transform.
+syrinx-prosody = { path = "../syrinx-prosody" }
 syrinx-frontend = { path = "../syrinx-frontend", optional = true }
 syrinx-speaker = { path = "../syrinx-speaker", optional = true }
 syrinx-acoustic = { path = "../syrinx-acoustic", optional = true }

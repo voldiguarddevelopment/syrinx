@@ -3,8 +3,10 @@
 pub mod contour;
 pub mod duration;
 pub mod lipsync;
+pub mod markup;
 pub mod pitch;
 pub mod plan;
 pub mod rate;
+pub mod render;
 pub mod roundtrip;
 pub mod volume;
