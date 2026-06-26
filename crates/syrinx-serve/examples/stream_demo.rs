@@ -116,14 +116,30 @@ fn main() {
         ..Default::default()
     };
 
-    // ---- (1) non-streaming reference ----
-    eprintln!("\n=== non-streaming synthesize ===");
+    // ---- (1) reference: the SAME chunked-causal streaming flow, decoded in ONE chunk
+    //      (hop covers all tokens) = "batch under the mask". Faithful streaming means the
+    //      multi-chunk run matches THIS — not the non-causal `synthesize` (a different mode
+    //      by construction; the flow-level `real_flow_stream_consistency` test shows the
+    //      masked finalized frames are bit-stable, 0.0 diff, where non-causal leaks 0.53).
+    eprintln!("\n=== reference: masked-batch (single-chunk streaming) ===");
     let t0 = Instant::now();
-    let full = synth
-        .synthesize(TTS_TEXT, PROMPT_TEXT, &ref_wav_16k, &ref_wav_24k, &inputs())
-        .expect("synthesize");
+    let mut full: Vec<f32> = Vec::new();
+    synth
+        .synthesize_streaming(
+            TTS_TEXT,
+            PROMPT_TEXT,
+            &ref_wav_16k,
+            &ref_wav_24k,
+            &inputs(),
+            1_000_000, // hop ≥ all tokens ⇒ a single finalized chunk
+            |chunk| {
+                full.extend_from_slice(&chunk);
+                Ok(())
+            },
+        )
+        .expect("synthesize_streaming (reference)");
     let full_secs = t0.elapsed().as_secs_f64();
-    eprintln!("  full wav: {} samples, {:.3}s wall", full.len(), full_secs);
+    eprintln!("  reference wav: {} samples, {:.3}s wall", full.len(), full_secs);
 
     // ---- (2) streaming ----
     eprintln!("\n=== streaming synthesize (token_hop={token_hop}) ===");
@@ -199,19 +215,65 @@ fn main() {
         streamed.len(),
         full.len()
     );
-    // On the correlation metric (important): the non-streaming path runs the *non-causal*
-    // full-context flow, while streaming necessarily decodes on partial/causal context.
-    // The two therefore produce different — both valid — renderings and CANNOT sample-match
-    // (the leading partial-context chunk also shifts the cumulative F0 phase for the rest).
-    // So `corr` vs the non-streaming path is NOT a faithfulness metric and is expected ~0.
-    // The streaming source IS now phase-continuous (no boundary clicks) and the structure
-    // is sound; true streaming faithfulness must be checked against CosyVoice2's *causal*
-    // streaming reference (flow_cache), which is a later pass.
+    // The streaming path holds back a per-boundary source-cache tail, so it is time-OFFSET
+    // from the single-chunk batch; raw prefix correlation understates a merely-shifted but
+    // faithful signal. The right metric is best-lag correlation. (The flow-level finalized
+    // frames are already proven bit-stable: `real_flow_stream_consistency`, 0.0 diff vs 0.53
+    // for the old non-causal re-run — so any audio gap is alignment, not content.)
+    let (blc, lag) = best_lag_corr(&streamed[..n], &full[..n], 12_000, 20);
     eprintln!(
-        "\nSMOKE: structure OK (len ratio {len_ratio:.3}); corr vs non-streaming = {corr:.3} \
-         (expected ~0 — non-causal full-context vs chunked; not a faithfulness metric). \
-         Source is phase-continuous; faithfulness vs the causal streaming reference is a later pass."
+        "\nSMOKE: len ratio {len_ratio:.3}; prefix corr = {corr:.3}; best-lag corr = {blc:.3} (lag {lag})"
     );
+    // Two-part faithfulness (see STREAMING.md):
+    //  (1) FLOW — DONE + proven: under the chunk mask the finalized mel frames are bit-stable
+    //      (`real_flow_stream_consistency`: 0.0 diff vs 0.53 non-causal). The flow streams faithfully.
+    //  (2) VOCODER — remaining: the neural HiFT has a temporal receptive field, so chunked
+    //      overlap-add + the per-chunk source cache do NOT yet reconstruct the single-shot audio
+    //      (best-lag corr here ≪ 1). That is a separate streaming-vocoder problem, NOT the flow.
+    if blc > 0.5 {
+        eprintln!("SMOKE PASS: streaming audio faithful to the masked batch (best-lag corr {blc:.3}).");
+    } else {
+        eprintln!(
+            "SMOKE: FLOW is causal + faithful (0.0 mel diff, proven separately); the HiFT \
+             chunked-vocoding assembly is NOT yet single-shot-identical (best-lag corr {blc:.3}) \
+             — a documented streaming-vocoder follow-up, see STREAMING.md."
+        );
+    }
+}
+
+/// Pearson correlation of `a` against `b` shifted by `lag` samples (`a[i]` vs `b[i-lag]`).
+#[cfg(feature = "real")]
+fn corr_at_lag(a: &[f32], b: &[f32], lag: i64) -> f64 {
+    let mut xs: Vec<f32> = Vec::new();
+    let mut ys: Vec<f32> = Vec::new();
+    for (i, &x) in a.iter().enumerate() {
+        let j = i as i64 - lag;
+        if j < 0 || j as usize >= b.len() {
+            continue;
+        }
+        xs.push(x);
+        ys.push(b[j as usize]);
+    }
+    if xs.len() < 1000 {
+        return 0.0;
+    }
+    pearson(&xs, &ys)
+}
+
+/// Best correlation over integer sample lags in `[-max_lag, max_lag]` (stride `step`) —
+/// ignores the streaming path's fixed per-boundary cache offset. Returns `(corr, lag)`.
+#[cfg(feature = "real")]
+fn best_lag_corr(a: &[f32], b: &[f32], max_lag: usize, step: usize) -> (f64, i64) {
+    let mut best = (-2.0f64, 0i64);
+    let mut lag = -(max_lag as i64);
+    while lag <= max_lag as i64 {
+        let c = corr_at_lag(a, b, lag);
+        if c > best.0 {
+            best = (c, lag);
+        }
+        lag += step as i64;
+    }
+    best
 }
 
 #[cfg(feature = "real")]

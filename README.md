@@ -227,7 +227,7 @@ the harness will not mark a task done on belief.
 - [x] **Output watermark** — spread-spectrum, imperceptible + detectable after light processing (see *Ethics*)
 
 **Not yet (honest):**
-- [ ] **Sample-faithful streaming** — streaming works + is correct-length but is *not* sample-identical to the batch path; the fix is CV2's **chunked-causal attention mask** in the flow (same weights). Concrete implementation plan: [`crates/syrinx-acoustic/docs/STREAMING.md`](crates/syrinx-acoustic/docs/STREAMING.md). Sub-200 ms TTFB is a design target, not a measured result (CPU TTFB is LM-bound).
+- [~] **Sample-faithful streaming — flow done, vocoder remaining.** The **causal flow is implemented + proven**: CV2's chunked-causal attention mask (same weights) makes the streamed mel frames **bit-stable** (`real_flow_stream_consistency`: 0.0 diff vs 0.53 for the old non-causal path). The remaining gap is the **streaming vocoder** — the neural HiFT's chunked overlap-add isn't yet single-shot-identical (a separate problem; details + plan in [`crates/syrinx-acoustic/docs/STREAMING.md`](crates/syrinx-acoustic/docs/STREAMING.md)). Sub-200 ms TTFB is a design target, not a measured result (CPU TTFB is LM-bound).
 - [ ] **Emotion / paralinguistic control** — needs the CosyVoice2 **instruct checkpoint** (not in the base 0.5B); research-tracked.
 - [ ] **Perceptual-MOS eval** — needs a MOS-prediction model (UTMOS/DNSMOS). (WER is now wired via Whisper; cross-lingual eval can reuse the same ASR.)
 - [ ] **Smaller footprint** — quantize the embedding tables + the flow to approach a ~270 MB target.

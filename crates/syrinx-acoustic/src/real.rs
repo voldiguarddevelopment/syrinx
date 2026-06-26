@@ -846,14 +846,17 @@ struct HiftCache {
 /// to be present (the flow's right lookahead), so the first chunk is produced after
 /// `token_hop + PRE_LOOKAHEAD` tokens instead of the whole utterance.
 ///
-/// ## Flow handling (documented approximation)
-/// CosyVoice2's flow is *causal* and caches its left-context (`flow_cache`); this port
-/// has only the non-causal full-context [`Flow::forward_zero_shot`]. So per chunk we
-/// re-run the full-context flow over the *grown* token prefix and slice out the newly
-/// finalized mel region `[2*off .. 2*(off+hop)]`. For a strictly-causal flow these
-/// finalized frames are identical to the cached path; for this non-causal port they are
-/// an approximation whose only error source is right-context that a causal model would
-/// not see. The HiFT caching + overlap + hamming fade below is replicated *exactly*.
+/// ## Flow handling (chunked-causal — faithful)
+/// CosyVoice2 streams the flow under a chunked-causal attention mask. This path uses
+/// [`Flow::forward_zero_shot_streaming`] (same weights + a chunk mask, [`StreamCfg::cosyvoice2`]),
+/// re-running over the *grown* token prefix and slicing the newly finalized mel region
+/// `[2*off .. 2*(off+hop)]`. Because the mask blocks every finalized frame from attending
+/// to the future, those frames are **bit-stable** as the prefix grows (verified by
+/// `tests/real_flow_stream_consistency.rs`: 0.0 diff vs 0.53 for the old non-causal re-run),
+/// so the stream is self-consistent — no right-context leak, no leading-chunk phase poison.
+/// The HiFT caching + overlap + hamming fade below is replicated *exactly*. (Re-running the
+/// masked flow per chunk is O(n²); a left-context KV cache like CV2's `flow_cache` is the
+/// efficiency follow-up — correctness here does not depend on it.)
 ///
 /// `prompt_token` / `prompt_feat` / `embedding` / `z_full` are the same zero-shot
 /// conditioning as non-streaming (`z_full` must cover the full final flow length,
@@ -897,8 +900,14 @@ pub fn token2wav_streaming(
         let flow_len = TOKEN_MEL_RATIO * (prompt_len + avail_end);
         let z = z_full.narrow(2, 0, flow_len)?.contiguous()?;
         // prompt_feat is always the full prompt mel (its length matches 2*prompt_len).
-        let mel_full = flow.forward_zero_shot(
+        // Chunked-causal streaming flow: under the attention mask a finalized frame
+        // never attends to the future, so the [2*offset .. 2*want_end] region is
+        // bit-stable across the growing prefix (proven by real_flow_stream_consistency:
+        // 0.0 diff vs 0.53 non-causal). That kills the leading-chunk right-context leak
+        // that previously decorrelated the stream.
+        let mel_full = flow.forward_zero_shot_streaming(
             prompt_token, &tok_slice, prompt_feat, embedding, &z, n_timesteps,
+            StreamCfg::cosyvoice2(),
         )?; // [1, 80, 2*avail_end]
 
         // newly-finalized mel region: [2*offset .. 2*want_end].
