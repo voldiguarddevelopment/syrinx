@@ -31,14 +31,16 @@ The design goal is the rare combination of **clone quality + expressive range +
 low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a **~270&nbsp;MB
 4-bit footprint**.
 
-> **Status — honest snapshot.** The **real CosyVoice2-0.5B model is fully reimplemented
-> in pure-Rust [Candle](https://github.com/huggingface/candle) and parity-verified**
-> (`text + ref → 24 kHz audio`, full-chain 7.7e-5) — with a GPU runtime (RTF ≈ 1.67), a
-> CLI + OpenAI-compatible server, zh+en text normalization, faithful speech-rate control,
-> measured eval (SIM-o ≈ 0.74 clone fidelity), an int4-quantized LM, and an output
-> watermark. **Not yet:** sample-faithful streaming (needs a causal flow), emotion /
-> paralinguistic control (needs the instruct checkpoint), and cross-lingual / WER eval
-> (needs ASR). The original "deterministic spec engine" was Ratchet's GPU-less, parity-gated
+> **Status — honest snapshot.** **Both the CosyVoice2-0.5B *and* CosyVoice3-0.5B models are
+> fully reimplemented in pure-Rust [Candle](https://github.com/huggingface/candle) and
+> parity-verified** (`text + ref → 24 kHz audio`; CV2 full-chain 7.7e-5, CV3 components to
+> ~1e-5–1e-3). Each has a GPU runtime (RTF ≈ 1.67), a CLI + OpenAI-compatible server, measured
+> eval (CV2 SIM-o ≈ 0.74, CV3 ≈ 0.88), **emotion/instruct control**, a real-SineGen quality
+> source, an int4-quantized footprint, and (CV2) zh+en text-norm + speech-rate + watermark +
+> sample-faithful streaming. CV3 adds a new 22-layer DiT flow + causal-f64 HiFT + v3 tokenizer.
+> **Remaining:** sub-200 ms TTFB (CPU is LM-bound) and a full cross-lingual WER sweep. (Earlier
+> "emotion needs an instruct checkpoint" was wrong — CV2/CV3 do instruct on the base weights.)
+> The original "deterministic spec engine" was Ratchet's GPU-less, parity-gated
 > *proxy*; the real pipeline supersedes it (and orphans some of it). See
 > [Build status](#build-status) and [Roadmap](#roadmap).
 
@@ -156,6 +158,31 @@ The parity fixtures (real weights + Python reference dumps) live on the model bo
 tests are **env-gated and skip cleanly in CI** — the default build + CI stay green and
 Candle-free, while the real path runs for real where the weights exist.
 
+**✅ Real CosyVoice3 model — DONE (a second pure-Rust CosyVoice, feature-complete)**
+
+The newer **CosyVoice3-0.5B** (`Fun-CosyVoice3-0.5B-2512`) is now *also* a full pure-Rust
+Candle port, built the same parity-driven way and reusing ~70 % of the CV2 code (CAM++
+speaker as-is, the Qwen2 LM body, the CFM Euler/CFG solver, the matcha mel + `ort` wiring):
+
+- **LM** (`CosyVoice3LM`) — Qwen2 body + CV3 head (sos/task from `speech_embedding`, bias-free
+  `llm_decoder`): teacher-forced logits **2.67e-5**.
+- **Flow** — a **new 22-layer DiT** estimator (dim 1024, rotary + AdaLN) replacing CV2's U-Net,
+  with a PreLookahead front-end + vocab-6561 input embedding: **2.27e-3** (the fp32 accumulation
+  floor — proven: torch's own fp32-vs-fp64 on this DiT is 1.34e-3).
+- **Vocoder** — `CausalHiFTGenerator` (causal convs + a **float64** f0-predictor): audio **4.9e-5**.
+- **Frontend** — `speech_tokenizer_v3.onnx` (87/87 ids exact) + the matcha prompt-mel (**3.72e-5**).
+- **Live synthesis** (`Cv3Synthesizer`, `text + ref → 24 kHz`) — measured **SIM-o 0.88** (voice clone,
+  *better* than CV2's 0.74) and **MOS-proxy 2.21** (with the real SineGen source). The `<|endofprompt|>`
+  marker is required for all CV3 inference.
+- **Feature-complete:** CLI (`synth/serve --cv3`) · HTTP server (`Cv3RealSynth`) · 5-metric eval
+  (`evaluate_cv3`) · emotion/instruct (`synthesize_instruct`) · real-SineGen quality source ·
+  RL-LM variant (`llm.rl`) · int4 footprint (~488 MB).
+
+> The hard win was the live decode: a repetition-aware-sampling fallback that masked the repeated
+> token (which the reference doesn't) collapsed generation; a pin-reference-token diagnostic proved
+> the model itself was correct (pinned → SIM-o 0.69) and isolated the one-line fix that took live
+> SIM-o **0.24 → 0.88**.
+
 ---
 
 ## The parity approach (why the numbers are trustworthy)
@@ -225,6 +252,7 @@ the harness will not mark a task done on belief.
 - [x] **Measured eval — 5/5, no stub constants** — SIM-o clone fidelity (≈0.74), **WER** (Whisper CER ≈0%), **MOS-proxy** (UTMOS), RTF, TTFB. WER/MOS run via eval-side helper models (Whisper / UTMOS); the inference path stays pure-Rust
 - [x] **int4 (Q4_0) LM quant** — ~2.5× (2449 → 986 MB, SIM-o 0.72 preserved); the f16 embedding tables are the remaining bulk
 - [x] **Output watermark** — spread-spectrum, imperceptible + detectable after light processing (see *Ethics*)
+- [x] **Real CosyVoice3-0.5B port — feature-complete** — LM (2.67e-5) · **new 22-layer DiT flow** (2.27e-3, fp32 floor) · causal f64 HiFT (4.9e-5) · v3 tokenizer (exact) · frontend (3.72e-5); live synth **SIM-o 0.88 / MOS 2.21**; CLI/server/eval/emotion/quality-source/RL-LM/int4 all wired (`--cv3`). ~70% CV2 reuse; see *Real CosyVoice3 model* above.
 
 **Not yet (honest):**
 - [x] **Sample-faithful streaming** — CV2's chunked-causal attention mask (same weights) makes the streamed mel frames **bit-stable** (`real_flow_stream_consistency`: 0.0 diff vs 0.53 for the old non-causal path), and the **streamed audio is intelligible — Whisper CER 0.0**, identical to batch. (Streamed audio is *not* sample-identical to the batch — CV2's streaming cross-fades by design; details in [`STREAMING.md`](crates/syrinx-acoustic/docs/STREAMING.md).) Sub-200 ms TTFB remains a design target (CPU TTFB is LM-bound).
