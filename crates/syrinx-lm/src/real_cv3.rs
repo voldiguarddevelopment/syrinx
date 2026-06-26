@@ -187,7 +187,7 @@ impl Cv3Lm {
         for i in 0..max_len {
             let logp = log_softmax_vec(&logits)?;
             let ignore_eos = i < min_len;
-            let top = ras_sampling(&logp, &out, ignore_eos, &mut rng);
+            let top = ras_sampling(&logp, &out, ignore_eos, &mut rng).token;
             if top >= SPEECH_TOKEN_SIZE {
                 break;
             }
@@ -254,8 +254,11 @@ impl Cv3Lm {
         let mut out: Vec<u32> = Vec::new();
         // Under `SYRINX_CV3_GEN_DEBUG`, retain every step's cached-decode logit vector so we
         // can replay the realized token sequence through the uncached single-forward path and
-        // measure per-step cached-vs-single divergence. Empty (no allocation) otherwise.
+        // measure per-step cached-vs-single divergence; and the per-step repetition-aware
+        // fallback flag (`true` == the nucleus pick was replaced by a `random_sampling` draw).
+        // Both empty (no allocation) otherwise.
         let mut dbg_cached_logits: Vec<Vec<f32>> = Vec::new();
+        let mut dbg_ras_triggers: Vec<bool> = Vec::new();
         let mut logits = self.step_logits_cached(&lm_input0, &mut cache)?;
         for i in 0..max_len {
             if debug {
@@ -263,7 +266,11 @@ impl Cv3Lm {
             }
             let logp = log_softmax_vec(&logits)?;
             let ignore_eos = i < min_len;
-            let top = ras_sampling(&logp, &out, ignore_eos, &mut rng);
+            let outcome = ras_sampling(&logp, &out, ignore_eos, &mut rng);
+            if debug {
+                dbg_ras_triggers.push(outcome.triggered);
+            }
+            let top = outcome.token;
             // CV3 stop set = the 200 control ids `speech_token_size..=6760`; every id at or
             // above `speech_token_size` ends decoding.
             if top >= SPEECH_TOKEN_SIZE {
@@ -274,7 +281,7 @@ impl Cv3Lm {
             logits = self.step_logits_cached(&row, &mut cache)?;
         }
         if debug {
-            self.gen_debug_report(&lm_input0, t0, &out, &dbg_cached_logits)?;
+            self.gen_debug_report(&lm_input0, t0, &out, &dbg_cached_logits, &dbg_ras_triggers)?;
         }
         Ok(out)
     }
@@ -297,15 +304,49 @@ impl Cv3Lm {
     /// reference's ~80/102), and longest consecutive run distinguish a *collapse* (one id or
     /// a short cycle repeating ⇒ sampler / repetition-aware bias, suspect 3) from
     /// *varied-but-wrong* output (⇒ logit content).
+    ///
+    /// **(3) How often does repetition-aware sampling (RAS) fall back to `random_sampling`?**
+    /// `ras_triggers[i]` is `true` when step `i`'s nucleus pick was discarded for a
+    /// full-distribution draw. Reports the trigger RATE and tags whether the **stopping**
+    /// step (if any) was a RAS fallback draw vs a plain nucleus draw — a high rate and/or a
+    /// RAS-fallback stop right after `min_len` is the signature of the RAS divergence.
     fn gen_debug_report(
         &self,
         lm_input0: &Tensor,
         t0: usize,
         out: &[u32],
         cached_logits: &[Vec<f32>],
+        ras_triggers: &[bool],
     ) -> Result<()> {
         let n = out.len();
         eprintln!("== SYRINX_CV3_GEN_DEBUG ==  T0={t0}  generated n={n}");
+
+        // (3) Repetition-aware-sampling fallback rate + stop-step path. `ras_triggers` has one
+        // entry per sampling step (n produced tokens, plus one more if a control id stopped
+        // the loop). A high rate + a RAS-fallback stop just past `min_len` is the RAS-divergence
+        // signature; the reference's RAS fires rarely.
+        let total_steps = ras_triggers.len();
+        let ras_count = ras_triggers.iter().filter(|&&t| t).count();
+        let stopped = total_steps > n; // the loop broke on a control id at step `n`
+        let rate = if total_steps > 0 {
+            100.0 * ras_count as f64 / total_steps as f64
+        } else {
+            0.0
+        };
+        eprintln!(
+            "RAS fallback: {ras_count}/{total_steps} steps ({rate:.1}%) drew from random_sampling \
+             (reference fires rarely)"
+        );
+        if stopped {
+            let via = if ras_triggers[n] { "RAS random_sampling fallback" } else { "plain nucleus draw" };
+            eprintln!("STOP at step {n} (control id) came from: {via}");
+        } else {
+            eprintln!("no stop: ran to max_len ({total_steps} steps)");
+        }
+        // Per-step trigger flags ('R' = fallback fired, '.' = plain nucleus), aligned with ids.
+        let flags: String = ras_triggers.iter().map(|&t| if t { 'R' } else { '.' }).collect();
+        eprintln!("RAS per-step flags = {flags}");
+
         if n == 0 {
             eprintln!(
                 "DEGENERACY: ZERO tokens generated — the step-0 sample was already a control \
@@ -542,11 +583,23 @@ fn random_sampling(logp: &[f32], rng: &mut SplitMix64) -> u32 {
     multinomial1(&probs, rng) as u32
 }
 
-/// `ras_sampling` (Repetition-Aware Sampling): nucleus-sample a candidate; if it repeated
-/// `>= win_size * tau_r` times in the last `win_size` decoded tokens, mask it and fall back
-/// to `random_sampling`. EOS (`speech_token_size`) is `-inf`-masked first when `ignore_eos`.
-/// Pinned `top_p=0.8, top_k=25, win_size=10, tau_r=0.1` (matches the dump metadata).
-fn ras_sampling(logp: &[f32], decoded: &[u32], ignore_eos: bool, rng: &mut SplitMix64) -> u32 {
+/// The result of one [`ras_sampling`] draw: the chosen `token`, plus whether the
+/// repetition-aware guard `triggered` (nucleus pick discarded → `random_sampling` fallback).
+/// `triggered` is read only by the `SYRINX_CV3_GEN_DEBUG` instrumentation; it never changes
+/// the returned token, so the live path is byte-identical with the diagnostic off.
+struct RasOutcome {
+    token: u32,
+    triggered: bool,
+}
+
+/// `ras_sampling` (Repetition-Aware Sampling), an exact port of
+/// `cosyvoice/utils/common.py:ras_sampling` (:138): nucleus-sample a candidate; if it
+/// repeated `>= win_size * tau_r` (= 1.0) times in the last `win_size` decoded tokens, fall
+/// back to `random_sampling`. The control range (`speech_token_size..DECODER_OUT`) is
+/// `-inf`-masked first when `ignore_eos` (CV3's wider-than-CV2 stop set; the masking analogue
+/// of the reference's eos rejection loop while `step < min_len`). Pinned
+/// `top_p=0.8, top_k=25, win_size=10, tau_r=0.1` (the dump metadata).
+fn ras_sampling(logp: &[f32], decoded: &[u32], ignore_eos: bool, rng: &mut SplitMix64) -> RasOutcome {
     const TOP_P: f32 = 0.8;
     const TOP_K: usize = 25;
     const WIN: usize = 10;
@@ -569,13 +622,23 @@ fn ras_sampling(logp: &[f32], decoded: &[u32], ignore_eos: bool, rng: &mut Split
         }
     }
     let top = nucleus_sampling(&logp, TOP_P, TOP_K, rng);
+    // `decoded[-win_size:] == top` count, threshold `>= win_size * tau_r` (= 1.0): a single
+    // repeat in the last `WIN` decoded tokens trips the guard. Exact match to the reference.
     let start = decoded.len().saturating_sub(WIN);
     let rep = decoded[start..].iter().filter(|&&t| t == top).count();
     if (rep as f32) >= WIN as f32 * TAU_R {
-        logp[top as usize] = f32::NEG_INFINITY;
-        return random_sampling(&logp, rng);
+        // BUGFIX (CV3 live-AR degeneracy): the reference `random_sampling`
+        // (cosyvoice/utils/common.py:165) is the PLAIN full distribution —
+        // `weighted_scores.softmax(dim=0).multinomial(1)` — and crucially does **NOT** mask
+        // the repeated pick `top`. The previous code set `logp[top] = -inf` before the
+        // fallback, FORCING a different (off-distribution) token on every repeat; speech
+        // tokens naturally repeat within a 10-step window, so this fired often and pushed the
+        // free-run trajectory off-track and into early stops. Sample the same (only
+        // `min_len`-masked while `ignore_eos`) distribution the reference does, WITHOUT
+        // removing `top`.
+        return RasOutcome { token: random_sampling(&logp, rng), triggered: true };
     }
-    top
+    RasOutcome { token: top, triggered: false }
 }
 
 /// Test-only seam exposing the **production** sampler primitives so the root integration
@@ -599,5 +662,25 @@ pub mod testkit {
     pub fn uniform_draws(seed: u64, n: usize) -> Vec<f64> {
         let mut rng = SplitMix64::new(seed);
         (0..n).map(|_| rng.next_f64()).collect()
+    }
+
+    /// `n` draws from the production [`super::ras_sampling`], each as `(token, triggered)`
+    /// where `triggered` is `true` when the repetition-aware guard fell back to
+    /// `random_sampling`. Lets `tests/real_cv3_ras.rs` prove the fallback samples the PLAIN
+    /// full distribution and — the regression lock — that it does NOT mask the repeated pick.
+    pub fn ras_draws(
+        logp: &[f32],
+        decoded: &[u32],
+        ignore_eos: bool,
+        seed: u64,
+        n: usize,
+    ) -> Vec<(u32, bool)> {
+        let mut rng = SplitMix64::new(seed);
+        (0..n)
+            .map(|_| {
+                let o = super::ras_sampling(logp, decoded, ignore_eos, &mut rng);
+                (o.token, o.triggered)
+            })
+            .collect()
     }
 }
