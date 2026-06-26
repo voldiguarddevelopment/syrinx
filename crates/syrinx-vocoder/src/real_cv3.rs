@@ -283,6 +283,22 @@ impl Cv3Hift {
         y.squeeze(D::Minus1)?.abs()?.to_dtype(DType::F32)
     }
 
+    /// The `SourceModuleHnNSF.l_linear` harmonic-merge weights: a learned
+    /// `Linear(nb_harmonics+1 -> 1)` that fuses the per-harmonic sine excitations
+    /// `[.., 9]` (fundamental + 8 overtones) into the single-channel NSF source, then
+    /// `tanh`. CV3's `m_source.l_linear` is a plain (non-`weight_norm`) `nn.Linear`, so
+    /// it is fetched verbatim (no fold). Returns `(weight[9], bias)` so the perceptual
+    /// **quality** source builder can reproduce CV3's `m_source` merge exactly. The
+    /// deterministic single-harmonic smoke source does not use these. Additive — the
+    /// existing decode/f0 paths are byte-unchanged.
+    pub fn source_merge_linear(&self) -> Result<(Vec<f32>, f32)> {
+        let w = self.raw_t("m_source.l_linear.weight", DType::F32)?; // [1, 9]
+        let b = self.raw_t("m_source.l_linear.bias", DType::F32)?; // [1]
+        let w: Vec<f32> = w.flatten_all()?.to_vec1::<f32>()?;
+        let b: f32 = b.flatten_all()?.to_vec1::<f32>()?[0];
+        Ok((w, b))
+    }
+
     /// Causal `decode(mel, source)`. `mel` is `[1,80,T]`; `source` is the dumped
     /// SineGen waveform `[1,1,L]`. Computes `s_stft = _stft(source)` then the
     /// causal upsample/fusion/resblock stack + iSTFT head. Returns `[1, L]`.

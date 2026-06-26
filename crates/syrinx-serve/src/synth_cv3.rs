@@ -94,6 +94,13 @@ const MAX_TOKEN_TEXT_RATIO: usize = 20;
 const F0_UPSAMPLE: usize = 480;
 /// SineGen sine amplitude (`sine_amp` / `nsf_alpha`).
 const SINE_AMP: f64 = 0.1;
+/// SineGen additive-noise std for *voiced* frames (`noise_std` / `nsf_sigma`).
+const NSF_NOISE_STD: f64 = 0.003;
+/// Number of harmonic overtones above the fundamental (`nb_harmonics`); the source has
+/// `NB_HARMONICS + 1 = 9` sine components (fundamental + 8 overtones).
+const NB_HARMONICS: usize = 8;
+/// F0 threshold (Hz) for the voiced/unvoiced mask (`nsf_voiced_threshold`).
+const NSF_VOICED_THRESHOLD: f64 = 10.0;
 
 /// CV3's `<|endofprompt|>` boundary marker appended to the prompt-text segment.
 const ENDOFPROMPT: &str = "<|endofprompt|>";
@@ -170,6 +177,26 @@ impl Cv3Synthesizer {
             vocoder,
             dev,
         })
+    }
+
+    /// Load every CV3 sub-model, **overriding only the LM weight path** — the entry point
+    /// for the **RL post-trained LM** (`llm.rl_fp32.safetensors`).
+    ///
+    /// The RL checkpoint is a drop-in replacement for `llm_fp32.safetensors`: identical
+    /// architecture and key layout (the Qwen2-0.5B body + the bias-free CV3 `llm_decoder`,
+    /// `llm.model.model.layers.N.*` / `speech_embedding.weight` / `llm_decoder.weight`), so
+    /// [`Cv3Lm::load`] consumes it with no change. This is exactly equivalent to setting
+    /// `cfg.lm_weights = rl_lm_weights` before [`Self::load_on_device`]; it is provided as a
+    /// named helper so the RL-vs-base A/B is explicit at the call site. Every other
+    /// sub-model (speaker / flow / HiFT / tokenizers) is loaded from `cfg` unchanged.
+    pub fn load_with_lm(
+        cfg: &Cv3SynthConfig,
+        rl_lm_weights: &str,
+        dev: Device,
+    ) -> Result<Self, SynthError> {
+        let mut cfg = cfg.clone();
+        cfg.lm_weights = rl_lm_weights.to_string();
+        Self::load_on_device(&cfg, dev)
     }
 
     /// The device every Candle sub-model was loaded onto.
@@ -399,6 +426,211 @@ impl Cv3Synthesizer {
             }
         }
         Ok(Tensor::from_vec(source, (1, 1, n), &self.dev)?)
+    }
+
+    /// Build the **random-phase NSF** HiFT source **waveform** `[1, 1, L]` from a generated
+    /// mel — the faithful CV3 `SourceModuleHnNSF` excitation for the perceptual-quality
+    /// path, the exact analogue of CV2's `Synthesizer::random_phase_source_stft` but
+    /// emitting the *waveform* (CV3's `Cv3Hift::decode` STFTs it internally), not a
+    /// pre-STFT'd `s_stft`.
+    ///
+    /// CV3's HiFT (`CausalHiFTGenerator`, 24 kHz) instantiates `SourceModuleHnNSF` with
+    /// `SineGen2(causal=True)` (`sinegen_type='2'` when `sampling_rate != 22050`). Its
+    /// steady-state output equals the per-sample cumulative-phase ramp used here; every
+    /// perceptually load-bearing element is reproduced (and seeded for reproducibility):
+    ///   * **`NB_HARMONICS + 1 = 9` sines** — fundamental + 8 overtones, the `i`-th at
+    ///     instantaneous phase `(i+1)·θ(t)` with `θ(t) = 2π·cumsum(f0_up/sr)`;
+    ///   * **random initial phase per harmonic** — `φ_0 = 0` (fundamental), `φ_i ∈ (-π, π]`
+    ///     (CV3 `SineGen2`'s `rand_ini` with `rand_ini[:,0]=0`);
+    ///   * **voiced/unvoiced mask** `uv = f0 > 10 Hz` (gates the sines to 0 when unvoiced);
+    ///   * **additive Gaussian noise** `noise_amp = uv·noise_std + (1-uv)·sine_amp/3`
+    ///     (`σ=0.003` breath when voiced, `sine_amp/3 ≈ 0.033` broadband when unvoiced);
+    ///   * **learned merge** — the 9 components fused by the checkpoint's
+    ///     `m_source.l_linear` `Linear(9→1)` + `tanh` ([`Cv3Hift::source_merge_linear`]).
+    ///
+    /// All randomness comes from a **seeded** SplitMix64 (never system RNG), so a given
+    /// `(mel, seed)` is bit-reproducible. This is a perceptual-quality source, not a
+    /// bit-parity source — the model's torch RNG draw order is not portable. The smoke
+    /// [`Cv3Synthesizer::deterministic_source`] is left byte-unchanged.
+    pub fn quality_source(&self, mel: &Tensor, seed: u64) -> Result<Tensor, SynthError> {
+        let f0 = self.vocoder.f0_predict(mel)?; // [1, T]
+        let f0v: Vec<f32> = f0.flatten_all()?.to_vec1::<f32>()?;
+        let (merge_w, merge_b) = self.vocoder.source_merge_linear()?; // ([9], b)
+        if merge_w.len() != NB_HARMONICS + 1 {
+            return Err(SynthError::Candle(format!(
+                "m_source.l_linear expects {} weights, got {}",
+                NB_HARMONICS + 1,
+                merge_w.len()
+            )));
+        }
+
+        let n = f0v.len() * F0_UPSAMPLE; // source samples = mel frames * 480
+        let mut rng = SplitMix64::new(seed);
+
+        // Random initial phase per harmonic: φ_0 = 0 (fundamental), φ_i ∈ (-π, π].
+        let n_comp = NB_HARMONICS + 1;
+        let mut phi = vec![0f64; n_comp];
+        for p in phi.iter_mut().skip(1) {
+            *p = (rng.next_f64() * 2.0 - 1.0) * std::f64::consts::PI;
+        }
+
+        // Single-channel merged excitation, sample by sample.
+        let mut source: Vec<f32> = Vec::with_capacity(n);
+        let mut base_phase = 0.0f64; // θ(t) = 2π·cumsum(f0_up/sr), built incrementally
+        let two_pi = 2.0 * std::f64::consts::PI;
+        for s in 0..n {
+            let fhz = f0v[s / F0_UPSAMPLE] as f64; // nearest-upsample of f0 by 480
+            base_phase += two_pi * (fhz / MEL_SR as f64);
+            let uv = if fhz > NSF_VOICED_THRESHOLD { 1.0 } else { 0.0 };
+            let noise_amp = uv * NSF_NOISE_STD + (1.0 - uv) * SINE_AMP / 3.0;
+            // 9 harmonic components -> learned linear(9->1) + tanh merge.
+            let mut acc = merge_b as f64;
+            for (i, &w) in merge_w.iter().enumerate() {
+                let h = (i + 1) as f64; // harmonic multiplier (fundamental = 1)
+                let sine = SINE_AMP * (h * base_phase + phi[i]).sin();
+                let noise = noise_amp * rng.next_gauss();
+                let comp = sine * uv + noise; // SineGen: sine_waves * uv + noise
+                acc += w as f64 * comp;
+            }
+            source.push(acc.tanh() as f32);
+        }
+        Ok(Tensor::from_vec(source, (1, 1, n), &self.dev)?)
+    }
+
+    /// Full CV3 synthesis with the **random-phase NSF source** (perceptual-quality path),
+    /// returning the 24 kHz waveform. Same pipeline as [`Cv3Synthesizer::synthesize`] but
+    /// the HiFT excitation is [`Cv3Synthesizer::quality_source`] (seeded by `source_seed`)
+    /// instead of the buzzy single-harmonic [`Cv3Synthesizer::deterministic_source`], and
+    /// the CFM noise `z` is a **seeded standard-normal** init (the flow's `rand_noise`
+    /// *distribution*) rather than the degenerate zeros init — both reproducible from
+    /// `source_seed`, which also seeds live LM sampling so a `(text, ref, source_seed)`
+    /// triple is fully reproducible.
+    pub fn synthesize_quality(
+        &mut self,
+        tts_text: &str,
+        prompt_text: &str,
+        ref_wav_16k: &[f32],
+        ref_wav_24k: &[f32],
+        source_seed: u64,
+    ) -> Result<Vec<f32>, SynthError> {
+        let cond = self.prompt_cond(tts_text, prompt_text, ref_wav_16k, ref_wav_24k)?;
+        let speech_token = self.generate_speech_token(&cond, source_seed, None)?;
+
+        // CFM noise z: a SEEDED standard-normal init (torch.randn's distribution, not its
+        // byte stream), far more natural than the zeros fallback `synthesize` uses.
+        let total = 2 * (cond.prompt_token.dim(1)? + speech_token.dim(1)?);
+        let nz = MEL_NUM_MELS * total;
+        let mut rng = SplitMix64::new(source_seed ^ 0x5DEE_CE66_C0DE_F10D);
+        let zv: Vec<f32> = (0..nz).map(|_| rng.next_gauss() as f32).collect();
+        let z = Tensor::from_vec(zv, (1, MEL_NUM_MELS, total), &self.dev)?;
+
+        let mel = self.flow_forward(&cond, &speech_token, &z, N_TIMESTEPS)?; // [1,80,2*Tg]
+        let source = self.quality_source(&mel, source_seed)?; // [1,1,L]
+        let audio = self.vocode(&mel, &source)?; // [1, L]
+        Ok(audio.flatten_all()?.to_vec1::<f32>()?)
+    }
+
+    /// **Instruct / emotion** synthesis: speak `tts_text` in the reference voice while
+    /// following the natural-language `instruct_text` (e.g. "用开心的语气说", "speak in a
+    /// sad tone"), returning the 24 kHz waveform. This is CosyVoice3's `inference_instruct2`
+    /// on the **same** CV3 weights — not a separate model.
+    ///
+    /// It differs from [`Cv3Synthesizer::synthesize`] exactly as CV3's `frontend_instruct2`
+    /// does (`cosyvoice/cli/frontend.py:209`):
+    ///   1. the instruct text is fed in the **`prompt_text` role**, so the LM text prompt is
+    ///      `tok(instruct_text ++ <|endofprompt|>) ++ tok(tts_text)`; and
+    ///   2. the LM is driven with an **empty prompt speech-token prefix** (`frontend_instruct2`
+    ///      deletes `llm_prompt_speech_token`) — content + requested style come from text
+    ///      alone — assembled by [`Cv3Lm::build_lm_input_instruct`] (the CV3 structural
+    ///      instruct slot `[sos, instruct, text, task_id]`).
+    ///
+    /// The flow + vocoder run **identically** to `synthesize` (reference `prompt_token`,
+    /// `prompt_feat`, speaker embedding kept), so the cloned voice is preserved and only the
+    /// prosody/emotion follows the instruction. CV3 requires a trailing `<|endofprompt|>` on
+    /// the instruct text (asserted by `Qwen2LM.inference`); it is appended if absent (the
+    /// append is idempotent). The LM sampling seed is fixed (0) for reproducibility.
+    pub fn synthesize_instruct(
+        &mut self,
+        tts_text: &str,
+        instruct_text: &str,
+        ref_wav_16k: &[f32],
+        ref_wav_24k: &[f32],
+    ) -> Result<Vec<f32>, SynthError> {
+        // (1) instruct text takes the prompt_text role; append CV3's <|endofprompt|> marker
+        //     if the caller did not. `prompt_cond` then builds the ref prompt conditioning
+        //     and text_token = tok(instruct ++ <|endofprompt|>) ++ tok(tts).
+        let instruct = if instruct_text.contains(ENDOFPROMPT) {
+            std::borrow::Cow::Borrowed(instruct_text)
+        } else {
+            std::borrow::Cow::Owned(format!("{instruct_text}{ENDOFPROMPT}"))
+        };
+        let cond = self.prompt_cond(tts_text, instruct.as_ref(), ref_wav_16k, ref_wav_24k)?;
+
+        // (2) LM with an EMPTY prompt speech-token prefix via the structural instruct input.
+        //     text_token = instruct(prefix) ++ tts(suffix); split at prompt_text_len.
+        let instruct_ids = &cond.text_token[..cond.prompt_text_len];
+        let tts_ids = &cond.text_token[cond.prompt_text_len..];
+        let net = tts_ids.len();
+        let min_len = net * MIN_TOKEN_TEXT_RATIO;
+        let max_len = net * MAX_TOKEN_TEXT_RATIO;
+        let gen = self
+            .lm
+            .generate_instruct(instruct_ids, tts_ids, min_len, max_len, 0)?;
+        let ids: Vec<i64> = gen.iter().map(|&t| t as i64).collect();
+        let speech_token = ids_i64_to_tensor(&ids, &self.dev)?;
+
+        // flow + vocoder exactly as `synthesize` (ref prompt_token/feat/spk kept; det source).
+        let audio = self.token2wav(&cond, &speech_token, None)?; // [1, L]
+        Ok(audio.flatten_all()?.to_vec1::<f32>()?)
+    }
+}
+
+/// Minimal seeded **SplitMix64** PRNG — the quality source / CFM-noise randomness, so the
+/// random-phase source and seeded `z` are reproducible from a seed (never system RNG). A
+/// local copy (the `lm` crate's PRNG is private + has no Gaussian); keeps `crate::synth`
+/// byte-unchanged. Drives both the per-harmonic initial phases (uniform) and the additive
+/// Gaussian noise (Box–Muller).
+struct SplitMix64 {
+    state: u64,
+    /// Cached second Box–Muller normal (generated in pairs).
+    spare: Option<f64>,
+}
+
+impl SplitMix64 {
+    fn new(seed: u64) -> Self {
+        Self {
+            state: seed,
+            spare: None,
+        }
+    }
+
+    /// Next raw 64-bit value (the canonical SplitMix64 mix).
+    fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Uniform `f64` in `[0, 1)` (top 53 bits, the standard construction).
+    fn next_f64(&mut self) -> f64 {
+        (self.next_u64() >> 11) as f64 * (1.0 / (1u64 << 53) as f64)
+    }
+
+    /// Standard normal `N(0, 1)` via Box–Muller, generating two at a time and caching the
+    /// spare (matches `torch.randn`'s distribution, not its byte stream).
+    fn next_gauss(&mut self) -> f64 {
+        if let Some(v) = self.spare.take() {
+            return v;
+        }
+        // Guard u1 away from 0 so ln is finite.
+        let u1 = self.next_f64().max(f64::MIN_POSITIVE);
+        let u2 = self.next_f64();
+        let r = (-2.0 * u1.ln()).sqrt();
+        let theta = 2.0 * std::f64::consts::PI * u2;
+        self.spare = Some(r * theta.sin());
+        r * theta.cos()
     }
 }
 

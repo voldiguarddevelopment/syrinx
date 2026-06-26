@@ -85,6 +85,70 @@ impl Cv3Lm {
         Tensor::cat(&refs, 1)
     }
 
+    /// Assemble the **instruct** step-0 LM input, mirroring CosyVoice3's structural
+    /// instruct slot in `CosyVoice3LM`/`Qwen2LM.prepare_lm_input_target`
+    /// (`cosyvoice/llm/llm.py:343`): the unistream training form places the instruct
+    /// tokens *between* `sos` and the synthesis text —
+    /// `cat[ sos_emb, embed_tokens(instruct_token), embed_tokens(text_token), task_id_emb ]`
+    /// → `[1, T0, 896]`. As in CV2's `inference_instruct2`, the LM is driven with an
+    /// **empty prompt speech-token prefix** (the reference speech tokens are dropped on
+    /// the LM side — `frontend_instruct2` deletes `llm_prompt_speech_token`), so there is
+    /// no trailing speech segment here.
+    ///
+    /// Note the equivalence to the runtime path: CosyVoice3's `CosyVoice3Model.tts` calls
+    /// the *inherited* `Qwen2LM.inference` (it does **not** pass `instruct_token`), which
+    /// builds `cat[sos, embed_tokens(prompt_text ++ tts_text), task_id, prompt_speech_emb]`
+    /// with the instruct text in the `prompt_text` role. Because `embed_tokens` is a
+    /// per-token lookup, `embed(instruct) ++ embed(text)` equals `embed(instruct ++ text)`,
+    /// so this structural assembly is **byte-identical** to the runtime construction when
+    /// the prompt-speech prefix is empty. `instruct_token` must carry the trailing
+    /// `<|endofprompt|>` id (151646) that CV3 asserts on the instruct/prompt text.
+    ///
+    /// Additive — [`Cv3Lm::build_lm_input`] is left byte-unchanged.
+    pub fn build_lm_input_instruct(
+        &self,
+        instruct_token: &[u32],
+        text_token: &[u32],
+    ) -> Result<Tensor> {
+        let sos = self.body.speech_embed(&[SOS])?; // [1,1,H]  speech_embedding[sos]
+        let task = self.body.speech_embed(&[TASK_ID])?; // [1,1,H]  speech_embedding[task_id]
+        let instruct = self.body.text_embed(instruct_token)?; // [1,Ti,H]
+        let text = self.body.text_embed(text_token)?; // [1,Tt,H]
+        Tensor::cat(&[&sos, &instruct, &text, &task], 1)
+    }
+
+    /// Autoregressively generate CV3 speech tokens for the **instruct / emotion** path:
+    /// the [`Cv3Lm::generate`] AR loop seeded by [`Cv3Lm::build_lm_input_instruct`]
+    /// (empty prompt-speech prefix) instead of [`Cv3Lm::build_lm_input`]. Same KV-cached
+    /// `ras_sampling` decode + 200-control-id stop set + `min_len` EOS mask. Additive —
+    /// [`Cv3Lm::generate`] is byte-unchanged.
+    pub fn generate_instruct(
+        &self,
+        instruct_token: &[u32],
+        text_token: &[u32],
+        min_len: usize,
+        max_len: usize,
+        seed: u64,
+    ) -> Result<Vec<u32>> {
+        let lm_input0 = self.build_lm_input_instruct(instruct_token, text_token)?;
+        let mut cache = KvCache::new();
+        let mut rng = SplitMix64::new(seed);
+        let mut out: Vec<u32> = Vec::new();
+        let mut logits = self.step_logits_cached(&lm_input0, &mut cache)?;
+        for i in 0..max_len {
+            let logp = log_softmax_vec(&logits)?;
+            let ignore_eos = i < min_len;
+            let top = ras_sampling(&logp, &out, ignore_eos, &mut rng);
+            if top >= SPEECH_TOKEN_SIZE {
+                break;
+            }
+            out.push(top);
+            let row = self.body.speech_embed(&[top])?; // [1,1,H]
+            logits = self.step_logits_cached(&row, &mut cache)?;
+        }
+        Ok(out)
+    }
+
     /// Full (uncached) CV3 LM forward over a precomputed embedding sequence `[1, T, 896]`:
     /// the shared Qwen2 body (full causal attention) → bias-free `llm_decoder` →
     /// logits `[1, T, 6761]`. This is the teacher-forced / parity path — one forward over
