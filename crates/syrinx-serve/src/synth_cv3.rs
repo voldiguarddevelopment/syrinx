@@ -67,14 +67,21 @@ use crate::synth::{PromptCond, SynthError};
 const FBANK_MELS: usize = 80;
 const SR_16K: f32 = 16_000.0;
 
-/// matcha prompt-mel params (flow `prompt_feat`): 24 kHz (identical to CV2).
+/// matcha prompt-mel params (flow `prompt_feat`): 24 kHz. Same n_fft/hop/win/mels as CV2,
+/// but `fmax` differs — see [`MEL_FMAX`].
 const MEL_N_FFT: usize = 1920;
 const MEL_NUM_MELS: usize = 80;
 const MEL_SR: f32 = 24_000.0;
 const MEL_HOP: usize = 480;
 const MEL_WIN: usize = 1920;
 const MEL_FMIN: f32 = 0.0;
-const MEL_FMAX: f32 = 8000.0;
+/// CV3 mel `fmax`. CosyVoice3's `mel_spec_transform1` sets `fmax: null`, which matcha's
+/// `mel_spectrogram` forwards to `librosa_mel_fn` as `None` -> the Nyquist `sr/2 = 12000`.
+/// This DIFFERS from CosyVoice2 (which pins `fmax: 8000`, see [`crate::synth`]). Copying
+/// CV2's 8000 here reshapes all 80 triangular mel filters across a narrower band and
+/// systematically corrupts `prompt_feat` (a ~5.8 max-abs-diff vs the CV3 reference, near
+/// input-independent because it is a fixed filterbank error). CV3 must use 12000.
+const MEL_FMAX: f32 = 12_000.0;
 
 /// CFM Euler step count (CosyVoice `n_timesteps`).
 const N_TIMESTEPS: usize = 10;

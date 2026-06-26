@@ -84,6 +84,29 @@ fn ids_i64(t: &Tensor) -> Vec<i64> {
         .unwrap()
 }
 
+/// (min, max, mean) over all elements of a tensor — for diagnosing prompt_feat.
+fn stats(t: &Tensor) -> (f32, f32, f32) {
+    let v: Vec<f32> = t.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+    let min = v.iter().cloned().fold(f32::INFINITY, f32::min);
+    let max = v.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let mean = v.iter().sum::<f32>() / v.len().max(1) as f32;
+    (min, max, mean)
+}
+
+/// First 6 mel bins of frame `f` of a `[1, T, 80]` frame-major tensor.
+fn frame6(t: &Tensor, f: usize) -> Vec<f32> {
+    let nf = t.dim(1).unwrap();
+    let f = f.min(nf.saturating_sub(1));
+    let row: Vec<f32> = t
+        .narrow(1, f, 1)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap();
+    row[..row.len().min(6)].to_vec()
+}
+
 /// Representative zero-shot texts for the functional smoke. Bit-parity is not expected
 /// on the live path, so any text exercises the chain; the reference voice clip drives
 /// the clone. (The exact CV3 dump strings are not embedded in the ref — only their
@@ -191,10 +214,20 @@ fn real_cv3_e2e_frontend_chain_and_smoke() {
         ref_pf.dims()
     );
     let d_pf = max_abs_diff(&cond.prompt_feat, &ref_pf);
+    // Diagnostics (print BEFORE the assert so a failing run still shows the pattern —
+    // constant offset? scale? transpose? frame-shift? floored bins?).
+    let (cmin, cmax, cmean) = stats(&cond.prompt_feat);
+    let (rmin, rmax, rmean) = stats(&ref_pf);
     eprintln!(
         "prompt_feat max-abs-diff = {d_pf:.3e}  (shape {:?})",
         cond.prompt_feat.dims()
     );
+    eprintln!("prompt_feat computed min/max/mean = {cmin:.3}/{cmax:.3}/{cmean:.3}");
+    eprintln!("prompt_feat ref      min/max/mean = {rmin:.3}/{rmax:.3}/{rmean:.3}");
+    eprintln!("computed[0,0,:6]   = {:?}", frame6(&cond.prompt_feat, 0));
+    eprintln!("ref     [0,0,:6]   = {:?}", frame6(&ref_pf, 0));
+    eprintln!("computed[0,86,:6]  = {:?}", frame6(&cond.prompt_feat, 86));
+    eprintln!("ref     [0,86,:6]  = {:?}", frame6(&ref_pf, 86));
     assert!(d_pf < 1e-3, "CV3 prompt_feat diff {d_pf:.3e} exceeds 1e-3");
 
     // ---- (2) deterministic chain anchor: frontend -> flow -> mel ----
