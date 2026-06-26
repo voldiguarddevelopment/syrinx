@@ -86,8 +86,20 @@ pub fn evaluate(
     // SYRINX_QUALITY_SOURCE=1 evaluates the real random-phase NSF source
     // (`synthesize_quality`) instead of the deterministic zero-phase smoke source —
     // so MOS-proxy A/Bs the two sources. Unset = the default deterministic path.
+    // SYRINX_INSTRUCT=<instruction> evaluates the emotion/instruct path
+    // (`synthesize_instruct`, the instruction takes the prompt-text role) — so MOS/SIM-o
+    // A/B different emotions. Else SYRINX_QUALITY_SOURCE picks the random-phase source.
     let t0 = Instant::now();
-    let wav = if std::env::var("SYRINX_QUALITY_SOURCE").is_ok() {
+    let wav = if let Some(instruct) = std::env::var("SYRINX_INSTRUCT").ok().filter(|s| !s.is_empty()) {
+        eprintln!("real_eval_metrics: instruct = {instruct:?}");
+        synth.synthesize_instruct(
+            input.text,
+            &instruct,
+            input.ref_wav_16k,
+            input.ref_wav_24k,
+            &inputs,
+        )
+    } else if std::env::var("SYRINX_QUALITY_SOURCE").is_ok() {
         synth.synthesize_quality(
             input.text,
             input.prompt_text,
