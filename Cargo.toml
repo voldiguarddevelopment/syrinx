@@ -113,6 +113,10 @@ real = [
     "syrinx-frontend/real",
     "syrinx-serve/real",
 ]
+# Text-normalizer parity track: enables `syrinx-frontend/textnorm` for the root
+# `tests/real_textnorm_parity.rs` test. Lightweight (pure Rust, no model deps), so
+# the text-level parity check builds + runs fast without the `real` model stack.
+tn = ["dep:syrinx-frontend", "syrinx-frontend/tn"]
 # GPU (CUDA) speed path for the root harness/tests: `real` plus Candle's CUDA
 # backend on every sub-crate that runs Candle. Lets the optional GPU smoke test
 # (`tests/real_gpu_synth.rs`, gated `#![cfg(feature="real")]`) and any root binary

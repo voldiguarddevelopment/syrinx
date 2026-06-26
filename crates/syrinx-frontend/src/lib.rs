@@ -14,6 +14,12 @@ pub mod pacing;
 pub mod punct;
 pub mod ssml;
 
+// Faithful (common-case) wetext-style zh+en text normalizer — the pre-tokenization
+// normalization the real CosyVoice2 frontend runs (`frontend.text_normalize`).
+// Pure Rust; gated behind `tn` (implied by `real`) so the default build is unchanged.
+#[cfg(feature = "tn")]
+pub mod textnorm;
+
 // Real CosyVoice2 text tokenizer (Qwen2 BPE via the HF `tokenizers` crate).
 // Compiled only under the crate's `real` feature, on the model box, where the
 // serialized `tokenizer.json` and the parity fixtures are available.

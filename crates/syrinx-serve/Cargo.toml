@@ -22,6 +22,11 @@ real = [
     "syrinx-acoustic/real",
     "syrinx-vocoder/real",
 ]
+# Text normalization in the real synth path: when enabled alongside `real`, the
+# synthesizer normalizes `tts_text`/`prompt_text` (wetext-style zh+en) before
+# tokenizing. Opt-in (NOT pulled by `real`) so the raw-text parity tests, which run
+# with `--features real` only, see the un-normalized text path unchanged.
+tn = ["syrinx-frontend?/tn"]
 # GPU (CUDA) speed path: the whole synthesizer on GPU via Candle's CUDA backend.
 # Enables `cuda` on each Candle sub-crate + `candle-core/cuda` so `pick_device`
 # can open `cuda:i` and `Synthesizer::load_on_device` runs the pipeline on GPU.

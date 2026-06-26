@@ -266,6 +266,13 @@ impl Synthesizer {
         ref_wav_24k: &[f32],
     ) -> Result<PromptCond, SynthError> {
         // --- text tokens: prompt_text ++ tts_text (CosyVoice2 concatenates them). ---
+        // Text-normalization hook (additive, `tn` feature): match CosyVoice2's
+        // `frontend.text_normalize` (wetext zh+en) before tokenizing. Off by default
+        // so the raw-text parity tests (run with `--features real` only) are unchanged.
+        let prompt_text = tn_normalize(prompt_text);
+        let prompt_text = prompt_text.as_ref();
+        let tts_text = tn_normalize(tts_text);
+        let tts_text = tts_text.as_ref();
         let prompt_text_ids = self.tokenizer.encode(prompt_text)?;
         let tts_text_ids = self.tokenizer.encode(tts_text)?;
         let prompt_text_len = prompt_text_ids.len();
@@ -873,6 +880,25 @@ fn time_scale_mel_tensor(
     let scaled = syrinx_prosody::render::time_scale_mel(&grid, rate)
         .map_err(|e| SynthError::Candle(format!("mel time-scale failed: {e:?}")))?;
     grid_to_mel_tensor(&scaled, dev)
+}
+
+// ---- text-normalization hook (additive) --------------------------------------
+//
+// Mirrors CosyVoice2's `frontend.text_normalize` (wetext zh+en). Gated on the
+// crate `tn` feature so it is fully opt-in: with `tn` off (e.g. the raw-text
+// parity tests, which run `--features real` only) `tn_normalize` is the identity,
+// leaving the un-normalized text path byte-for-byte unchanged.
+
+/// Normalize text before tokenizing when the `tn` feature is enabled.
+#[cfg(feature = "tn")]
+fn tn_normalize(s: &str) -> std::borrow::Cow<'_, str> {
+    std::borrow::Cow::Owned(syrinx_frontend::textnorm::normalize_text(s))
+}
+
+/// Identity passthrough when `tn` is disabled (raw text, as before).
+#[cfg(not(feature = "tn"))]
+fn tn_normalize(s: &str) -> std::borrow::Cow<'_, str> {
+    std::borrow::Cow::Borrowed(s)
 }
 
 // ---- free helpers ------------------------------------------------------------

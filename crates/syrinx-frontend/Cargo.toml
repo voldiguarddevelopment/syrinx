@@ -10,7 +10,13 @@ publish = false
 # Python reference. The text tokenizer pulls the Hugging Face `tokenizers` crate;
 # the audio feature extractor (kaldi fbank + prompt mel) pulls `rustfft`; the
 # prompt speech-token tokenizer pulls `ndarray` + `ort` (ONNX Runtime).
-real = ["dep:tokenizers", "dep:rustfft", "dep:ndarray", "dep:ort"]
+real = ["dep:tokenizers", "dep:rustfft", "dep:ndarray", "dep:ort", "tn"]
+
+# Faithful (common-case) wetext-style text normalizer (`textnorm`), the zh+en
+# pre-tokenization normalization the CosyVoice2 frontend runs. Pure Rust, no extra
+# deps; off by default so the toy/CI build is unchanged. `real` implies it so the
+# on-box synth path can normalize before tokenizing.
+tn = []
 
 [dependencies]
 unicode-normalization = "0.1"
