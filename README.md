@@ -230,7 +230,8 @@ the harness will not mark a task done on belief.
 - [x] **Sample-faithful streaming** — CV2's chunked-causal attention mask (same weights) makes the streamed mel frames **bit-stable** (`real_flow_stream_consistency`: 0.0 diff vs 0.53 for the old non-causal path), and the **streamed audio is intelligible — Whisper CER 0.0**, identical to batch. (Streamed audio is *not* sample-identical to the batch — CV2's streaming cross-fades by design; details in [`STREAMING.md`](crates/syrinx-acoustic/docs/STREAMING.md).) Sub-200 ms TTFB remains a design target (CPU TTFB is LM-bound).
 - [ ] **Emotion / paralinguistic control** — needs the CosyVoice2 **instruct checkpoint** (not in the base 0.5B); research-tracked.
 - [ ] **Cross-lingual eval set** — the SIM-o/WER/MOS harness already handles it; just needs a multilingual frozen eval set + a sweep (the Whisper helper is language-aware).
-- [ ] **Smaller footprint** — quantize the embedding tables + the flow to approach a ~270 MB target.
+- [~] **Smaller footprint** — int4 LM linears + **int8 embeddings** + **int4 flow** now land **LM+flow at 957 MB** (from 2878 fp32, ~3×). To approach the ~270 MB target still needs int4 (not int8) embeddings, plus quantizing the f32 "dense" remainder + the HiFT/speaker.
+- [~] **Perceptual-quality source** — `synthesize_quality` uses the real random-phase NSF SineGen (8 overtones + uv mask + Gaussian breath + the learned source merge) instead of the deterministic zero-phase smoke source; measured UTMOS **2.03 → 2.21**. A modest lift — the capped-gen mel + zeroed CFM noise are now the bigger quality limiters.
 - [ ] **Consolidation** — retire the orphaned deterministic spec-engine modules (frontend normalize/G2P/SSML, toy prosody) now superseded by the real pipeline.
 
 The "deterministic spec engine" rows above were Ratchet's GPU-less, parity-gated **proxy**; the real

@@ -83,16 +83,29 @@ pub fn evaluate(
     };
 
     // --- RTF: full synthesis wall-time vs the rendered audio duration. ---
+    // SYRINX_QUALITY_SOURCE=1 evaluates the real random-phase NSF source
+    // (`synthesize_quality`) instead of the deterministic zero-phase smoke source —
+    // so MOS-proxy A/Bs the two sources. Unset = the default deterministic path.
     let t0 = Instant::now();
-    let wav = synth
-        .synthesize(
+    let wav = if std::env::var("SYRINX_QUALITY_SOURCE").is_ok() {
+        synth.synthesize_quality(
+            input.text,
+            input.prompt_text,
+            input.ref_wav_16k,
+            input.ref_wav_24k,
+            &inputs,
+            0,
+        )
+    } else {
+        synth.synthesize(
             input.text,
             input.prompt_text,
             input.ref_wav_16k,
             input.ref_wav_24k,
             &inputs,
         )
-        .map_err(|e| e.to_string())?;
+    }
+    .map_err(|e| e.to_string())?;
     let synth_secs = t0.elapsed().as_secs_f64();
     let audio_secs = wav.len() as f64 / SR_24K as f64;
     let rtf = (audio_secs > 0.0).then(|| synth_secs / audio_secs);
