@@ -44,11 +44,13 @@ const TOKEN_MEL_RATIO: usize = 2;
 
 #[test]
 fn cv3_streaming_flow_finalized_frames_are_stable() {
-    let (weights, reference) = match (env("SYRINX_CV3_FLOW_WEIGHTS"), env("SYRINX_CV3_E2E_REF")) {
+    // Uses the FLOW fixture (it carries the CFM noise `z`, which the e2e fixture omits)
+    // — `z` is required to drive the streaming flow deterministically.
+    let (weights, reference) = match (env("SYRINX_CV3_FLOW_WEIGHTS"), env("SYRINX_CV3_FLOW_REF")) {
         (Some(w), Some(r)) => (w, r),
         _ => {
             eprintln!(
-                "SKIP real_cv3_flow_stream_consistency: set SYRINX_CV3_FLOW_WEIGHTS + SYRINX_CV3_E2E_REF"
+                "SKIP real_cv3_flow_stream_consistency: set SYRINX_CV3_FLOW_WEIGHTS + SYRINX_CV3_FLOW_REF"
             );
             return;
         }

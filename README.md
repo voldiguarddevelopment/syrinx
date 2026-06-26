@@ -181,7 +181,11 @@ speaker as-is, the Qwen2 LM body, the CFM Euler/CFG solver, the matcha mel + `or
   marker is required for all CV3 inference.
 - **Feature-complete:** CLI (`synth/serve --cv3`) · HTTP server (`Cv3RealSynth`) · 5-metric eval
   (`evaluate_cv3`) · emotion/instruct (`synthesize_instruct`) · real-SineGen quality source ·
-  RL-LM variant (`llm.rl`) · int4 footprint (~488 MB).
+  RL-LM variant (`llm.rl`) · int4 footprint (~488 MB) · **chunked-causal streaming**
+  (`synthesize_streaming`, the DiT chunk-mask — finalized frames bit-stable, 0.0 vs 2.28 non-causal).
+- **Measured extras:** the **RL LM is the quality winner** (SIM-o 0.845 / MOS 3.03 with the quality
+  source) · **cross-lingual** zh-voice → English carries (SIM-o 0.76, MOS 4.28) · int4 is honestly a
+  **size-only, lossy + slow** tradeoff (SIM-o 0.47, RTF 243) — opt-in, not the default.
 
 > The hard win was the live decode: a repetition-aware-sampling fallback that masked the repeated
 > token (which the reference doesn't) collapsed generation; a pin-reference-token diagnostic proved
