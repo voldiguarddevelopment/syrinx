@@ -204,16 +204,28 @@ pub fn evaluate_cv3(
 
     // --- RTF + TTFB: one batch synthesis. Wall-time drives RTF; for the non-streaming
     //     CV3 API the whole clip is the "first chunk", so TTFB = the same wall-time. ---
+    // SYRINX_CV3_QUALITY=1 uses the real random-phase NSF SineGen source + full
+    // generation (`synthesize_quality`) instead of the deterministic single-harmonic
+    // placeholder + cap — the fair quality A/B.
     let t0 = Instant::now();
-    let wav = synth
-        .synthesize(
+    let wav = if std::env::var("SYRINX_CV3_QUALITY").is_ok() {
+        synth.synthesize_quality(
+            input.text,
+            input.prompt_text,
+            input.ref_wav_16k,
+            input.ref_wav_24k,
+            0,
+        )
+    } else {
+        synth.synthesize(
             input.text,
             input.prompt_text,
             input.ref_wav_16k,
             input.ref_wav_24k,
             &inputs,
         )
-        .map_err(|e| e.to_string())?;
+    }
+    .map_err(|e| e.to_string())?;
     let synth_secs = t0.elapsed().as_secs_f64();
     let audio_secs = wav.len() as f64 / SR_24K as f64;
     let rtf = (audio_secs > 0.0).then(|| synth_secs / audio_secs);
