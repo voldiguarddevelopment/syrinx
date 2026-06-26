@@ -333,11 +333,14 @@ impl Cv3Flow {
 
     /// DiT self-attention (`AttnProcessor`). Heads=16, head_dim=64, scale=1/sqrt(64).
     ///
-    /// IMPORTANT — faithful to the reference: rotary is applied to the **full
-    /// `[B,N,1024]` projection BEFORE the head reshape**, with a 64-wide freqs table
-    /// (`rot_dim=64`). So only channels `[0:64]` are rotated (== head 0 after reshape);
-    /// channels `[64:1024]` pass through unrotated. (CV3's `AttnProcessor` rotates pre-
-    /// view, unlike standard F5-TTS which rotates post-view per head — see module note.)
+    /// IMPORTANT — faithful to the reference (empirically confirmed on box): rotary is
+    /// applied to the **full `[B,N,1024]` projection BEFORE the head reshape**, with a
+    /// 64-wide freqs table (`rot_dim=64`). So only channels `[0:64]` are rotated (== head
+    /// 0 after reshape); channels `[64:1024]` pass through unrotated. (CV3's
+    /// `AttnProcessor` rotates pre-view, unlike standard F5-TTS which rotates post-view
+    /// per head.) Instrumenting the real `apply_rotary_pos_emb` confirmed exactly
+    /// **64/1024 query channels change** (query ndim=3, rot_dim=64), and `use_xpos=False`
+    /// so the xpos scale is the identity 1.0.
     fn dit_attn(&self, x: &Tensor, rope_cos: &Tensor, rope_sin: &Tensor, p: &str) -> Result<Tensor> {
         let (b, n, _) = x.dims3()?;
         let q = self.linear(x, &format!("{p}.to_q.weight"), Some(&format!("{p}.to_q.bias")))?; // [B,N,1024]
