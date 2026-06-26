@@ -58,13 +58,24 @@ fn real_cv3_eval_metrics_are_measured() {
         }
     };
 
-    let mut synth = Cv3Synthesizer::load(&cfg).expect("load CV3 synthesizer");
+    // SYRINX_CV3_QUANT=1 loads the int4-quantized model (the footprint A/B). Text +
+    // prompt are overridable (SYRINX_CV3_TEXT / SYRINX_CV3_PROMPT_TEXT) for cross-lingual.
+    let mut synth = if env("SYRINX_CV3_QUANT").is_some() {
+        eprintln!("real_cv3_eval_metrics: int4-quantized load");
+        Cv3Synthesizer::load_quantized(&cfg)
+    } else {
+        Cv3Synthesizer::load(&cfg)
+    }
+    .expect("load CV3 synthesizer");
     let (r16, r24) = wavio::read_ref_wav(Path::new(&ref_wav)).expect("read reference WAV");
     let max_steps = env("SYRINX_SYNTH_MAXSTEPS").and_then(|s| s.parse::<usize>().ok());
 
+    let text = env("SYRINX_CV3_TEXT").unwrap_or_else(|| "收到好友从远方寄来的生日礼物。".to_string());
+    let prompt_text =
+        env("SYRINX_CV3_PROMPT_TEXT").unwrap_or_else(|| "希望你以后能够做的比我还好呦。".to_string());
     let input = EvalInput {
-        text: "收到好友从远方寄来的生日礼物。",
-        prompt_text: "希望你以后能够做的比我还好呦。",
+        text: &text,
+        prompt_text: &prompt_text,
         ref_wav_16k: &r16,
         ref_wav_24k: &r24,
     };
