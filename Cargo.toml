@@ -37,12 +37,9 @@ members = [
 [dev-dependencies]
 syrinx-eval = { path = "crates/syrinx-eval" }
 serde_json = "1"
-# T-01.01 frontend frozen tests drive the deterministic text normalizer through
-# the root `tests/`. `unicode-normalization` lets the C1 test assert `is_nfc`
-# directly. RED: `syrinx-frontend` exposes no `normalize` module yet, so the test
-# target fails to build; GREEN adds it.
+# The prosody-plan / render-plan frozen tests at the repo root drive
+# `syrinx-frontend` (kept modules) and `syrinx-prosody`.
 syrinx-frontend = { path = "crates/syrinx-frontend" }
-unicode-normalization = "0.1"
 # T-03.01 prosody-plan frozen tests drive the editable prosody-plan data model
 # (`syrinx-prosody::plan`) through the root `tests/`. RED: the crate exposes no
 # `plan` module yet, so the test target fails to build; GREEN adds it.
