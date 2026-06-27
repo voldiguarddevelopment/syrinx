@@ -57,7 +57,8 @@
 //! the one struct here): [`cond`] (frontend conditioning), [`generate`] (LM speech-token
 //! generation), [`token2wav`] (flow + vocoder glue + the seeded `z` builder), [`source`]
 //! (HiFT source builders + the quality path + the model-free `*_from_f0` seams),
-//! [`streaming`] (chunked-causal streaming) and [`instruct`] (instruct/emotion). The
+//! [`streaming`] (chunked-causal streaming), [`instruct`] (instruct/emotion) and
+//! [`tagged`] (inline `[happy] … [sad] …` multi-emotion synthesis). The
 //! struct, the input/config types, the shared constants/PRNG/helpers and the
 //! safetensors pin-ref loaders live in this `mod.rs`.
 
@@ -66,6 +67,7 @@ mod generate;
 mod instruct;
 mod source;
 mod streaming;
+mod tagged;
 mod token2wav;
 mod voice;
 

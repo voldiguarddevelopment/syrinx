@@ -34,6 +34,13 @@ pub mod voice;
 #[cfg(feature = "real")]
 pub mod wavio;
 
+// Inline EMOTION TAGGING for the CV3 instruct path: a `tag -> instruct` registry, the
+// `[tag]`/`(tag)` parser, and the equal-power segment cross-fade. Pure-Rust + model-free
+// (no Candle/`Tensor`), so — like `watermark` — it is NON-optional (no `real` gate) and
+// unit-testable at the repo root without the model. The `real` synth path consumes it via
+// `Cv3Synthesizer::synthesize_tagged`.
+pub mod emotion;
+
 // Spread-spectrum output watermark — an OPT-IN, post-edit-detectable mark applied via
 // `Synthesizer::synthesize_watermarked` (NOT the default `synthesize`/CLI/server path).
 // Pure-Rust, training-free, model-free — so it is
