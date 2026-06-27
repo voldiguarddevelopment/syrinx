@@ -17,6 +17,7 @@ real = [
     "dep:syrinx-serve",
     "dep:syrinx-prosody",
     "dep:serde_json",
+    "dep:candle-core",
     "syrinx-serve/real",
 ]
 # Text normalization: build the CLI with `tn` to normalize text (wetext-style zh+en)
@@ -37,3 +38,6 @@ syrinx-serve = { path = "../syrinx-serve", optional = true }
 syrinx-prosody = { path = "../syrinx-prosody", optional = true }
 # Parse a `--plan <FILE.json>` render plan.
 serde_json = { version = "1", optional = true }
+# The `Device` handed to `Cv3Synthesizer::load_with_lm` for the `--rl` checkpoint
+# path (mirrors the loaders' device threading); pulled only under `real`.
+candle-core = { version = "0.8", optional = true }

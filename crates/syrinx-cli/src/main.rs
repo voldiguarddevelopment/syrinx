@@ -76,6 +76,7 @@ syrinx synth — render text in a reference voice
     syrinx synth --text <TEXT> --prompt-text <TEXT> --ref-wav <WAV> --out <WAV>
                  [--pitch <SEMITONES>] [--rate <R>] [--plan <FILE.json>]
                  [--model-dir <DIR>] [--max-steps <N>] [--cuda] [--cv3]
+                 [--quality] [--instruct <TEXT>] [--rl <WEIGHTS>] [--quantized]
 
     --text <TEXT>          Text to speak.                              [required]
     --out <WAV>            Output 24 kHz mono 16-bit WAV.              [required]
@@ -84,6 +85,22 @@ syrinx synth — render text in a reference voice
     --plan <FILE.json>     Load a full RenderPlan (overrides --pitch/--rate).
     --cv3                  Use the CosyVoice3 synthesizer (SYRINX_CV3_* files);
                            prosody plan/pitch/rate are CV2-only and are ignored.
+
+  CV3-only feature flags (require --cv3):
+    --quality              Render with the real random-phase NSF SineGen source
+                           (perceptual-quality path) instead of the deterministic
+                           single-harmonic smoke source. Mutually exclusive with
+                           --instruct.
+    --instruct <TEXT>      Emotion / instruct control: <TEXT> (e.g. \"speak in a
+                           sad tone\") takes the LM prompt-text role and the prompt
+                           speech tokens are dropped; the cloned voice is kept.
+                           Replaces --prompt-text's role for the LM. Mutually
+                           exclusive with --quality.
+    --rl <WEIGHTS>         Load the RL post-trained LM checkpoint (llm.rl_fp32
+                           .safetensors) in place of the base llm_fp32 weights.
+    --quantized            Load every CV3 sub-model int4-quantized (the ~488 MB
+                           opt-in size footprint). NOTE: dequant-on-fetch is SLOW
+                           and lossy — opt-in for size, not the default.
 ";
 
     const SERVE_USAGE: &str = "\
@@ -121,6 +138,11 @@ syrinx stream — chunk-streaming synthesis to a WAV
         port: Option<u16>,
         hop: Option<usize>,
         cv3: bool,
+        // --- CV3 feature front doors (`synth --cv3` only) ---
+        quality: bool,
+        instruct: Option<String>,
+        rl: Option<PathBuf>,
+        quantized: bool,
     }
 
     pub fn run() -> i32 {
@@ -203,6 +225,10 @@ syrinx stream — chunk-streaming synthesis to a WAV
                 }
                 "--cuda" => o.cuda = true,
                 "--cv3" => o.cv3 = true,
+                "--quality" => o.quality = true,
+                "--instruct" => o.instruct = Some(need(&mut argv, "--instruct")?),
+                "--rl" => o.rl = Some(PathBuf::from(need(&mut argv, "--rl")?)),
+                "--quantized" => o.quantized = true,
                 "-h" | "--help" => {
                     println!("{usage}");
                     std::process::exit(0);
@@ -301,6 +327,12 @@ syrinx stream — chunk-streaming synthesis to a WAV
 
     /// Load every CV3 sub-model. `--cuda` behaves exactly as in [`load_synth`]: it
     /// picks a GPU device on a `--features cuda` build, else transparently CPU.
+    ///
+    /// The loader is selected by the CV3 feature flags: `--rl <WEIGHTS>` swaps only the
+    /// LM weights for the RL post-trained checkpoint ([`Cv3Synthesizer::load_with_lm`]);
+    /// `--quantized` loads every sub-model int4-quantized
+    /// ([`Cv3Synthesizer::load_quantized_on_device`]); otherwise the fp32 loader. `--rl`
+    /// and `--quantized` are mutually exclusive (there is no quantized RL loader).
     fn load_cv3_synth(o: &Opts) -> Result<Cv3Synthesizer, String> {
         let cfg = build_cv3_config(&o.model_dir)?;
         if o.cuda {
@@ -309,10 +341,31 @@ syrinx stream — chunk-streaming synthesis to a WAV
                 "syrinx: --cuda requested but this binary was built without the `cuda` \
                  feature; running on CPU"
             );
-            let dev = syrinx_serve::synth::pick_device(None);
-            Cv3Synthesizer::load_on_device(&cfg, dev).map_err(|e| e.to_string())
+        }
+        // CPU is the parity device; `--cuda` picks a GPU on a `--features cuda` build
+        // (and `pick_device` itself falls back to CPU when no GPU is present).
+        let dev = if o.cuda {
+            syrinx_serve::synth::pick_device(None)
         } else {
-            Cv3Synthesizer::load(&cfg).map_err(|e| e.to_string())
+            candle_core::Device::Cpu
+        };
+        match (&o.rl, o.quantized) {
+            (Some(_), true) => Err(
+                "--rl and --quantized are mutually exclusive (no quantized RL loader)".to_string(),
+            ),
+            (Some(rl), false) => {
+                let rl = rl.to_string_lossy();
+                eprintln!("syrinx synth --cv3: loading RL post-trained LM from {rl}");
+                Cv3Synthesizer::load_with_lm(&cfg, &rl, dev).map_err(|e| e.to_string())
+            }
+            (None, true) => {
+                eprintln!(
+                    "syrinx synth --cv3: loading int4-quantized sub-models \
+                     (opt-in size path; dequant-on-fetch is slow + lossy)"
+                );
+                Cv3Synthesizer::load_quantized_on_device(&cfg, dev).map_err(|e| e.to_string())
+            }
+            (None, false) => Cv3Synthesizer::load_on_device(&cfg, dev).map_err(|e| e.to_string()),
         }
     }
 
@@ -350,23 +403,56 @@ syrinx stream — chunk-streaming synthesis to a WAV
     /// CV3 render path for `synth --cv3`: load the CV3 synthesizer and render
     /// `tts_text` in the reference voice to a 24 kHz WAV. The editable prosody plan
     /// (`--pitch/--rate/--plan`) is a CV2-only lever, so it is not applied here.
+    ///
+    /// The CV3 feature flags pick the synthesis path:
+    ///   * `--instruct <TEXT>` → [`Cv3Synthesizer::synthesize_instruct`] (the instruct
+    ///     text takes the prompt-text role; `--prompt-text` is not needed);
+    ///   * `--quality`         → [`Cv3Synthesizer::synthesize_quality`] (real SineGen
+    ///     source, seed 0);
+    ///   * otherwise the default buffered [`Cv3Synthesizer::synthesize`].
+    /// `--quality` and `--instruct` are mutually exclusive. The loader (`--rl` /
+    /// `--quantized`) is selected in [`load_cv3_synth`].
     fn cmd_synth_cv3(o: &Opts, text: &str, out: &std::path::Path) -> Result<(), String> {
-        let (prompt_text, r16, r24) = read_voice(o)?;
+        if o.quality && o.instruct.is_some() {
+            return Err("--quality and --instruct are mutually exclusive".to_string());
+        }
         if o.plan.is_some() || o.pitch.is_some() || o.rate.is_some() {
             eprintln!(
                 "syrinx synth --cv3: prosody plan/pitch/rate are CV2-only and are ignored \
                  on the CV3 path"
             );
         }
+        // The reference clip (16 kHz + 24 kHz) is always needed for the cloned voice.
+        let ref_wav = o.ref_wav.as_ref().ok_or("missing required --ref-wav")?;
+        let (r16, r24) = wavio::read_ref_wav(ref_wav).map_err(|e| e.to_string())?;
         let mut synth = load_cv3_synth(o)?;
-        let inputs = Cv3SynthInputs {
-            lm_seed: 0,
-            max_gen_steps: o.max_steps,
-            ..Default::default()
+        let wav = if let Some(instruct) = &o.instruct {
+            // Emotion / instruct: the instruct text replaces the prompt transcript in the
+            // LM role; the prompt speech tokens are dropped. `--prompt-text` is ignored.
+            eprintln!("syrinx synth --cv3: instruct = {instruct:?}");
+            synth
+                .synthesize_instruct(text, instruct, &r16, &r24)
+                .map_err(|e| e.to_string())?
+        } else {
+            let prompt_text = o
+                .prompt_text
+                .clone()
+                .ok_or("missing required --prompt-text")?;
+            if o.quality {
+                synth
+                    .synthesize_quality(text, &prompt_text, &r16, &r24, 0)
+                    .map_err(|e| e.to_string())?
+            } else {
+                let inputs = Cv3SynthInputs {
+                    lm_seed: 0,
+                    max_gen_steps: o.max_steps,
+                    ..Default::default()
+                };
+                synth
+                    .synthesize(text, &prompt_text, &r16, &r24, &inputs)
+                    .map_err(|e| e.to_string())?
+            }
         };
-        let wav = synth
-            .synthesize(text, &prompt_text, &r16, &r24, &inputs)
-            .map_err(|e| e.to_string())?;
         wavio::write_wav_24k(out, &wav).map_err(|e| e.to_string())?;
         eprintln!(
             "syrinx: wrote {} ({} samples, 24 kHz mono, CV3)",
@@ -376,12 +462,27 @@ syrinx stream — chunk-streaming synthesis to a WAV
         Ok(())
     }
 
+    /// Reject the CV3-only feature flags (`--quality` / `--instruct` / `--rl` /
+    /// `--quantized`) on any path other than `synth --cv3`, so they are never silently
+    /// ignored on a CV2 / serve / stream command.
+    fn reject_cv3_feature_flags(o: &Opts) -> Result<(), String> {
+        if o.quality || o.instruct.is_some() || o.rl.is_some() || o.quantized {
+            return Err(
+                "--quality/--instruct/--rl/--quantized are CV3-only and valid only on \
+                 `synth --cv3`"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
     fn cmd_synth(o: Opts) -> Result<(), String> {
         let text = o.text.clone().ok_or("missing required --text")?;
         let out = o.out.clone().ok_or("missing required --out")?;
         if o.cv3 {
             return cmd_synth_cv3(&o, &text, &out);
         }
+        reject_cv3_feature_flags(&o)?;
         let (prompt_text, r16, r24) = read_voice(&o)?;
         let plan = build_plan(&o)?;
         let mut synth = load_synth(&o)?;
@@ -407,6 +508,7 @@ syrinx stream — chunk-streaming synthesis to a WAV
     }
 
     fn cmd_stream(o: Opts) -> Result<(), String> {
+        reject_cv3_feature_flags(&o)?;
         if o.cv3 {
             return Err(
                 "the CV3 synthesizer has no chunk-streaming path; use `synth --cv3` \
@@ -444,6 +546,7 @@ syrinx stream — chunk-streaming synthesis to a WAV
     }
 
     fn cmd_serve(o: Opts) -> Result<(), String> {
+        reject_cv3_feature_flags(&o)?;
         let (prompt_text, r16, r24) = read_voice(&o)?;
         let port = o.port.unwrap_or(8080);
         let addr: SocketAddr = ([127, 0, 0, 1], port).into();
