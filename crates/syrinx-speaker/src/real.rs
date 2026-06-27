@@ -510,8 +510,10 @@ fn stats_pool(x: &Tensor) -> Result<Tensor> {
     let mean = x.mean_keepdim(D::Minus1)?; // [B,C,1]
     let centered = x.broadcast_sub(&mean)?;
     let popvar = centered.sqr()?.mean(D::Minus1)?; // [B,C]
-    // unbiased: popvar * T/(T-1)
-    let scale = t / (t - 1.0);
+    // unbiased: popvar * T/(T-1). For T==1 the unbiased correction is undefined
+    // (T-1==0 → +inf → 0*inf == NaN x-vector); a single frame has no variance, so scale
+    // to 0 → std 0. Byte-identical for any real (T>1) reference clip.
+    let scale = if t > 1.0 { t / (t - 1.0) } else { 0.0 };
     let var = (popvar * scale)?;
     // numerical guard: clamp tiny negatives from fp rounding before sqrt
     let var = var.relu()?;

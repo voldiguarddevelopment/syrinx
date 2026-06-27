@@ -917,7 +917,13 @@ fn ras_sampling(logp: &[f32], decoded: &[u32], ignore_eos: bool, rng: &mut Split
     const TAU_R: f32 = 0.1;
     let mut logp = logp.to_vec();
     if ignore_eos {
-        logp[SPEECH_TOKEN_SIZE as usize] = f32::NEG_INFINITY;
+        // Mask the FULL stop set (`STOP_TOKENS` = 6561..6564), not just the EOS id —
+        // otherwise a min_len-window draw of an adjacent control id (6562/6563) trips
+        // the stop early. This is the analogue of CV3's full-control-range min_len mask
+        // (`real_cv3::ras_sampling`); the previous EOS-only mask was a latent early-stop.
+        for s in logp[SPEECH_TOKEN_SIZE as usize..SPEECH_VOCAB].iter_mut() {
+            *s = f32::NEG_INFINITY;
+        }
     }
     let top = nucleus_sampling(&logp, TOP_P, TOP_K, rng);
     let start = decoded.len().saturating_sub(WIN);

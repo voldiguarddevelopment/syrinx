@@ -371,15 +371,23 @@ fn hann_window_periodic(n: usize) -> Vec<f32> {
 /// `torch.nn.functional.pad(mode="reflect")` (the boundary sample is not repeated).
 fn reflect_pad(x: &[f32], pad: usize) -> Vec<f32> {
     let n = x.len();
+    // Degenerate empty input: nothing to reflect — return zeros (callers of `prompt_mel`
+    // never pass empty in practice, but this keeps the helper panic-free).
+    if n == 0 {
+        return vec![0.0; 2 * pad];
+    }
     let mut out = Vec::with_capacity(n + 2 * pad);
-    // left: x[pad], x[pad-1], ..., x[1]
+    // left: x[pad], x[pad-1], ..., x[1]. Indices are clamped to [0, n-1] so a reference
+    // clip shorter than `pad` (a degenerate ~tens-of-ms input) reflects what it can
+    // instead of indexing out of bounds. For any valid signal (n > pad) the clamp never
+    // triggers, so the output is byte-identical to the exact reflect.
     for k in 0..pad {
-        out.push(x[pad - k]);
+        out.push(x[(pad - k).min(n - 1)]);
     }
     out.extend_from_slice(x);
-    // right: x[n-2], x[n-3], ..., x[n-1-pad]
+    // right: x[n-2], x[n-3], ..., x[n-1-pad] — same clamping (saturating to guard n < 2).
     for k in 0..pad {
-        out.push(x[n - 2 - k]);
+        out.push(x[n.saturating_sub(2).saturating_sub(k)]);
     }
     out
 }

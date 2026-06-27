@@ -616,6 +616,11 @@ fn istft(real: &Tensor, imag: &Tensor, dev: &Device) -> Result<Tensor> {
     let win_t = Tensor::from_vec(window.clone(), (N_FFT, 1), dev)?;
     let frames_win = frames_time.broadcast_mul(&win_t)?; // [16, T]
 
+    // Guard `frames == 0` — `frames - 1` would underflow `usize` into a giant allocation
+    // (the same guard as the CV2 istft; this twin was missed in the first pass).
+    if frames == 0 {
+        return Err(candle_core::Error::Msg("istft: zero-frame input (empty mel)".to_string()));
+    }
     let out_len = HOP * (frames - 1) + N_FFT;
     let frames_win = frames_win.to_vec2::<f32>()?; // [16][T]
     let mut ytmp = vec![0f64; out_len];

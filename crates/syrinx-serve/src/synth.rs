@@ -987,8 +987,8 @@ impl Synthesizer {
 }
 
 // ============================================================================
-// Output watermarking (additive — the README's "post-edit-detectable watermark
-// on every synthesized output").
+// Output watermarking (additive, OPT-IN — applied only via `synthesize_watermarked`,
+// never on the default `synthesize`/CLI/server path; see the README Ethics section).
 //
 // Kept in its own `impl` block so it does not overlap the core pipeline. The
 // watermark itself lives in the pure-Rust, model-free `crate::watermark` module

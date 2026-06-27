@@ -27,8 +27,9 @@ pub mod synth_cv3;
 #[cfg(feature = "real")]
 pub mod wavio;
 
-// Spread-spectrum output watermark (the README's "post-edit-detectable watermark
-// on every synthesized output"). Pure-Rust, training-free, model-free — so it is
+// Spread-spectrum output watermark — an OPT-IN, post-edit-detectable mark applied via
+// `Synthesizer::synthesize_watermarked` (NOT the default `synthesize`/CLI/server path).
+// Pure-Rust, training-free, model-free — so it is
 // NON-optional (no `real` gate): embed/detect work on any 24 kHz mono `f32` buffer
 // and are unit-testable at the repo root without the model. The `real` synth path
 // uses it via `Synthesizer::synthesize_watermarked`.

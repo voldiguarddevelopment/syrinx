@@ -281,28 +281,37 @@ pub fn evaluate_cv3(
     let audio_secs = wav.len() as f64 / SR_24K as f64;
     let rtf = (audio_secs > 0.0).then(|| synth_secs / audio_secs);
 
-    // --- TTFB: real time to the first STREAMED chunk via `synthesize_streaming` (the
-    //     chunk-causal DiT path), mirroring CV2's `evaluate`. `inputs` (incl. any
-    //     pinned ref tokens / z / seed / cap) is honoured exactly as in the batch path;
-    //     the first chunk lands after `chunk_size + pre_lookahead` tokens. ---
-    let t1 = Instant::now();
-    let mut ttfb_ms: Option<f64> = None;
-    synth
-        .synthesize_streaming(
-            input.text,
-            input.prompt_text,
-            input.ref_wav_16k,
-            input.ref_wav_24k,
-            &inputs,
-            25,
-            |_chunk| {
-                if ttfb_ms.is_none() {
-                    ttfb_ms = Some(t1.elapsed().as_secs_f64() * 1000.0);
-                }
-                Ok(())
-            },
-        )
-        .map_err(|e| e.to_string())?;
+    // --- TTFB. The default live-synth path measures a REAL first-chunk latency via
+    //     `synthesize_streaming` (the chunk-causal DiT), mirroring CV2's `evaluate`. The
+    //     instruct/quality/pin-ref modes have NO streaming variant, so their TTFB is the
+    //     batch wall-time — i.e. the SAME synthesis RTF/SIM-o describe, not a different one
+    //     (avoids reporting a default-path latency against an instruct/quality RTF). ---
+    let no_stream = pin_ref
+        || std::env::var("SYRINX_CV3_INSTRUCT").ok().is_some_and(|s| !s.is_empty())
+        || std::env::var("SYRINX_CV3_QUALITY").is_ok();
+    let ttfb_ms = if no_stream {
+        Some(synth_secs * 1000.0)
+    } else {
+        let t1 = Instant::now();
+        let mut ttfb: Option<f64> = None;
+        synth
+            .synthesize_streaming(
+                input.text,
+                input.prompt_text,
+                input.ref_wav_16k,
+                input.ref_wav_24k,
+                &inputs,
+                25,
+                |_chunk| {
+                    if ttfb.is_none() {
+                        ttfb = Some(t1.elapsed().as_secs_f64() * 1000.0);
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|e| e.to_string())?;
+        ttfb
+    };
 
     // --- SIM-o: speaker cosine between the reference and the CV3 output, both embedded
     //     through the same CAM++ `speaker_embedding` path CV2 uses. ---
