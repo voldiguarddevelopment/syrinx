@@ -156,9 +156,18 @@ cargo run -p syrinx-cli --features real -- \
     synth --fish <variant> --text "<text>" --ref <REF.wav> --out <DIR>/<id>.wav
 ```
 
-It writes `manifest.tsv` (id, scale, lang, placement, text → wav) and `counts.txt`
-(per-scale / per-language / per-placement summary) under `--out`
-(default `samples/out/<variant>`). Examples:
+It writes three files under `--out` (default `samples/out/<variant>`):
+
+- `manifest.tsv` — the **transcript record**: `id, scale, lang, placement, text` (the exact
+  tagged text sent to the model) → `wav` path, one row per synthesized entry.
+- `counts.txt` — per-scale / per-language / per-placement summary of what was matched.
+- `run-meta.txt` — the **box specs + provenance**: host (`uname`, OS), CPU/memory, GPU
+  (`nvidia-smi`: name, driver, VRAM, compute cap), toolchain (`rustc` / `cargo` / `nvcc`),
+  and the repo commit + corpus size. This pins every batch of audio to the exact model
+  build and hardware it was rendered on. It is written even on a dry run (documenting the
+  authoring host instead of the GPU box).
+
+Examples:
 
 ```sh
 # Every s2-pro entry (dry-run if --fish isn't wired in yet)
@@ -180,18 +189,27 @@ lands, the same invocation synthesizes for real (a `--ref` voice clip is then re
 ## Honest quality note
 
 This corpus tests **whether the model follows its learned tags**, not whether the text is
-hard to pronounce. A few caveats to keep expectations calibrated:
+hard to pronounce. The text is fixed and reproducible; the audio is not guaranteed.
+Keep these in mind when judging output:
 
-- **Expressiveness depends on the model.** The emotion/special tags only take effect to
+- **Expressiveness is the model's to give.** The emotion/special tags only take effect to
   the extent `s1-mini` / `s2-pro` actually learned them. A tag in the right place is a
   *request*; the rendered audio is the model's *response*, and it may under- or
   over-express, ignore a tag, or bleed an emotion past where it was switched. The varied
-  `placement` axis exists precisely to surface where that following is strong vs weak.
-- **Tag inventories differ by model**, so s1 and s2 entries are not 1:1 translations of
-  one another — they use each model's native syntax and vocabulary.
-- **`chapter` items test more than emotion.** At 120–300+ words they also stress
-  long-form coherence, prosodic stamina, and streaming/chunking behaviour; a clean short
-  sentence says little about how the same voice holds up across a full paragraph arc.
-- **Text is human-authored, idiomatic, native phrasing** (not machine-translated stubs),
-  but it has not been reviewed by a native-speaker panel; minor regional-register
-  variation is expected across the 13 languages.
+  `placement` axis exists precisely to surface where that following is strong vs weak — a
+  weak result is data about the model, not a defect in the entry.
+- **Always judge against the provenance.** Every run records the transcript (`manifest.tsv`)
+  and the box specs + toolchain + commit (`run-meta.txt`), so a given quality observation
+  is attributable to a specific model build on specific hardware. Compare across runs using
+  those files, not from memory — an emotion that lands on one driver/commit may not on
+  another.
+- **Tag inventories differ by model**, so s1 and s2 entries are not 1:1 translations of one
+  another — they use each model's native syntax and vocabulary, and should be compared
+  within a model, not across.
+- **`chapter` items test more than emotion.** At 120–300+ words they also stress long-form
+  coherence, prosodic stamina, and streaming/chunking behaviour; a clean short sentence
+  says little about how the same voice holds up across a full paragraph arc.
+- **Text is human-authored, idiomatic, native phrasing** (not machine-translated stubs).
+  It has not been through a native-speaker review panel, so minor regional-register
+  variation is expected across the 13 languages — treat it as a solid working corpus, not a
+  certified linguistic reference.

@@ -179,6 +179,53 @@ done < <(emit_rows)
   for k in $(printf '%s\n' "${!PL_COUNT[@]}" | sort); do printf '  %-12s %d\n' "$k" "${PL_COUNT[$k]}"; done
 } | tee "$COUNTS"
 
+# ---------------------------------------------------------------------------
+# run metadata — capture the BOX SPECS + toolchain so every batch of audio is
+# reproducible and attributable to the host it was synthesized on. Written even
+# on a dry run (where it documents the authoring host instead of the GPU box).
+# ---------------------------------------------------------------------------
+META="$OUT/run-meta.txt"
+have() { command -v "$1" >/dev/null 2>&1; }
+{
+  echo "# synth-samples run metadata"
+  echo "timestamp:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "variant:     $VARIANT (model $MODEL_FILTER + both)"
+  echo "mode:        $([[ $PENDING -eq 1 ]] && echo 'DRY RUN' || echo 'LIVE')"
+  echo "filters:     scale=${F_SCALE:-*} lang=${F_LANG:-*} placement=${F_PLACEMENT:-*} limit=${LIMIT:-0}"
+  echo "ref:         $REF_ARG"
+  echo "matched:     $total entries"
+  echo
+  echo "## host"
+  echo "hostname:    $(hostname 2>/dev/null || echo '?')"
+  echo "user:        ${USER:-?}"
+  echo "uname:       $(uname -a 2>/dev/null || echo '?')"
+  if [[ -r /etc/os-release ]]; then echo "os:          $(. /etc/os-release; echo "$PRETTY_NAME")"; fi
+  echo
+  echo "## cpu / memory"
+  if have lscpu; then lscpu | grep -E '^(Model name|Socket|Core|Thread|CPU\(s\))' | sed 's/^/  /'; fi
+  if have nproc; then echo "  nproc:     $(nproc)"; fi
+  if have free;  then echo "  mem:       $(free -h | awk '/^Mem:/{print $2" total, "$7" avail"}')"; fi
+  echo
+  echo "## gpu"
+  if have nvidia-smi; then
+    nvidia-smi --query-gpu=name,driver_version,memory.total,compute_cap \
+      --format=csv,noheader 2>/dev/null | sed 's/^/  /' || nvidia-smi 2>&1 | sed 's/^/  /'
+  else
+    echo "  (no nvidia-smi on this host)"
+  fi
+  echo
+  echo "## toolchain"
+  have rustc && echo "  rustc:     $(rustc --version)"
+  have cargo && echo "  cargo:     $(cargo --version)"
+  if have nvcc; then echo "  nvcc:      $(nvcc --version | tail -1)"; fi
+  echo
+  echo "## repo"
+  echo "  commit:    $(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo '?')"
+  echo "  branch:    $(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '?')"
+  echo "  corpus:    $JSONL ($(wc -l < "$JSONL" 2>/dev/null || echo '?') entries)"
+} > "$META"
+
 echo
-echo "manifest -> $MANIFEST"
-echo "counts   -> $COUNTS"
+echo "manifest  -> $MANIFEST"
+echo "counts    -> $COUNTS"
+echo "run-meta  -> $META   (host + gpu + toolchain specs)"
