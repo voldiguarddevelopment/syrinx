@@ -186,7 +186,8 @@ impl Cv3Synthesizer {
     }
 
     /// Load every CV3 sub-model from `cfg` in its **int4-quantized** variant onto the CPU —
-    /// the README ~270 MB size-goal capstone for the end-to-end CV3 pipeline.
+    /// the README 4-bit footprint capstone for the end-to-end CV3 pipeline (realized
+    /// ≈488 MB; the early ~270 MB budget under-counted the Qwen2-0.5B body).
     pub fn load_quantized(cfg: &Cv3SynthConfig) -> Result<Self, SynthError> {
         Self::load_quantized_on_device(cfg, Device::Cpu)
     }
@@ -491,18 +492,8 @@ impl Cv3Synthesizer {
     pub fn deterministic_source(&self, mel: &Tensor) -> Result<Tensor, SynthError> {
         let f0 = self.vocoder.f0_predict(mel)?; // [1, T]
         let f0v: Vec<f32> = f0.flatten_all()?.to_vec1::<f32>()?;
-        // Nearest-upsample f0 by 480, then a zero-phase instantaneous-phase ramp.
-        let n = f0v.len() * F0_UPSAMPLE;
-        let mut source: Vec<f32> = Vec::with_capacity(n);
-        let mut acc = 0.0f64;
-        let two_pi = 2.0 * std::f64::consts::PI;
-        for &v in &f0v {
-            let fhz = v as f64;
-            for _ in 0..F0_UPSAMPLE {
-                acc += fhz / MEL_SR as f64;
-                source.push((SINE_AMP * (two_pi * acc).sin()) as f32);
-            }
-        }
+        let source = det_source_from_f0(&f0v);
+        let n = source.len();
         Ok(Tensor::from_vec(source, (1, 1, n), &self.dev)?)
     }
 
@@ -541,37 +532,8 @@ impl Cv3Synthesizer {
                 merge_w.len()
             )));
         }
-
-        let n = f0v.len() * F0_UPSAMPLE; // source samples = mel frames * 480
-        let mut rng = SplitMix64::new(seed);
-
-        // Random initial phase per harmonic: φ_0 = 0 (fundamental), φ_i ∈ (-π, π].
-        let n_comp = NB_HARMONICS + 1;
-        let mut phi = vec![0f64; n_comp];
-        for p in phi.iter_mut().skip(1) {
-            *p = (rng.next_f64() * 2.0 - 1.0) * std::f64::consts::PI;
-        }
-
-        // Single-channel merged excitation, sample by sample.
-        let mut source: Vec<f32> = Vec::with_capacity(n);
-        let mut base_phase = 0.0f64; // θ(t) = 2π·cumsum(f0_up/sr), built incrementally
-        let two_pi = 2.0 * std::f64::consts::PI;
-        for s in 0..n {
-            let fhz = f0v[s / F0_UPSAMPLE] as f64; // nearest-upsample of f0 by 480
-            base_phase += two_pi * (fhz / MEL_SR as f64);
-            let uv = if fhz > NSF_VOICED_THRESHOLD { 1.0 } else { 0.0 };
-            let noise_amp = uv * NSF_NOISE_STD + (1.0 - uv) * SINE_AMP / 3.0;
-            // 9 harmonic components -> learned linear(9->1) + tanh merge.
-            let mut acc = merge_b as f64;
-            for (i, &w) in merge_w.iter().enumerate() {
-                let h = (i + 1) as f64; // harmonic multiplier (fundamental = 1)
-                let sine = SINE_AMP * (h * base_phase + phi[i]).sin();
-                let noise = noise_amp * rng.next_gauss();
-                let comp = sine * uv + noise; // SineGen: sine_waves * uv + noise
-                acc += w as f64 * comp;
-            }
-            source.push(acc.tanh() as f32);
-        }
+        let source = quality_source_from_f0(&f0v, &merge_w, merge_b, seed);
+        let n = source.len();
         Ok(Tensor::from_vec(source, (1, 1, n), &self.dev)?)
     }
 
@@ -993,6 +955,70 @@ impl SplitMix64 {
         self.spare = Some(r * theta.sin());
         r * theta.cos()
     }
+}
+
+// ---- HiFT source-excitation math (pure; the `*_source` methods call these) --------
+//
+// Extracted verbatim from `Cv3Synthesizer::deterministic_source` / `quality_source` so
+// the f0 → source math is testable **model-free** (the methods only add the `f0_predict`
+// + merge-weight fetch + tensor wrap around these). The computation is byte-unchanged.
+// `#[doc(hidden)] pub` is the test seam — not part of the documented surface.
+
+/// Deterministic, zero-phase, single-harmonic HiFT source from an f0 frame vector:
+/// nearest-upsample f0 by [`F0_UPSAMPLE`], then `sine_amp·sin(2π·cumsum(f0_up/sr))`.
+#[doc(hidden)]
+pub fn det_source_from_f0(f0v: &[f32]) -> Vec<f32> {
+    let n = f0v.len() * F0_UPSAMPLE;
+    let mut source: Vec<f32> = Vec::with_capacity(n);
+    let mut acc = 0.0f64;
+    let two_pi = 2.0 * std::f64::consts::PI;
+    for &v in f0v {
+        let fhz = v as f64;
+        for _ in 0..F0_UPSAMPLE {
+            acc += fhz / MEL_SR as f64;
+            source.push((SINE_AMP * (two_pi * acc).sin()) as f32);
+        }
+    }
+    source
+}
+
+/// Random-phase NSF (`SourceModuleHnNSF`) source from an f0 frame vector + the learned
+/// `m_source.l_linear` merge `(merge_w, merge_b)`: `merge_w.len()` harmonics with seeded
+/// random initial phase (φ_0 = 0), a voiced/unvoiced mask, additive Gaussian breath, and
+/// the learned `linear + tanh` merge. All randomness is the **seeded** [`SplitMix64`], so
+/// a `(f0v, merge, seed)` triple is bit-reproducible.
+#[doc(hidden)]
+pub fn quality_source_from_f0(f0v: &[f32], merge_w: &[f32], merge_b: f32, seed: u64) -> Vec<f32> {
+    let n = f0v.len() * F0_UPSAMPLE; // source samples = mel frames * 480
+    let mut rng = SplitMix64::new(seed);
+
+    // Random initial phase per harmonic: φ_0 = 0 (fundamental), φ_i ∈ (-π, π].
+    let mut phi = vec![0f64; merge_w.len()];
+    for p in phi.iter_mut().skip(1) {
+        *p = (rng.next_f64() * 2.0 - 1.0) * std::f64::consts::PI;
+    }
+
+    // Single-channel merged excitation, sample by sample.
+    let mut source: Vec<f32> = Vec::with_capacity(n);
+    let mut base_phase = 0.0f64; // θ(t) = 2π·cumsum(f0_up/sr), built incrementally
+    let two_pi = 2.0 * std::f64::consts::PI;
+    for s in 0..n {
+        let fhz = f0v[s / F0_UPSAMPLE] as f64; // nearest-upsample of f0 by 480
+        base_phase += two_pi * (fhz / MEL_SR as f64);
+        let uv = if fhz > NSF_VOICED_THRESHOLD { 1.0 } else { 0.0 };
+        let noise_amp = uv * NSF_NOISE_STD + (1.0 - uv) * SINE_AMP / 3.0;
+        // harmonic components -> learned linear(9->1) + tanh merge.
+        let mut acc = merge_b as f64;
+        for (i, &w) in merge_w.iter().enumerate() {
+            let h = (i + 1) as f64; // harmonic multiplier (fundamental = 1)
+            let sine = SINE_AMP * (h * base_phase + phi[i]).sin();
+            let noise = noise_amp * rng.next_gauss();
+            let comp = sine * uv + noise; // SineGen: sine_waves * uv + noise
+            acc += w as f64 * comp;
+        }
+        source.push(acc.tanh() as f32);
+    }
+    source
 }
 
 // ---- free helpers (local copies; `crate::synth` stays byte-unchanged) -------------
