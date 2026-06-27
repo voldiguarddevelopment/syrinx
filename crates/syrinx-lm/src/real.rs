@@ -69,8 +69,9 @@ pub enum EmbedScheme {
 
 /// The **default** embedding-table quantization for [`Qwen2Lm::load_quantized`].
 ///
-/// int4 is the default (the README ~270 MB size goal: it halves the int8 embed bulk —
-/// ~136 → ~68 MB for the 151936×896 token table). Flip this to [`EmbedScheme::Int8`] to
+/// int4 is the default (the README 4-bit footprint track — realized ≈388 MB CV2 / ≈488 MB
+/// CV3, the early ~270 MB budget under-counted the Qwen2-0.5B body: it halves the int8
+/// embed bulk — ~136 → ~68 MB for the 151936×896 token table). Flip this to [`EmbedScheme::Int8`] to
 /// trade size back for embedding fidelity; the on-box SIM-o eval measures the difference.
 pub const DEFAULT_EMBED_SCHEME: EmbedScheme = EmbedScheme::Int4;
 

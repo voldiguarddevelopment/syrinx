@@ -236,8 +236,9 @@ impl Synthesizer {
         Self::load_on_device_inner(cfg, dev, false)
     }
 
-    /// Load every sub-model in its **quantized** variant for the README ~270 MB size
-    /// goal: the LM via [`syrinx_lm::real::Qwen2Lm::load_quantized`] (int4 big linears +
+    /// Load every sub-model in its **quantized** variant for the README 4-bit footprint
+    /// track (realized ≈388 MB CV2; the early ~270 MB budget under-counted the Qwen2-0.5B
+    /// body): the LM via [`syrinx_lm::real::Qwen2Lm::load_quantized`] (int4 big linears +
     /// int4 dequant-on-gather embedding tables + dropped `lm_head`), the flow via
     /// [`Flow::load_quantized`] (Q4_0 `linear()` weights), the HiFT vocoder via
     /// `HiftVocoder::load_quantized` and the CAM++ speaker via `CamPlus::load_quantized`

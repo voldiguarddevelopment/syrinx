@@ -40,6 +40,10 @@ const TASK_ID: u32 = 6563;
 const SPEECH_TOKEN_SIZE: u32 = 6561;
 /// `llm_decoder` output width (`decoder_out`). The full speech+control logit vector.
 pub const DECODER_OUT: usize = 6761;
+/// `<|endofprompt|>` text-token id — the boundary marker CV3 asserts on the instruct /
+/// prompt text segment (`Qwen2LM.inference`). Used by [`Cv3Lm::build_lm_input_instruct`]
+/// as a direct-caller safety check.
+const ENDOFPROMPT_ID: u32 = 151646;
 
 /// The real CosyVoice3 LM: the shared Qwen2-0.5B body plus the CV3 embedding assembly and
 /// bias-free `llm_decoder` head.
@@ -159,6 +163,16 @@ impl Cv3Lm {
         instruct_token: &[u32],
         text_token: &[u32],
     ) -> Result<Tensor> {
+        // Direct-caller safety: CV3 requires the `<|endofprompt|>` marker on the instruct
+        // text (`Qwen2LM.inference` asserts it). The higher-level `synthesize_instruct`
+        // appends it before tokenizing; a direct caller that forgets it would silently
+        // build a malformed prompt — catch that here (debug builds; never affects release
+        // or the parity fixtures, which carry the marker).
+        debug_assert!(
+            instruct_token.contains(&ENDOFPROMPT_ID),
+            "build_lm_input_instruct: instruct_token must carry the <|endofprompt|> id \
+             ({ENDOFPROMPT_ID}) that CV3 asserts on the instruct/prompt text"
+        );
         let sos = self.body.speech_embed(&[SOS])?; // [1,1,H]  speech_embedding[sos]
         let task = self.body.speech_embed(&[TASK_ID])?; // [1,1,H]  speech_embedding[task_id]
         let instruct = self.body.text_embed(instruct_token)?; // [1,Ti,H]
