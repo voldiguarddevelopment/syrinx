@@ -167,6 +167,10 @@ pub fn log_mel_spectrogram(samples: &[f32]) -> Result<Array2<f32>, SpeechTokenEr
     // Reflect-pad N_FFT/2 each side (torch.stft center=True default).
     let pad = N_FFT / 2;
     let n = samples.len();
+    // Empty input would index `samples[0]` in the reflect-pad below — fail loudly instead.
+    if n == 0 {
+        return Err(SpeechTokenError::Empty);
+    }
     let mut padded = Vec::with_capacity(n + 2 * pad);
     // left reflect: samples[pad], samples[pad-1], ... (excludes the edge sample)
     for i in 0..pad {

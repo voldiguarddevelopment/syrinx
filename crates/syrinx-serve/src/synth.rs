@@ -1331,13 +1331,13 @@ fn time_scale_mel_tensor(
 
 /// Normalize text before tokenizing when the `tn` feature is enabled.
 #[cfg(feature = "tn")]
-fn tn_normalize(s: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn tn_normalize(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Owned(syrinx_frontend::textnorm::normalize_text(s))
 }
 
 /// Identity passthrough when `tn` is disabled (raw text, as before).
 #[cfg(not(feature = "tn"))]
-fn tn_normalize(s: &str) -> std::borrow::Cow<'_, str> {
+pub(crate) fn tn_normalize(s: &str) -> std::borrow::Cow<'_, str> {
     std::borrow::Cow::Borrowed(s)
 }
 

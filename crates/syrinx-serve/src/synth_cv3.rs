@@ -64,7 +64,7 @@ use syrinx_vocoder::real_cv3::Cv3Hift;
 
 // Reuse the CV2 synth's error + prompt-conditioning types so the two synthesizers
 // share one contract (additive; `crate::synth` is untouched).
-use crate::synth::{PromptCond, SynthError};
+use crate::synth::{tn_normalize, PromptCond, SynthError};
 
 /// kaldi fbank params (CAM++ input): 80 mel bins, 16 kHz.
 const FBANK_MELS: usize = 80;
@@ -263,12 +263,16 @@ impl Cv3Synthesizer {
         ref_wav_24k: &[f32],
     ) -> Result<PromptCond, SynthError> {
         // --- text tokens: prompt_text(+<|endofprompt|>) ++ tts_text. ---
-        // CV3 appends the endofprompt boundary marker to the prompt-text segment; the
-        // tokenizer recognises it as one atomic special id. Idempotent if already present.
+        // Text-normalization (`tn` feature, matching CV2 — identity when off). The tts
+        // text is always normalized; a plain prompt transcript is normalized then gets the
+        // endofprompt boundary marker; a pre-formatted instruct prompt (already carrying the
+        // marker) is left byte-untouched so tn can't mangle the marker/instruction.
+        let tts_text = tn_normalize(tts_text);
+        let tts_text = tts_text.as_ref();
         let prompt_text = if prompt_text.contains(ENDOFPROMPT) {
             std::borrow::Cow::Borrowed(prompt_text)
         } else {
-            std::borrow::Cow::Owned(format!("{prompt_text}{ENDOFPROMPT}"))
+            std::borrow::Cow::Owned(format!("{}{ENDOFPROMPT}", tn_normalize(prompt_text)))
         };
         let prompt_text_ids = self.tokenizer.encode(prompt_text.as_ref())?;
         let tts_text_ids = self.tokenizer.encode(tts_text)?;

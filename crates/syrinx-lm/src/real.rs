@@ -903,10 +903,12 @@ fn random_sampling(logp: &[f32], rng: &mut SplitMix64) -> u32 {
 }
 
 /// `ras_sampling` (Repetition-Aware Sampling): nucleus-sample a candidate; if it has
-/// repeated `>= win_size * tau_r` times in the last `win_size` decoded tokens, mask it
-/// and fall back to `random_sampling`. EOS (`speech_token_size`) is `-inf`-masked first
-/// when `ignore_eos`. Mirrors `cosyvoice.utils.common.ras_sampling` with the pinned
-/// `top_p=0.8, top_k=25, win_size=10, tau_r=0.1`.
+/// repeated `>= win_size * tau_r` times in the last `win_size` decoded tokens, fall back
+/// to `random_sampling` over the **plain full distribution** (the reference does NOT mask
+/// the repeated id — masking it forces an off-distribution token on every natural repeat,
+/// which collapses generation; this was a real bug, the same one fixed on the CV3 path).
+/// EOS (`speech_token_size`) is `-inf`-masked first when `ignore_eos`. Mirrors
+/// `cosyvoice.utils.common.ras_sampling` with the pinned `top_p=0.8, top_k=25, win_size=10, tau_r=0.1`.
 fn ras_sampling(logp: &[f32], decoded: &[u32], ignore_eos: bool, rng: &mut SplitMix64) -> u32 {
     const TOP_P: f32 = 0.8;
     const TOP_K: usize = 25;
@@ -920,7 +922,7 @@ fn ras_sampling(logp: &[f32], decoded: &[u32], ignore_eos: bool, rng: &mut Split
     let start = decoded.len().saturating_sub(WIN);
     let rep = decoded[start..].iter().filter(|&&t| t == top).count();
     if (rep as f32) >= WIN as f32 * TAU_R {
-        logp[top as usize] = f32::NEG_INFINITY;
+        // Resample from the full distribution — do NOT mask `top` (matches the reference).
         return random_sampling(&logp, rng);
     }
     top
