@@ -319,81 +319,16 @@ fn pcm16le_bytes(samples: &[f32]) -> Vec<u8> {
     out
 }
 
-/// A **multi-voice** synth: routes each request to one of several configured
-/// [`RealSynth`] reference voices by `req.voice`, falling back to the default voice
-/// when `req.voice` names no configured voice.
-///
-/// `router_with_synth(Arc::new(multi))` therefore serves several reference voices
-/// from one server. Each named voice is an independent [`RealSynth`] (its own loaded
-/// models + reference clip), so requests to different voices are independent and
-/// requests to the *same* voice serialize on that voice's lock (as for a single
-/// `RealSynth`). [`RealSynth`] itself (single voice) is unchanged.
-#[cfg(feature = "real")]
-pub struct MultiVoiceSynth {
-    voices: std::collections::HashMap<String, RealSynth>,
-    default_voice: String,
-}
-
-#[cfg(feature = "real")]
-impl MultiVoiceSynth {
-    /// Create a registry seeded with its **default** voice: requests whose `voice`
-    /// matches no registered name are served by this one. The default is registered
-    /// under `default_voice`, so a request naming it routes here too.
-    pub fn new(default_voice: impl Into<String>, default_synth: RealSynth) -> Self {
-        let default_voice = default_voice.into();
-        let mut voices = std::collections::HashMap::new();
-        voices.insert(default_voice.clone(), default_synth);
-        Self {
-            voices,
-            default_voice,
-        }
-    }
-
-    /// Register an additional named voice (builder style). A name already present
-    /// (including the default) is replaced.
-    pub fn with_voice(mut self, name: impl Into<String>, synth: RealSynth) -> Self {
-        self.voices.insert(name.into(), synth);
-        self
-    }
-
-    /// The number of distinct registered voices (including the default).
-    pub fn voice_count(&self) -> usize {
-        self.voices.len()
-    }
-
-    /// Resolve a request's `voice` to a configured [`RealSynth`], falling back to the
-    /// default voice when the name is unknown. The default is always present, so the
-    /// lookup cannot fail.
-    fn pick(&self, voice: &str) -> &RealSynth {
-        self.voices
-            .get(voice)
-            .unwrap_or_else(|| &self.voices[&self.default_voice])
-    }
-}
-
-#[cfg(feature = "real")]
-impl Synth for MultiVoiceSynth {
-    fn synthesize(&self, req: &SpeechRequest) -> Vec<u8> {
-        self.pick(&req.voice).synthesize(req)
-    }
-
-    fn synthesize_stream(
-        &self,
-        req: &SpeechRequest,
-    ) -> Option<Box<dyn Iterator<Item = Vec<u8>> + Send>> {
-        self.pick(&req.voice).synthesize_stream(req)
-    }
-}
-
 /// The **real CosyVoice3** synth: drives the CV3 [`Cv3Synthesizer`](crate::synth_cv3::Cv3Synthesizer)
 /// for every request and returns the 24 kHz audio encoded as WAV bytes — the CV3
 /// counterpart of [`RealSynth`], implementing the same [`Synth`] trait so it slots into
-/// the identical Axum routes (`router_with_synth` / `MultiVoiceSynth` route by `req.model`/
-/// `req.voice`; this is additive, the CV2 paths are untouched).
+/// the identical Axum route ([`router_with_synth`]; this is additive, the CV2 paths are
+/// untouched).
 ///
 /// Constructed **bound to one reference voice** (prompt transcript + its already-resampled
 /// 16 kHz/24 kHz waveforms), exactly like [`RealSynth`]. Each request synthesizes
-/// `req.input` in that voice; `req.model`/`req.voice` are advisory (single configured voice).
+/// `req.input` in that voice; `req.model`/`req.voice` are advisory and ignored (a single
+/// configured voice — there is no per-request routing).
 ///
 /// The CV3 synthesizer has **no native chunk-streaming path** (only the buffered
 /// `synthesize`), so [`Cv3RealSynth`] does not override

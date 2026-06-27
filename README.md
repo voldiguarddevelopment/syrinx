@@ -28,8 +28,9 @@ paralinguistics) with a non-autoregressive flow-matching acoustic decoder (for f
 high-fidelity waveform synthesis) — each paradigm used where it is strongest.
 
 The design goal is the rare combination of **clone quality + expressive range +
-low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a **~270&nbsp;MB
-4-bit footprint**.
+low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a compact
+**4-bit footprint** (realized int4: **≈388&nbsp;MB CV2 / ≈488&nbsp;MB CV3**; the early
+~270&nbsp;MB budget under-counted the Qwen2-0.5B body — see *Architecture*).
 
 > **Status — honest snapshot.** **Both the CosyVoice2-0.5B *and* CosyVoice3-0.5B models are
 > fully reimplemented in pure-Rust [Candle](https://github.com/huggingface/candle) and
@@ -63,8 +64,10 @@ low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a **~270&n
 - 🔬 **Parity-gated correctness.** Every numerical stage of the real model is checked
   against the PyTorch reference within tolerance — "done" means the frozen test passes,
   never an assertion.
-- 🔒 **Real, honest watermark.** A spread-spectrum watermark on every output, imperceptible
-  and detectable after light processing — *not* adversarially robust (see Ethics).
+- 🔒 **Real, honest watermark.** An **opt-in** spread-spectrum watermark
+  (`Synthesizer::synthesize_watermarked`, plus the model-free `watermark` embed/detect
+  module), imperceptible and detectable after light processing — *not* adversarially
+  robust (see Ethics).
 
 ---
 
@@ -273,11 +276,14 @@ See [`DESIGN.md`](DESIGN.md) for the full task-based plan.
 
 ## Ethics & consent
 
-Voice cloning is powerful and abusable. Syrinx can embed a **spread-spectrum watermark**
-in every synthesized output (`Synthesizer::synthesize_watermarked`): key-seeded,
-imperceptible (≈ −48 dBFS), and detectable after **light** processing — high-bitrate
-re-encoding, gain changes, light noise, and integer-sample crops. It is **not**
-adversarially robust: aggressive low-bitrate MP3/Opus, time-stretch/resample, or
+Voice cloning is powerful and abusable. Syrinx ships a **spread-spectrum watermark** as
+an **opt-in** capability — `Synthesizer::synthesize_watermarked(.., key, payload)` (CV2),
+backed by the model-free `syrinx-serve::watermark` embed/detect module that works on any
+24 kHz mono buffer (so it is unit-tested at the repo root without the model). It is
+**not** wired into the default CLI/server output path — callers opt in per render. The
+mark is key-seeded, imperceptible (≈ −48 dBFS), and detectable after **light** processing
+— high-bitrate re-encoding, gain changes, light noise, and integer-sample crops. It is
+**not** adversarially robust: aggressive low-bitrate MP3/Opus, time-stretch/resample, or
 deliberate removal defeat it — that needs a *learned*, perceptually-masked scheme
 (AudioSeal / WavMark), tracked as future work. See
 [`crates/syrinx-serve/docs/WATERMARK.md`](crates/syrinx-serve/docs/WATERMARK.md) for the
