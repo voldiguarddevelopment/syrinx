@@ -59,6 +59,10 @@ syrinx-serve = { path = "crates/syrinx-serve", optional = true }
 # Optional normal dep (in addition to the dev-dep above) so the root `real` feature
 # can toggle `syrinx-eval/real` for the measured-metrics test (`tests/real_eval_metrics.rs`).
 syrinx-eval = { path = "crates/syrinx-eval", optional = true }
+# Optional normal dep so the root `real` feature can toggle `syrinx-fish/real` for the
+# Fish Audio e2e + parity tests at the repo root (`tests/real_fish_*.rs`). Mirrors how
+# syrinx-serve / syrinx-eval are wired.
+syrinx-fish = { path = "crates/syrinx-fish", optional = true }
 candle-core = { version = "0.8", optional = true }
 
 [features]
@@ -81,6 +85,8 @@ real = [
     "syrinx-serve/real",
     "dep:syrinx-eval",
     "syrinx-eval/real",
+    "dep:syrinx-fish",
+    "syrinx-fish/real",
 ]
 # Text-normalizer parity track: enables `syrinx-frontend/textnorm` for the root
 # `tests/real_textnorm_parity.rs` test. Lightweight (pure Rust, no model deps), so
@@ -99,4 +105,5 @@ cuda = [
     "syrinx-acoustic/cuda",
     "syrinx-vocoder/cuda",
     "syrinx-serve/cuda",
+    "syrinx-fish/cuda",
 ]
