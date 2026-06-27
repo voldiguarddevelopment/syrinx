@@ -1,0 +1,41 @@
+[package]
+name = "syrinx-fish"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Pure-Rust / Candle port of Fish Audio's open TTS models (openaudio-s1-mini 0.5B
+# and s2-pro 5B). NON-COMMERCIAL: the upstream weights ship under Fish Audio's
+# CC-BY-NC-SA-style license; this crate is the inference math only and inherits
+# that restriction for any use of the published checkpoints (see lib.rs).
+
+[features]
+# The real Candle port is the primary surface and is ON BY DEFAULT, mirroring the
+# `syrinx-lm` convention (`default = ["real"]`, `real = ["dep:candle-core", ...]`).
+# The dual-AR driver, the RVQ-codec trait, the wav/resample helpers, and the s1/s2
+# backend bodies all live behind `real`; `config` + `sampling` are pure-Rust and
+# compile with `--no-default-features` too.
+default = ["real"]
+real = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:tokenizers",
+    "dep:safetensors",
+    "dep:hound",
+]
+# GPU (CUDA) speed path: the same `real` forward on Candle's CUDA backend. Output is
+# not bit-equal to the CPU reference — CUDA is for speed only. Mirrors syrinx-lm.
+cuda = ["real", "candle-core/cuda", "candle-nn/cuda"]
+
+[dependencies]
+# Always-on: the config schema + the seeded sampler are pure Rust (no Candle).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# `real`-gated model backend: the dual-AR transformers + RVQ codec on Candle, the
+# tiktoken/Qwen3 BPE tokenizers, sharded-safetensors loading, and 44.1 kHz wav I/O.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+safetensors = { version = "0.4", optional = true }
+hound = { version = "3", optional = true }

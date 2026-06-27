@@ -26,6 +26,7 @@ members = [
     "crates/syrinx-serve",
     "crates/syrinx-eval",
     "crates/syrinx-cli",
+    "crates/syrinx-fish",
 ]
 
 # Dev-deps for the integration tests under tests/. The real_* parity/eval tests
