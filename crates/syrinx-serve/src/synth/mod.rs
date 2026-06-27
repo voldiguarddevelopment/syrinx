@@ -51,6 +51,7 @@ mod prosody;
 mod source;
 mod streaming;
 mod token2wav;
+mod voice;
 mod watermark;
 
 use candle_core::{DType, Device, Tensor};

@@ -67,6 +67,7 @@ mod instruct;
 mod source;
 mod streaming;
 mod token2wav;
+mod voice;
 
 pub use source::{det_source_from_f0, quality_source_from_f0};
 pub use streaming::Cv3StreamStats;

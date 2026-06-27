@@ -22,6 +22,13 @@ pub mod synth;
 #[cfg(feature = "real")]
 pub mod synth_cv3;
 
+// Reusable voice bundles + a directory-backed voice library + embedding-space voice
+// manipulation (blend / interpolate / arithmetic / attributes) layered on the CV2/CV3
+// synthesizers. Additive: the existing `synthesize*`/`prompt_cond` paths are unchanged.
+// Candle-backed (`Tensor`), so it rides the same `real` gate as the synthesizers.
+#[cfg(feature = "real")]
+pub mod voice;
+
 // WAV read/resample/encode helpers for the `real` surfaces (shared with the CLI).
 // Candle-free in shape but `hound`-backed, so it rides the same `real` gate.
 #[cfg(feature = "real")]
