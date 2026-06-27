@@ -33,6 +33,7 @@ mod real {
     use std::path::PathBuf;
 
     use syrinx_prosody::render_plan::RenderPlan;
+    use syrinx_serve::emotion::{EmotionRegistry, InstructLang};
     use syrinx_serve::synth::{SynthConfig, SynthInputs, Synthesizer};
     use syrinx_serve::synth_cv3::{Cv3SynthConfig, Cv3SynthInputs, Cv3Synthesizer};
     use syrinx_serve::{wavio, Cv3RealSynth, RealSynth};
@@ -77,6 +78,7 @@ syrinx synth — render text in a reference voice
                  [--pitch <SEMITONES>] [--rate <R>] [--plan <FILE.json>]
                  [--model-dir <DIR>] [--max-steps <N>] [--cuda] [--cv3]
                  [--quality] [--instruct <TEXT>] [--rl <WEIGHTS>] [--quantized]
+                 [--emotion-tags] [--emotion-lang <zh|en>] [--list-emotions]
 
     --text <TEXT>          Text to speak.                              [required]
     --out <WAV>            Output 24 kHz mono 16-bit WAV.              [required]
@@ -101,6 +103,16 @@ syrinx synth — render text in a reference voice
     --quantized            Load every CV3 sub-model int4-quantized (the ~488 MB
                            opt-in size footprint). NOTE: dequant-on-fetch is SLOW
                            and lossy — opt-in for size, not the default.
+
+  Inline emotion tagging (require --cv3; mutually exclusive with --instruct):
+    --emotion-tags         Treat the text as inline-tagged: each `[tag] …` span is
+                           spoken with that emotion and the spans are concatenated
+                           (equal-power cross-fade at each seam). Auto-enabled when
+                           the text contains a known `[tag]`/`(tag)`.
+                           e.g. --text \"[happy] hi there [sad] bye\"
+    --emotion-lang <L>     Instruct language for the tags: zh (default, on-box
+                           confirmed) or en.
+    --list-emotions        Print the tag -> instruct table and exit (no model load).
 ";
 
     const SERVE_USAGE: &str = "\
@@ -143,6 +155,10 @@ syrinx stream — chunk-streaming synthesis to a WAV
         instruct: Option<String>,
         rl: Option<PathBuf>,
         quantized: bool,
+        // --- inline emotion tagging (`synth --cv3` only) ---
+        emotion_tags: bool,
+        list_emotions: bool,
+        emotion_lang: Option<String>,
     }
 
     pub fn run() -> i32 {
@@ -229,6 +245,9 @@ syrinx stream — chunk-streaming synthesis to a WAV
                 "--instruct" => o.instruct = Some(need(&mut argv, "--instruct")?),
                 "--rl" => o.rl = Some(PathBuf::from(need(&mut argv, "--rl")?)),
                 "--quantized" => o.quantized = true,
+                "--emotion-tags" => o.emotion_tags = true,
+                "--list-emotions" => o.list_emotions = true,
+                "--emotion-lang" => o.emotion_lang = Some(need(&mut argv, "--emotion-lang")?),
                 "-h" | "--help" => {
                     println!("{usage}");
                     std::process::exit(0);
@@ -422,6 +441,24 @@ syrinx stream — chunk-streaming synthesis to a WAV
                  on the CV3 path"
             );
         }
+
+        // Inline emotion tagging: explicit `--emotion-tags`, or auto-detected when the text
+        // carries a known `[tag]`/`(tag)`. Mutually exclusive with the single-shot
+        // --instruct / --quality paths (those steer the whole utterance).
+        let lang = resolve_emotion_lang(o)?;
+        let registry = EmotionRegistry::default().with_lang(lang);
+        let want_tags = o.emotion_tags || registry.has_emotion_tags(text);
+        if want_tags && (o.instruct.is_some() || o.quality) {
+            return Err(
+                "inline emotion tags are mutually exclusive with --instruct/--quality \
+                 (each steers the whole utterance differently)"
+                    .to_string(),
+            );
+        }
+        if want_tags {
+            return cmd_synth_cv3_tagged(o, text, out, &registry);
+        }
+
         // The reference clip (16 kHz + 24 kHz) is always needed for the cloned voice.
         let ref_wav = o.ref_wav.as_ref().ok_or("missing required --ref-wav")?;
         let (r16, r24) = wavio::read_ref_wav(ref_wav).map_err(|e| e.to_string())?;
@@ -462,21 +499,106 @@ syrinx stream — chunk-streaming synthesis to a WAV
         Ok(())
     }
 
+    /// Inline-tagged CV3 render: parse `[happy] … [sad] …` text into emotion segments and
+    /// synthesize each in the reference voice, concatenating with an equal-power cross-fade
+    /// ([`Cv3Synthesizer::synthesize_tagged`]). A neutral / unknown-tag span is spoken
+    /// plainly; the instruct string for each known tag comes from `registry` (its active
+    /// language). `--prompt-text` is required (it conditions the neutral spans).
+    fn cmd_synth_cv3_tagged(
+        o: &Opts,
+        text: &str,
+        out: &std::path::Path,
+        registry: &EmotionRegistry,
+    ) -> Result<(), String> {
+        let ref_wav = o.ref_wav.as_ref().ok_or("missing required --ref-wav")?;
+        let (r16, r24) = wavio::read_ref_wav(ref_wav).map_err(|e| e.to_string())?;
+        let prompt_text = o
+            .prompt_text
+            .clone()
+            .ok_or("missing required --prompt-text")?;
+        eprintln!(
+            "syrinx synth --cv3: inline emotion tags ({} known tags, lang {:?})",
+            registry.len(),
+            registry.lang()
+        );
+        let mut synth = load_cv3_synth(o)?;
+        let inputs = Cv3SynthInputs {
+            lm_seed: 0,
+            max_gen_steps: o.max_steps,
+            ..Default::default()
+        };
+        let wav = synth
+            .synthesize_tagged(text, &prompt_text, &r16, &r24, registry, &inputs)
+            .map_err(|e| e.to_string())?;
+        wavio::write_wav_24k(out, &wav).map_err(|e| e.to_string())?;
+        eprintln!(
+            "syrinx: wrote {} ({} samples, 24 kHz mono, CV3 emotion-tagged)",
+            out.display(),
+            wav.len()
+        );
+        Ok(())
+    }
+
     /// Reject the CV3-only feature flags (`--quality` / `--instruct` / `--rl` /
-    /// `--quantized`) on any path other than `synth --cv3`, so they are never silently
-    /// ignored on a CV2 / serve / stream command.
+    /// `--quantized` / `--emotion-tags` / `--emotion-lang`) on any path other than
+    /// `synth --cv3`, so they are never silently ignored on a CV2 / serve / stream command.
     fn reject_cv3_feature_flags(o: &Opts) -> Result<(), String> {
-        if o.quality || o.instruct.is_some() || o.rl.is_some() || o.quantized {
+        if o.quality
+            || o.instruct.is_some()
+            || o.rl.is_some()
+            || o.quantized
+            || o.emotion_tags
+            || o.emotion_lang.is_some()
+        {
             return Err(
-                "--quality/--instruct/--rl/--quantized are CV3-only and valid only on \
-                 `synth --cv3`"
+                "--quality/--instruct/--rl/--quantized/--emotion-tags/--emotion-lang are \
+                 CV3-only and valid only on `synth --cv3`"
                     .to_string(),
             );
         }
         Ok(())
     }
 
+    /// Resolve `--emotion-lang` (`zh` default, or `en`) into an [`InstructLang`].
+    fn resolve_emotion_lang(o: &Opts) -> Result<InstructLang, String> {
+        match o.emotion_lang.as_deref() {
+            None | Some("zh") => Ok(InstructLang::Zh),
+            Some("en") => Ok(InstructLang::En),
+            Some(other) => Err(format!(
+                "--emotion-lang expects `zh` or `en`, got `{other}`"
+            )),
+        }
+    }
+
+    /// Print the registry's `tag -> instruct` table (both language variants) and return.
+    /// Model-free — `--list-emotions` never loads weights.
+    fn list_emotions(o: &Opts) -> Result<(), String> {
+        let lang = resolve_emotion_lang(o)?;
+        let reg = EmotionRegistry::default().with_lang(lang);
+        println!(
+            "syrinx emotion tags ({} known; active instruct language: {})",
+            reg.len(),
+            match lang {
+                InstructLang::Zh => "zh",
+                InstructLang::En => "en",
+            }
+        );
+        println!("Use inline as `[tag] text …`; (tag) parentheses also accepted.\n");
+        for tag in reg.tags() {
+            if let Some(pair) = reg.instruct_pair(tag) {
+                println!("  {tag:<12}  zh: {}", pair.zh);
+                println!("  {:<12}  en: {}", "", pair.en);
+            }
+        }
+        Ok(())
+    }
+
     fn cmd_synth(o: Opts) -> Result<(), String> {
+        // `--list-emotions` is a model-free query: print the table and exit before any of
+        // the required-arg / model-load machinery.
+        if o.list_emotions {
+            return list_emotions(&o);
+        }
         let text = o.text.clone().ok_or("missing required --text")?;
         let out = o.out.clone().ok_or("missing required --out")?;
         if o.cv3 {
