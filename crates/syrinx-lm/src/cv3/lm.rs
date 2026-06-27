@@ -7,7 +7,7 @@
 //! visibility.
 
 use super::{Cv3Lm, DECODER_OUT, ENDOFPROMPT_ID, SOS, TASK_ID};
-use crate::real::{Footprint, KvCache, Qwen2Lm};
+use crate::cv2::{Footprint, KvCache, Qwen2Lm};
 use candle_core::{Device, Result, Tensor};
 
 impl Cv3Lm {

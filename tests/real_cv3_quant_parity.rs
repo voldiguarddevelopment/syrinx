@@ -24,7 +24,7 @@
 
 use candle_core::{Device, Tensor};
 use std::path::Path;
-use syrinx_lm::real_cv3::Cv3Lm;
+use syrinx_lm::cv3::Cv3Lm;
 
 /// All-finite check over an arbitrary-rank tensor.
 fn all_finite(t: &Tensor) -> bool {

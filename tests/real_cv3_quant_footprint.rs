@@ -58,7 +58,7 @@ fn cv3_quantized_footprint_report() {
 
     // --- LM: int4 linears + int4 embeds (lm_head tied to embed_tokens) ------
     if let Some(w) = weights("SYRINX_CV3_LM_WEIGHTS") {
-        use syrinx_lm::real_cv3::Cv3Lm;
+        use syrinx_lm::cv3::Cv3Lm;
         let f = Cv3Lm::load(&w, dev.clone()).expect("load fp32 CV3 LM");
         let q = Cv3Lm::load_quantized(&w, dev.clone()).expect("load quantized CV3 LM");
         let fp = f.footprint();
@@ -89,7 +89,7 @@ fn cv3_quantized_footprint_report() {
 
     // --- Flow: Q4_0 DiT linears ---------------------------------------------
     if let Some(w) = weights("SYRINX_CV3_FLOW_WEIGHTS") {
-        use syrinx_acoustic::real_cv3::Cv3Flow;
+        use syrinx_acoustic::cv3::Cv3Flow;
         let f = Cv3Flow::load(&w, dev.clone()).expect("load fp32 CV3 flow");
         let q = Cv3Flow::load_quantized(&w, dev.clone()).expect("load quantized CV3 flow");
         let fp = f.footprint();
@@ -112,7 +112,7 @@ fn cv3_quantized_footprint_report() {
 
     // --- HiFT vocoder: Q4_0 dequant-on-fetch conv kernels -------------------
     if let Some(w) = weights("SYRINX_CV3_HIFT_WEIGHTS") {
-        use syrinx_vocoder::real_cv3::Cv3Hift;
+        use syrinx_vocoder::cv3::Cv3Hift;
         let f = Cv3Hift::load(&w, dev.clone()).expect("load fp32 CV3 hift");
         let q = Cv3Hift::load_quantized(&w, dev.clone()).expect("load quantized CV3 hift");
         let fp = f.footprint();
@@ -135,7 +135,7 @@ fn cv3_quantized_footprint_report() {
 
     // --- CAM++ speaker (shared with CV2): Q4_0 conv/linear kernels ----------
     if let Some(w) = weights("SYRINX_CV3_SPK_WEIGHTS") {
-        use syrinx_speaker::real::CamPlus;
+        use syrinx_speaker::campplus::CamPlus;
         let f = CamPlus::load(&w, dev.clone()).expect("load fp32 speaker");
         let q = CamPlus::load_quantized(&w, dev.clone()).expect("load quantized speaker");
         let fp = f.footprint();

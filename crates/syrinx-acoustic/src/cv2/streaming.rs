@@ -126,7 +126,7 @@ impl Flow {
 ///
 /// Reproduces `CosyVoice2Model.token2wav` (non-streaming, single utterance) for the
 /// zero-shot path: the prompt-conditioned flow ([`Flow::forward_zero_shot`]) yields
-/// the generated mel, which the HiFT vocoder ([`syrinx_vocoder::real::HiftVocoder::decode`])
+/// the generated mel, which the HiFT vocoder ([`syrinx_vocoder::cv2::HiftVocoder::decode`])
 /// turns into a 24 kHz waveform. Both stochastic inputs are pinned and fed in:
 /// the CFM noise `z` (the flow's fixed `rand_noise` slice) and the HiFT source STFT
 /// `s_stft` (the SineGen source has a random initial phase in the real model, so the
@@ -134,7 +134,7 @@ impl Flow {
 #[allow(clippy::too_many_arguments)]
 pub fn token2wav(
     flow: &Flow,
-    vocoder: &syrinx_vocoder::real::HiftVocoder,
+    vocoder: &syrinx_vocoder::cv2::HiftVocoder,
     prompt_token: &Tensor,
     token: &Tensor,
     prompt_feat: &Tensor,
@@ -231,7 +231,7 @@ struct HiftCache {
 #[allow(clippy::too_many_arguments)]
 pub fn token2wav_streaming(
     flow: &Flow,
-    vocoder: &syrinx_vocoder::real::HiftVocoder,
+    vocoder: &syrinx_vocoder::cv2::HiftVocoder,
     prompt_token: &Tensor,
     token: &Tensor,
     prompt_feat: &Tensor,

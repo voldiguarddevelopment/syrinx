@@ -21,7 +21,7 @@
 
 use std::path::Path;
 
-use syrinx_eval::real::{aggregate, evaluate_suite, EvalCase, Metrics};
+use syrinx_eval::metrics::{aggregate, evaluate_suite, EvalCase, Metrics};
 use syrinx_serve::synth::{SynthConfig, Synthesizer};
 use syrinx_serve::wavio;
 

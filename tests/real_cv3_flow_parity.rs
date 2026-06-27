@@ -31,7 +31,7 @@
 use candle_core::{DType, Device, Tensor};
 use std::collections::HashMap;
 use std::path::Path;
-use syrinx_acoustic::real_cv3::Cv3Flow;
+use syrinx_acoustic::cv3::Cv3Flow;
 
 fn max_abs_diff(a: &Tensor, b: &Tensor) -> f32 {
     (a - b)

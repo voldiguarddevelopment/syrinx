@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 
 use candle_core::{DType, Device, Tensor};
-use syrinx_acoustic::real_cv3::{Cv3Flow, Cv3StreamCfg};
+use syrinx_acoustic::cv3::{Cv3Flow, Cv3StreamCfg};
 
 fn env(k: &str) -> Option<String> {
     std::env::var(k).ok().filter(|s| !s.is_empty())

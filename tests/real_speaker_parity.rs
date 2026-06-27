@@ -14,7 +14,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use std::path::Path;
-use syrinx_speaker::real::CamPlus;
+use syrinx_speaker::campplus::CamPlus;
 
 fn max_abs_diff(a: &Tensor, b: &Tensor) -> f32 {
     (a - b)

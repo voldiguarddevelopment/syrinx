@@ -34,7 +34,7 @@
 //! diagnostic; `sampling` owns the PRNG + nucleus/ras/random samplers and the `testkit`
 //! test seam (re-exported here at the original `real_cv3::testkit` path).
 
-use crate::real::Qwen2Lm;
+use crate::cv2::Qwen2Lm;
 
 mod gendebug;
 mod generate;

@@ -8,7 +8,7 @@
 use super::gendebug::gen_debug_enabled;
 use super::sampling::{log_softmax_vec, ras_sampling, SplitMix64};
 use super::{Cv3Lm, SPEECH_TOKEN_SIZE};
-use crate::real::KvCache;
+use crate::cv2::KvCache;
 use candle_core::Result;
 
 impl Cv3Lm {

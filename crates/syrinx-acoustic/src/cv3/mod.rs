@@ -1,6 +1,6 @@
 //! Real CosyVoice3 flow-matching mel decoder via Candle (`CausalMaskedDiffWithDiT`).
 //!
-//! The CV3 flow differs from CV2 (`CausalMaskedDiffWithXvec`, see [`crate::real`]) in
+//! The CV3 flow differs from CV2 (`CausalMaskedDiffWithXvec`, see [`crate::cv2`]) in
 //! two places, and reuses the rest:
 //!
 //!   * **Front-end (token -> mu).** No conformer encoder. The token id is looked up in
@@ -14,7 +14,7 @@
 //! The CFM Euler/CFG *wrapper* is byte-identical in structure to CV2's `solve_euler`
 //! (10 cosine-schedule steps, CFG batch-of-2 with `cfg_rate = 0.7`, frozen noise `z`
 //! consumed verbatim); only the estimator it calls changed, so it is re-expressed here
-//! around the DiT rather than shared by reference (CV2's `crate::real` stays byte-frozen).
+//! around the DiT rather than shared by reference (CV2's `crate::cv2` stays byte-frozen).
 //!
 //! Gated behind the `real` feature + on-disk fp32 weights; the parity test
 //! (`tests/real_cv3_flow_parity.rs`) skips cleanly when the weights/reference are
@@ -67,7 +67,7 @@ const CFG_RATE: f64 = 0.7; // inference_cfg_rate
 
 /// The real CosyVoice3 flow `CausalMaskedDiffWithDiT`, loaded from fp32 safetensors.
 ///
-/// Two precisions share one struct + one forward, exactly like the CV2 [`crate::real::Flow`]:
+/// Two precisions share one struct + one forward, exactly like the CV2 [`crate::cv2::Flow`]:
 ///   * **fp32 (default, parity)** — [`Cv3Flow::load`], every weight kept f32 in `w`;
 ///     `linear` is the plain `x @ Wᵀ` reference matmul. Byte-unchanged.
 ///   * **int4 (`load_quantized`)** — every plain-`linear()` weight (the DiT's large 2-D
@@ -124,7 +124,7 @@ impl Cv3Flow {
     }
 
     /// Load the same `flow_fp32.safetensors`, but quantize every plain-`linear()` weight to
-    /// **int4** (GGML `Q4_0`) — the README size goal, mirroring [`crate::real::Flow::load_quantized`].
+    /// **int4** (GGML `Q4_0`) — the README size goal, mirroring [`crate::cv2::Flow::load_quantized`].
     ///
     /// Quantized (one `QMatMul` each): every 2-D weight whose inner (`in_features`) dim is a
     /// multiple of the 32-element `Q4_0` block — which is exactly the DiT's `linear()`

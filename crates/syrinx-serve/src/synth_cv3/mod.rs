@@ -74,12 +74,12 @@ pub use streaming::Cv3StreamStats;
 
 use candle_core::{safetensors, DType, Device, Tensor};
 
-use syrinx_acoustic::real_cv3::Cv3Flow;
+use syrinx_acoustic::cv3::Cv3Flow;
 use syrinx_frontend::speech_token::SpeechTokenizer;
 use syrinx_frontend::tokenizer::TextTokenizer;
-use syrinx_lm::real_cv3::Cv3Lm;
-use syrinx_speaker::real::CamPlus;
-use syrinx_vocoder::real_cv3::Cv3Hift;
+use syrinx_lm::cv3::Cv3Lm;
+use syrinx_speaker::campplus::CamPlus;
+use syrinx_vocoder::cv3::Cv3Hift;
 
 // Reuse the CV2 synth's error + prompt-conditioning types so the two synthesizers
 // share one contract (additive; `crate::synth` is untouched).

@@ -57,7 +57,7 @@ fn quantized_footprint_report() {
 
     // --- LM: int4 linears + int4 embeds, lm_head dropped --------------------
     if let Some(w) = weights("SYRINX_LM_WEIGHTS") {
-        use syrinx_lm::real::Qwen2Lm;
+        use syrinx_lm::cv2::Qwen2Lm;
         let f = Qwen2Lm::load(&w, dev.clone()).expect("load fp32 LM");
         let q = Qwen2Lm::load_quantized(&w, dev.clone()).expect("load quantized LM");
         let fp = f.footprint();
@@ -91,7 +91,7 @@ fn quantized_footprint_report() {
 
     // --- Flow: Q4_0 linears -------------------------------------------------
     if let Some(w) = weights("SYRINX_FLOW_WEIGHTS") {
-        use syrinx_acoustic::real::Flow;
+        use syrinx_acoustic::cv2::Flow;
         let f = Flow::load(&w, dev.clone()).expect("load fp32 flow");
         let q = Flow::load_quantized(&w, dev.clone()).expect("load quantized flow");
         let fp = f.footprint();
@@ -116,7 +116,7 @@ fn quantized_footprint_report() {
 
     // --- HiFT vocoder: Q4_0 dequant-on-fetch conv/linear kernels -------------
     if let Some(w) = weights("SYRINX_HIFT_WEIGHTS") {
-        use syrinx_vocoder::real::HiftVocoder;
+        use syrinx_vocoder::cv2::HiftVocoder;
         let f = HiftVocoder::load(&w, dev.clone()).expect("load fp32 hift");
         let q = HiftVocoder::load_quantized(&w, dev.clone()).expect("load quantized hift");
         let fp = f.footprint();
@@ -139,7 +139,7 @@ fn quantized_footprint_report() {
 
     // --- CAM++ speaker: Q4_0 dequant-on-fetch conv/linear kernels ------------
     if let Some(w) = weights("SYRINX_SPK_WEIGHTS") {
-        use syrinx_speaker::real::CamPlus;
+        use syrinx_speaker::campplus::CamPlus;
         let f = CamPlus::load(&w, dev.clone()).expect("load fp32 speaker");
         let q = CamPlus::load_quantized(&w, dev.clone()).expect("load quantized speaker");
         let fp = f.footprint();

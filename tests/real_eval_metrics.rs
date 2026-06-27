@@ -10,7 +10,7 @@
 
 use std::path::Path;
 
-use syrinx_eval::real::{evaluate, EvalInput};
+use syrinx_eval::metrics::{evaluate, EvalInput};
 use syrinx_serve::synth::{SynthConfig, Synthesizer};
 use syrinx_serve::wavio;
 

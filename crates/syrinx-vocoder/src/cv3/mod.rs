@@ -1,9 +1,9 @@
 //! Real **CosyVoice3** HiFT vocoder forward via Candle (CPU) — the
 //! `CausalHiFTGenerator` mel -> 24 kHz waveform path, parity-verified against the
 //! dumped CV3 reference. Gated behind the `real` cargo feature + on-disk weights,
-//! mirroring [`crate::real`] (the CV2 port).
+//! mirroring [`crate::cv2`] (the CV2 port).
 //!
-//! ## What CV3 changes vs CV2 ([`crate::real::HiftVocoder`])
+//! ## What CV3 changes vs CV2 ([`crate::cv2::HiftVocoder`])
 //! The architecture is the same HiFTNet (NSF + iSTFTNet) skeleton — `conv_pre`,
 //! 3 upsample stages with source/F0 STFT fusion, Snake ResBlocks, a `conv_post`
 //! magnitude/phase head and an iSTFT — but two deltas matter:
@@ -73,7 +73,7 @@ const CONV_PRE_LOOK_RIGHT: usize = 4;
 /// The real CosyVoice3 (`CausalHiFTGenerator`) HiFT vocoder, loaded from the
 /// `weight_norm`-parametrized fp32 safetensors checkpoint.
 ///
-/// Two precisions share one struct + one forward, like the CV2 [`crate::real::HiftVocoder`]:
+/// Two precisions share one struct + one forward, like the CV2 [`crate::cv2::HiftVocoder`]:
 ///   * **fp32 (default, parity)** — [`Cv3Hift::load`], every tensor kept in `raw`
 ///     (folded/cast per-fetch), byte-unchanged.
 ///   * **int4 (`load_quantized`)** — the large decode conv kernels (the `ups` upsample
@@ -128,7 +128,7 @@ impl Cv3Hift {
 
     /// Load the same checkpoint but quantize the large decode conv kernels to GGML `Q4_0`
     /// (dequant-on-fetch) for a smaller vocoder footprint — the README size goal, mirroring
-    /// the CV2 [`crate::real::HiftVocoder::load_quantized`].
+    /// the CV2 [`crate::cv2::HiftVocoder::load_quantized`].
     ///
     /// Each `weight_norm`-parametrized conv (`g = original0`, `v = original1`) is folded
     /// (`weight = g·v/‖v‖`) to its logical `[out,in,k]` kernel; if that kernel is large

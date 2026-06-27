@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use syrinx_eval::real::{evaluate_cv3, EvalInput};
+use syrinx_eval::metrics::{evaluate_cv3, EvalInput};
 use syrinx_serve::synth_cv3::{Cv3SynthConfig, Cv3Synthesizer};
 use syrinx_serve::wavio;
 

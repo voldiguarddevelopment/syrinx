@@ -14,7 +14,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use std::path::Path;
-use syrinx_vocoder::real_cv3::Cv3Hift;
+use syrinx_vocoder::cv3::Cv3Hift;
 
 fn max_abs_diff(a: &Tensor, b: &Tensor) -> f32 {
     (a - b)

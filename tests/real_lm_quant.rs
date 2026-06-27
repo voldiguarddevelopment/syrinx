@@ -25,7 +25,7 @@
 
 use candle_core::{Device, Tensor};
 use std::path::Path;
-use syrinx_lm::real::Qwen2Lm;
+use syrinx_lm::cv2::Qwen2Lm;
 
 /// fp32 reference footprint of the CosyVoice2 LM checkpoint (from the README budget).
 const FP32_LM_MB: f64 = 2449.0;

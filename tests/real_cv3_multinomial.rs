@@ -21,7 +21,7 @@
 
 #![cfg(feature = "real")]
 
-use syrinx_lm::real_cv3::testkit::{multinomial1_draws, uniform_draws};
+use syrinx_lm::cv3::testkit::{multinomial1_draws, uniform_draws};
 
 /// Empirical frequencies of `draws` over `k` categories.
 fn freqs(draws: &[usize], k: usize) -> Vec<f64> {

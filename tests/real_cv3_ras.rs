@@ -24,7 +24,7 @@
 
 #![cfg(feature = "real")]
 
-use syrinx_lm::real_cv3::testkit::ras_draws;
+use syrinx_lm::cv3::testkit::ras_draws;
 
 /// `log_softmax(logits)` as a host vector — `ras_sampling` consumes log-probabilities.
 fn log_softmax(logits: &[f32]) -> Vec<f32> {

@@ -44,7 +44,7 @@
 use candle_core::{DType, Device, Tensor};
 use std::path::Path;
 use std::time::Instant;
-use syrinx_lm::real::{KvCache, Qwen2Lm};
+use syrinx_lm::cv2::{KvCache, Qwen2Lm};
 
 /// Fp-rounding floor for the single-token (`t_new == 1`) cached decode step. The cache
 /// is proved bit-exact for `t_new > 1` in part (a); the only residual is candle's

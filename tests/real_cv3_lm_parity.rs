@@ -23,7 +23,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use std::path::Path;
-use syrinx_lm::real_cv3::Cv3Lm;
+use syrinx_lm::cv3::Cv3Lm;
 
 fn max_abs_diff(a: &Tensor, b: &Tensor) -> f32 {
     (a - b)

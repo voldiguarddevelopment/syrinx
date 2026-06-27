@@ -25,7 +25,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use std::path::Path;
-use syrinx_lm::real::Qwen2Lm;
+use syrinx_lm::cv2::Qwen2Lm;
 
 fn ids_u32(t: &Tensor) -> Vec<u32> {
     let t = t.flatten_all().unwrap().to_dtype(DType::U32).unwrap();

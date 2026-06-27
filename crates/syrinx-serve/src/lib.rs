@@ -230,7 +230,7 @@ impl Synth for RealSynth {
     ///    known when the first byte is sent.
     /// 2. **Then raw little-endian signed 16-bit PCM frames**, one channel, in order.
     ///    Each subsequent chunk is the PCM encoding of one
-    ///    [`AudioChunk`](syrinx_acoustic::real::AudioChunk) (samples clamped to
+    ///    [`AudioChunk`](syrinx_acoustic::cv2::AudioChunk) (samples clamped to
     ///    `[-1, 1]`, scaled by `32767`). Concatenating the header + every PCM chunk
     ///    yields a well-formed (if length-sentinel) 24 kHz mono WAV stream.
     ///

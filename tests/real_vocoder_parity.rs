@@ -12,7 +12,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use std::path::Path;
-use syrinx_vocoder::real::HiftVocoder;
+use syrinx_vocoder::cv2::HiftVocoder;
 
 fn max_abs_diff(a: &Tensor, b: &Tensor) -> f32 {
     (a - b)

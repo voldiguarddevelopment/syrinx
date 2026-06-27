@@ -56,11 +56,11 @@ mod watermark;
 
 use candle_core::{DType, Device, Tensor};
 
-use syrinx_acoustic::real::Flow;
+use syrinx_acoustic::cv2::Flow;
 use syrinx_frontend::speech_token::{SpeechTokenError, SpeechTokenizer};
 use syrinx_frontend::tokenizer::{TextTokenizer, TokenizerError};
-use syrinx_speaker::real::CamPlus;
-use syrinx_vocoder::real::HiftVocoder;
+use syrinx_speaker::campplus::CamPlus;
+use syrinx_vocoder::cv2::HiftVocoder;
 
 /// Select the compute device for the synthesizer.
 ///
@@ -223,7 +223,7 @@ pub struct Synthesizer {
     tokenizer: TextTokenizer,
     speech_tokenizer: SpeechTokenizer,
     speaker: CamPlus,
-    lm: syrinx_lm::real::Qwen2Lm,
+    lm: syrinx_lm::cv2::Qwen2Lm,
     flow: Flow,
     vocoder: HiftVocoder,
     dev: Device,
@@ -257,7 +257,7 @@ impl Synthesizer {
 
     /// Load every sub-model in its **quantized** variant for the README 4-bit footprint
     /// track (realized ≈388 MB CV2; the early ~270 MB budget under-counted the Qwen2-0.5B
-    /// body): the LM via [`syrinx_lm::real::Qwen2Lm::load_quantized`] (int4 big linears +
+    /// body): the LM via [`syrinx_lm::cv2::Qwen2Lm::load_quantized`] (int4 big linears +
     /// int4 dequant-on-gather embedding tables + dropped `lm_head`), the flow via
     /// [`Flow::load_quantized`] (Q4_0 `linear()` weights), the HiFT vocoder via
     /// `HiftVocoder::load_quantized` and the CAM++ speaker via `CamPlus::load_quantized`
@@ -292,9 +292,9 @@ impl Synthesizer {
             CamPlus::load(&cfg.spk_weights, dev.clone())?
         };
         let lm = if quantized {
-            syrinx_lm::real::Qwen2Lm::load_quantized(&cfg.lm_weights, dev.clone())?
+            syrinx_lm::cv2::Qwen2Lm::load_quantized(&cfg.lm_weights, dev.clone())?
         } else {
-            syrinx_lm::real::Qwen2Lm::load(&cfg.lm_weights, dev.clone())?
+            syrinx_lm::cv2::Qwen2Lm::load(&cfg.lm_weights, dev.clone())?
         };
         let flow = if quantized {
             Flow::load_quantized(&cfg.flow_weights, dev.clone())?

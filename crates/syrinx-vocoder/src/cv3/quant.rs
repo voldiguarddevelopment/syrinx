@@ -6,11 +6,11 @@ use candle_core::{Result, Tensor};
 
 /// Smallest weight (in elements) worth quantizing in [`super::Cv3Hift::load_quantized`].
 /// Below this the Q4_0 per-block scale overhead dominates; tiny params stay exact f32
-/// (matches the CV2 [`crate::real::HiftVocoder`] threshold).
+/// (matches the CV2 [`crate::cv2::HiftVocoder`] threshold).
 pub(super) const QUANT_MIN_ELEMS: usize = 4096;
 
 /// A `Q4_0`-quantized weight stored for **dequant-on-fetch** (the CV3 twin of the CV2
-/// [`crate::real::HiftVocoder`]'s `QStore`): the forward is unchanged — it asks
+/// [`crate::cv2::HiftVocoder`]'s `QStore`): the forward is unchanged — it asks
 /// [`super::Cv3Hift::weight`] for an f32 tensor and gets one back — only the *resident*
 /// storage is the int4 `QTensor`. The original logical conv shape `[out,in,k]` is kept so
 /// `weight` can restore it after dequantizing the 2-D block store.

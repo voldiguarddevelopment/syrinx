@@ -13,8 +13,8 @@
 // (see `Cargo.toml`'s `default = ["real"]`); it pulls Candle in as a normal
 // dependency. Building `--no-default-features` yields an empty, Candle-free crate.
 #[cfg(feature = "real")]
-pub mod real;
+pub mod cv2;
 
 // The real CosyVoice3 LM forward via Candle, layered on `real`'s Qwen2 body.
 #[cfg(feature = "real")]
-pub mod real_cv3;
+pub mod cv3;

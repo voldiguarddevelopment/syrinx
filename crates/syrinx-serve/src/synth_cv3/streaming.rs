@@ -18,7 +18,7 @@
 
 use candle_core::{Device, Tensor};
 
-use syrinx_acoustic::real_cv3::Cv3StreamCfg;
+use syrinx_acoustic::cv3::Cv3StreamCfg;
 
 use super::*;
 

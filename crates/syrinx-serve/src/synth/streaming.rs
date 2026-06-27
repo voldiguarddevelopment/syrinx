@@ -3,7 +3,7 @@
 
 use candle_core::{DType, Tensor};
 
-use syrinx_acoustic::real::{token2wav_streaming, AudioChunk};
+use syrinx_acoustic::cv2::{token2wav_streaming, AudioChunk};
 
 use super::*;
 
