@@ -76,12 +76,13 @@ source "$ENVF" 2>/dev/null && echo "  sourced scripts/test-all.env" || echo "  (
 # ── 3. download Fish weights (opt-in) ────────────────────────────────────────
 if [ "$DOWNLOAD" = 1 ]; then
   step "3/6  download Fish weights (~11 GB)"
-  if command -v huggingface-cli >/dev/null; then
-    huggingface-cli download fishaudio/openaudio-s1-mini --local-dir "${SYRINX_FISH_S1_DIR:-checkpoints/openaudio-s1-mini}" \
-      || echo "  $(c '1;33' 's1-mini download failed — it is GATED: run `huggingface-cli login` + accept the license')"
-    huggingface-cli download fishaudio/s2-pro --local-dir "${SYRINX_FISH_S2_DIR:-checkpoints/s2-pro}" \
+  HF=""; command -v hf >/dev/null && HF=hf || { command -v huggingface-cli >/dev/null && HF=huggingface-cli; }
+  if [ -n "$HF" ]; then
+    "$HF" download fishaudio/openaudio-s1-mini --local-dir "${SYRINX_FISH_S1_DIR:-checkpoints/openaudio-s1-mini}" \
+      || echo "  $(c '1;33' 's1-mini download failed — it is GATED: run `hf auth login` + accept the license')"
+    "$HF" download fishaudio/s2-pro --local-dir "${SYRINX_FISH_S2_DIR:-checkpoints/s2-pro}" \
       || echo "  $(c '1;33' 's2-pro download failed')"
-  else echo "  $(c '1;33' 'huggingface-cli missing — pip install huggingface_hub')"; fi
+  else echo "  $(c '1;33' 'no hf CLI — run: pip install -U huggingface_hub  (gives the `hf` command)')"; fi
 else
   step "3/6  download (skipped — pass --download to fetch Fish weights)"
 fi

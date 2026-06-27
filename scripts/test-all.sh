@@ -13,7 +13,7 @@
 #   ./scripts/test-all.sh --group cv3     # one group (see --list)
 #   ./scripts/test-all.sh --list          # list groups + their tests
 #   ./scripts/test-all.sh --compile-only  # build + compile tests, run nothing (off-box)
-#   ./scripts/test-all.sh --download-fish # huggingface-cli download the Fish weights
+#   ./scripts/test-all.sh --download-fish # hf download the Fish weights (s1-mini gated: hf auth login)
 #
 # Exit code: 0 if nothing FAILED (passes + skips are fine), 1 if any group FAILED.
 # =============================================================================
@@ -56,11 +56,12 @@ if [[ "${1:-}" == "--list" ]]; then
 fi
 if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then sed -n '2,22p' "$0"; exit 0; fi
 if [[ "${1:-}" == "--download-fish" ]]; then
-  command -v huggingface-cli >/dev/null || { echo "need huggingface-cli (pip install huggingface_hub)"; exit 2; }
-  echo ">> downloading fishaudio/openaudio-s1-mini (gated — needs 'huggingface-cli login')"
-  huggingface-cli download fishaudio/openaudio-s1-mini --local-dir "${SYRINX_FISH_S1_DIR:-/root/models/openaudio-s1-mini}"
+  HF=""; command -v hf >/dev/null && HF=hf || { command -v huggingface-cli >/dev/null && HF=huggingface-cli; }
+  [ -n "$HF" ] || { echo "need the hf CLI: pip install -U huggingface_hub"; exit 2; }
+  echo ">> downloading fishaudio/openaudio-s1-mini (gated — needs 'hf auth login')"
+  "$HF" download fishaudio/openaudio-s1-mini --local-dir "${SYRINX_FISH_S1_DIR:-/root/models/openaudio-s1-mini}"
   echo ">> downloading fishaudio/s2-pro (public, ~11 GB)"
-  huggingface-cli download fishaudio/s2-pro --local-dir "${SYRINX_FISH_S2_DIR:-/root/models/s2-pro}"
+  "$HF" download fishaudio/s2-pro --local-dir "${SYRINX_FISH_S2_DIR:-/root/models/s2-pro}"
   exit $?
 fi
 if [[ "${1:-}" == "--compile-only" ]]; then
