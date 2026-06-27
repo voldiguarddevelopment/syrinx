@@ -152,3 +152,36 @@ confirms the tests defend the real code, and every acceptance criterion maps to 
 passing test — never because you believe it is. A blocked task is "done" only when a
 human removes its blocker and it earns a real gate. When in doubt: re-read from disk,
 do the smallest honest thing, write the result down, and let the next pass check you.
+
+## Verifying the build (on the model box)
+
+Verification is hardware-bound: the `real`-feature binaries need a GPU box with the
+weights + parity fixtures present. They SIGILL on the dev box (a pre-existing CPU/candle
+issue), so OFF-box you get compile-checks only — never a real pass. One command runs the
+whole verification on the box:
+
+    ./scripts/verify.sh --download        # first time — also pulls the Fish weights from HF
+    ./scripts/verify.sh                   # weights already in place
+
+It chains, in order: preflight → `cargo build --features real` (compile gate) →
+create/read `scripts/test-all.env` → download the Fish weights (`--download`) →
+`gen-fish-ref.py` (parity fixtures) → run every group (CV2 · CV3 · Fish s1-mini ·
+Fish s2-pro · voice · emotion) → a `PASS / SKIP / MISSING / FAIL` board. Exit 0 unless
+something FAILED; SKIP = that group's weights/fixtures aren't configured, MISSING = the
+test file isn't built yet.
+
+Two steps `verify.sh` cannot do for you (it prints exactly when each is needed):
+- **Fill `scripts/test-all.env`** (copy from `.env.example`) with this box's weight +
+  fixture paths. Unset groups SKIP — they never FAIL on a partial box.
+- **The one `# TODO(on-box)` in `scripts/gen-fish-ref.py`** — the Python model-load that
+  dumps the Fish parity reference. Unfilled → the Fish *parity* tests SKIP; the Fish
+  *e2e smoke* tests and all CV2/CV3 parity still run.
+
+Narrower entry points (all read the same `test-all.env`):
+- `./scripts/test-all.sh [--group G | --compile-only | --download-fish]` — the suite alone.
+- `./scripts/run-fish.sh <s1-mini|s2-pro> "<text>" <ref.wav> [out]` — one synth; `--parity <variant>` runs that model's Fish tests.
+- `./scripts/synth-samples.sh <variant> [--scale small|reply|chapter] [--lang L]` — batch-render the 610-sample corpus.
+
+Full-coded ≠ verified: nothing is real until the box says so. Every offline-unconfirmable
+numeric is marked `// PARITY:`; the Fish s2-pro EVA-GAN codec is the least-certain piece
+and the first thing to scrutinize on-box.
