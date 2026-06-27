@@ -32,6 +32,11 @@ mod real {
     use std::net::SocketAddr;
     use std::path::PathBuf;
 
+    use syrinx_fish::common::audio as fish_audio;
+    use syrinx_fish::common::dualar::DriveParams;
+    use syrinx_fish::s1::S1Mini;
+    use syrinx_fish::s2::S2Pro;
+    use syrinx_fish::FishVariant;
     use syrinx_prosody::render_plan::RenderPlan;
     use syrinx_serve::emotion::{EmotionRegistry, InstructLang};
     use syrinx_serve::synth::{SynthConfig, SynthInputs, Synthesizer};
@@ -79,6 +84,7 @@ syrinx synth — render text in a reference voice
                  [--model-dir <DIR>] [--max-steps <N>] [--cuda] [--cv3]
                  [--quality] [--instruct <TEXT>] [--rl <WEIGHTS>] [--quantized]
                  [--emotion-tags] [--emotion-lang <zh|en>] [--list-emotions]
+                 [--fish <s1-mini|s2-pro> --fish-dir <DIR>]
 
     --text <TEXT>          Text to speak.                              [required]
     --out <WAV>            Output 24 kHz mono 16-bit WAV.              [required]
@@ -87,6 +93,19 @@ syrinx synth — render text in a reference voice
     --plan <FILE.json>     Load a full RenderPlan (overrides --pitch/--rate).
     --cv3                  Use the CosyVoice3 synthesizer (SYRINX_CV3_* files);
                            prosody plan/pitch/rate are CV2-only and are ignored.
+
+  Fish Audio front door (mutually exclusive with --cv3 + all CV3-only flags):
+    --fish <VARIANT>       Drive the pure-Rust Fish Audio port instead of CosyVoice:
+                           s1-mini (openaudio-s1-mini 0.5B) or s2-pro (5B). Output
+                           is the codec's native 44.1 kHz mono 32-bit-float WAV.
+    --fish-dir <DIR>       Checkpoint dir holding the model + config.json (and the
+                           codec + tokenizer.json). Required with --fish.
+                           Reuses --text/--ref-wav/--out; emotion/style tags in
+                           --text (e.g. \"[happy]\") are Fish-native PLAIN TEXT.
+                           --ref-wav clones the voice (s2-pro: encoded to prompt
+                           codes; --prompt-text is the optional ref transcript).
+                           s1-mini has no reference-cloning path: --ref-wav is
+                           ignored there (text-only synthesis).
 
   CV3-only feature flags (require --cv3):
     --quality              Render with the real random-phase NSF SineGen source
@@ -159,6 +178,9 @@ syrinx stream — chunk-streaming synthesis to a WAV
         emotion_tags: bool,
         list_emotions: bool,
         emotion_lang: Option<String>,
+        // --- Fish Audio front door (`synth --fish` only) ---
+        fish: Option<String>,
+        fish_dir: Option<PathBuf>,
     }
 
     pub fn run() -> i32 {
@@ -248,6 +270,8 @@ syrinx stream — chunk-streaming synthesis to a WAV
                 "--emotion-tags" => o.emotion_tags = true,
                 "--list-emotions" => o.list_emotions = true,
                 "--emotion-lang" => o.emotion_lang = Some(need(&mut argv, "--emotion-lang")?),
+                "--fish" => o.fish = Some(need(&mut argv, "--fish")?),
+                "--fish-dir" => o.fish_dir = Some(PathBuf::from(need(&mut argv, "--fish-dir")?)),
                 "-h" | "--help" => {
                     println!("{usage}");
                     std::process::exit(0);
@@ -559,6 +583,132 @@ syrinx stream — chunk-streaming synthesis to a WAV
         Ok(())
     }
 
+    /// Reject the Fish front door (`--fish` / `--fish-dir`) on any path other than
+    /// `synth --fish`, so they are never silently ignored on a CV2 / CV3 / serve / stream
+    /// command (mirrors [`reject_cv3_feature_flags`]).
+    fn reject_fish_flags(o: &Opts) -> Result<(), String> {
+        if o.fish.is_some() || o.fish_dir.is_some() {
+            return Err(
+                "--fish/--fish-dir are valid only on `synth --fish` (the pure-Rust Fish \
+                 Audio port); they are not valid on the CosyVoice2/CV3 or serve/stream paths"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// `synth --fish <s1-mini|s2-pro>` — drive the pure-Rust Fish Audio port. Loads the
+    /// variant from `--fish-dir` (model + `config.json` + codec + tokenizer; the loaders
+    /// read `config.json` via [`syrinx_fish::common::config::FishConfig::from_fish_json`]
+    /// internally), synthesizes `text`, and writes the codec's native 44.1 kHz mono WAV.
+    ///
+    /// `--ref-wav` clones the voice: for `s2-pro` the reference is resampled to 44.1 kHz,
+    /// encoded to prompt codes by the codec, and fed to [`S2Pro::synthesize_cloned`] (with
+    /// `--prompt-text` as the optional reference transcript, defaulting to empty). `s1-mini`
+    /// has no reference-conditioned cloning path in the backend, so `--ref-wav` is ignored
+    /// there (text-only [`S1Mini::synthesize`]).
+    ///
+    /// Emotion/style tags in `text` (e.g. `[happy]`, `(whisper)`) are Fish-native PLAIN
+    /// TEXT — they are NOT routed through the CV3 emotion module. `--fish` is mutually
+    /// exclusive with `--cv3` and every CV3-only flag.
+    fn cmd_synth_fish(o: &Opts, text: &str, out: &std::path::Path) -> Result<(), String> {
+        if o.cv3 {
+            return Err("--fish and --cv3 are mutually exclusive (pick one synthesizer)".to_string());
+        }
+        // The CV3-only feature flags steer the CosyVoice3 path; reject them on the Fish path
+        // so they are never silently ignored (Fish emotion tags are plain text in --text).
+        reject_cv3_feature_flags(o)?;
+        if o.plan.is_some() || o.pitch.is_some() || o.rate.is_some() {
+            eprintln!(
+                "syrinx synth --fish: prosody plan/pitch/rate are CosyVoice2-only and are \
+                 ignored on the Fish path"
+            );
+        }
+
+        let variant = FishVariant::from_id(o.fish.as_deref().unwrap_or_default())
+            .ok_or("--fish expects `s1-mini` or `s2-pro`")?;
+        let dir = o
+            .fish_dir
+            .as_ref()
+            .ok_or("--fish requires --fish-dir <DIR> (the checkpoint directory)")?;
+
+        // CPU is the parity device; `--cuda` picks a GPU on a `--features cuda` build (and
+        // `pick_device` itself falls back to CPU when no GPU is present). Mirrors the CV3 path.
+        if o.cuda {
+            #[cfg(not(feature = "cuda"))]
+            eprintln!(
+                "syrinx: --cuda requested but this binary was built without the `cuda` \
+                 feature; running on CPU"
+            );
+        }
+        let dev = if o.cuda {
+            syrinx_serve::synth::pick_device(None)
+        } else {
+            candle_core::Device::Cpu
+        };
+
+        // Map `--max-steps` to the dual-AR driver's frame cap; keep the seed pinned (0) so a
+        // run is bit-reproducible, mirroring the CV `lm_seed: 0` convention.
+        let params = DriveParams {
+            seed: 0,
+            max_new_frames: o
+                .max_steps
+                .unwrap_or_else(|| DriveParams::default().max_new_frames),
+            ..Default::default()
+        };
+
+        let wav = match variant {
+            FishVariant::S1Mini => {
+                let mut model = S1Mini::load(dir, dev).map_err(|e| e.to_string())?;
+                if o.ref_wav.is_some() {
+                    eprintln!(
+                        "syrinx synth --fish s1-mini: s1-mini has no reference-conditioned \
+                         cloning path; --ref-wav is ignored (text-only synthesis)"
+                    );
+                }
+                model.synthesize(text, &params).map_err(|e| e.to_string())?
+            }
+            FishVariant::S2Pro => {
+                let mut model = S2Pro::load(dir, dev.clone()).map_err(|e| e.to_string())?;
+                match &o.ref_wav {
+                    Some(ref_wav) => {
+                        // Resample the reference to the codec's 44.1 kHz, encode it to prompt
+                        // codes, and clone the voice. The reference transcript (--prompt-text)
+                        // is optional; an empty transcript still conditions on the audio codes.
+                        let ref_text = o.prompt_text.clone().unwrap_or_default();
+                        let samples =
+                            fish_audio::read_ref_wav_44k(ref_wav).map_err(|e| e.to_string())?;
+                        let n = samples.len();
+                        let wav_t = candle_core::Tensor::from_vec(samples, n, &dev)
+                            .map_err(|e| e.to_string())?;
+                        let ref_codes =
+                            model.encode_reference(&wav_t).map_err(|e| e.to_string())?;
+                        eprintln!(
+                            "syrinx synth --fish s2-pro: cloning from {} ({} samples @44.1k, \
+                             ref-transcript {:?})",
+                            ref_wav.display(),
+                            n,
+                            ref_text
+                        );
+                        model
+                            .synthesize_cloned(&ref_text, &ref_codes, text, &params)
+                            .map_err(|e| e.to_string())?
+                    }
+                    None => model.synthesize(text, &params).map_err(|e| e.to_string())?,
+                }
+            }
+        };
+
+        fish_audio::write_wav_44k(out, &wav).map_err(|e| e.to_string())?;
+        eprintln!(
+            "syrinx: wrote {} ({} samples, 44.1 kHz mono f32, Fish {})",
+            out.display(),
+            wav.len(),
+            variant.dir_name()
+        );
+        Ok(())
+    }
+
     /// Resolve `--emotion-lang` (`zh` default, or `en`) into an [`InstructLang`].
     fn resolve_emotion_lang(o: &Opts) -> Result<InstructLang, String> {
         match o.emotion_lang.as_deref() {
@@ -601,6 +751,10 @@ syrinx stream — chunk-streaming synthesis to a WAV
         }
         let text = o.text.clone().ok_or("missing required --text")?;
         let out = o.out.clone().ok_or("missing required --out")?;
+        if o.fish.is_some() {
+            return cmd_synth_fish(&o, &text, &out);
+        }
+        reject_fish_flags(&o)?;
         if o.cv3 {
             return cmd_synth_cv3(&o, &text, &out);
         }
@@ -631,6 +785,7 @@ syrinx stream — chunk-streaming synthesis to a WAV
 
     fn cmd_stream(o: Opts) -> Result<(), String> {
         reject_cv3_feature_flags(&o)?;
+        reject_fish_flags(&o)?;
         if o.cv3 {
             return Err(
                 "the CV3 synthesizer has no chunk-streaming path; use `synth --cv3` \
@@ -669,6 +824,7 @@ syrinx stream — chunk-streaming synthesis to a WAV
 
     fn cmd_serve(o: Opts) -> Result<(), String> {
         reject_cv3_feature_flags(&o)?;
+        reject_fish_flags(&o)?;
         let (prompt_text, r16, r24) = read_voice(&o)?;
         let port = o.port.unwrap_or(8080);
         let addr: SocketAddr = ([127, 0, 0, 1], port).into();
