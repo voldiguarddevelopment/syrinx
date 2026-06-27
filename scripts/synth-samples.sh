@@ -6,12 +6,13 @@
 # placement, and for every matching entry invokes the Fish synth front door:
 #
 #   cargo run -p syrinx-cli --features real -- \
-#       synth --fish <variant> --text "<text>" --ref <REF.wav> --out <DIR>/<id>.wav
+#       synth --fish <variant> --fish-dir <CKPT> --text "<text>" \
+#             --ref-wav <REF.wav> --out <DIR>/<id>.wav
 #
 # The corpus is box-independent to *author*; actual synthesis runs on the GPU box.
-# If the `--fish` flag is not yet wired into the CLI, each line is printed as the
-# command it WOULD run, tagged [PENDING INTEGRATION] — nothing is synthesized, but
-# the manifest + counts are still produced so the corpus can be inspected anywhere.
+# Pass --dry-run to print each line as the command it WOULD run, tagged [DRY RUN] —
+# nothing is synthesized (no model load), but the manifest + counts are still produced
+# so the corpus can be inspected anywhere off-box.
 #
 # Usage:
 #   scripts/synth-samples.sh <s1-mini|s2-pro> [options]
@@ -23,6 +24,10 @@
 #   --limit     N                     stop after N matching entries
 #   --ref       REF.wav               reference voice clip (default: $SYRINX_REF or none)
 #   --out       DIR                   output dir (default: samples/out/<variant>)
+#   --fish-dir  DIR                   checkpoint dir (default: $SYRINX_FISH_S{1,2}_DIR
+#                                     or checkpoints/<variant-dir>)
+#   --dry-run                         print the commands that WOULD run; synthesize
+#                                     nothing (off-box authoring; no model load)
 #   -h|--help                         this help
 #
 # Outputs (under the chosen --out DIR):
@@ -50,8 +55,8 @@ case "$1" in -h|--help) usage 0 ;; esac
 
 VARIANT="$1"; shift
 case "$VARIANT" in
-  s1-mini) MODEL_FILTER="s1" ;;
-  s2-pro)  MODEL_FILTER="s2" ;;
+  s1-mini) MODEL_FILTER="s1"; FISH_DIR_DEFAULT="${SYRINX_FISH_S1_DIR:-$REPO_ROOT/checkpoints/openaudio-s1-mini}" ;;
+  s2-pro)  MODEL_FILTER="s2"; FISH_DIR_DEFAULT="${SYRINX_FISH_S2_DIR:-$REPO_ROOT/checkpoints/s2-pro}" ;;
   *) die "unknown variant '$VARIANT' (expected s1-mini or s2-pro)" ;;
 esac
 
@@ -61,6 +66,8 @@ esac
 F_SCALE=""; F_LANG=""; F_PLACEMENT=""; LIMIT=0
 REF="${SYRINX_REF:-}"
 OUT=""
+FISH_DIR=""
+DRYRUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --scale)     F_SCALE="${2:?--scale needs a value}"; shift 2 ;;
@@ -69,10 +76,13 @@ while [[ $# -gt 0 ]]; do
     --limit)     LIMIT="${2:?--limit needs a value}"; shift 2 ;;
     --ref)       REF="${2:?--ref needs a value}"; shift 2 ;;
     --out)       OUT="${2:?--out needs a value}"; shift 2 ;;
+    --fish-dir)  FISH_DIR="${2:?--fish-dir needs a value}"; shift 2 ;;
+    --dry-run)   DRYRUN=1; shift ;;
     -h|--help)   usage 0 ;;
     *) die "unknown option '$1' (see --help)" ;;
   esac
 done
+FISH_DIR="${FISH_DIR:-$FISH_DIR_DEFAULT}"
 
 [[ -f "$JSONL" ]] || die "corpus not found: $JSONL"
 OUT="${OUT:-$REPO_ROOT/samples/out/$VARIANT}"
@@ -81,18 +91,14 @@ MANIFEST="$OUT/manifest.tsv"
 COUNTS="$OUT/counts.txt"
 
 # ---------------------------------------------------------------------------
-# Does the CLI already understand `synth --fish`? Probe once; if not, run dry.
+# Live vs dry run. `--fish` is wired into the CLI (synth --fish <variant>); a LIVE
+# run loads the model and synthesizes, a --dry-run prints the commands only.
 # ---------------------------------------------------------------------------
-PENDING=1
-if cargo run -q -p syrinx-cli --features real -- synth --help 2>/dev/null | grep -q -- '--fish'; then
-  PENDING=0
+if [[ $DRYRUN -eq 1 ]]; then
+  echo "synth-samples: --dry-run -> printing the commands that WOULD run; no audio is produced." >&2
 fi
-if [[ $PENDING -eq 1 ]]; then
-  echo "synth-samples: '--fish' not wired into the CLI yet -> DRY RUN" >&2
-  echo "synth-samples: printing the commands that WOULD run; no audio is produced." >&2
-fi
-if [[ -z "$REF" && $PENDING -eq 0 ]]; then
-  die "a reference voice is required to synthesize; pass --ref REF.wav (or set \$SYRINX_REF)"
+if [[ $DRYRUN -eq 0 && -z "$REF" ]]; then
+  die "a reference voice is required to synthesize; pass --ref REF.wav (or set \$SYRINX_REF), or use --dry-run"
 fi
 REF_ARG="${REF:-<REF.wav>}"
 
@@ -139,10 +145,10 @@ while IFS=$'\t' read -r id scale lang placement text; do
 
   wav="$OUT/$id.wav"
   cmd=(cargo run -q -p syrinx-cli --features real -- \
-       synth --fish "$VARIANT" --text "$text" --ref "$REF_ARG" --out "$wav")
+       synth --fish "$VARIANT" --fish-dir "$FISH_DIR" --text "$text" --ref-wav "$REF_ARG" --out "$wav")
 
-  if [[ $PENDING -eq 1 ]]; then
-    printf '[PENDING INTEGRATION] '
+  if [[ $DRYRUN -eq 1 ]]; then
+    printf '[DRY RUN] '
     printf '%q ' "${cmd[@]}"; printf '\n'
   else
     echo ">> $id"
@@ -165,8 +171,9 @@ done < <(emit_rows)
   echo "variant:   $VARIANT  (model filter: $MODEL_FILTER + both)"
   echo "filters:   scale=${F_SCALE:-*} lang=${F_LANG:-*} placement=${F_PLACEMENT:-*} limit=${LIMIT:-0}"
   echo "ref:       $REF_ARG"
+  echo "fish-dir:  $FISH_DIR"
   echo "out dir:   $OUT"
-  echo "mode:      $([[ $PENDING -eq 1 ]] && echo 'DRY RUN (--fish pending integration)' || echo 'LIVE synthesis')"
+  echo "mode:      $([[ $DRYRUN -eq 1 ]] && echo 'DRY RUN (--dry-run)' || echo 'LIVE synthesis')"
   echo "matched:   $total entries"
   echo
   echo "per-scale:"
@@ -190,9 +197,10 @@ have() { command -v "$1" >/dev/null 2>&1; }
   echo "# synth-samples run metadata"
   echo "timestamp:   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   echo "variant:     $VARIANT (model $MODEL_FILTER + both)"
-  echo "mode:        $([[ $PENDING -eq 1 ]] && echo 'DRY RUN' || echo 'LIVE')"
+  echo "mode:        $([[ $DRYRUN -eq 1 ]] && echo 'DRY RUN' || echo 'LIVE')"
   echo "filters:     scale=${F_SCALE:-*} lang=${F_LANG:-*} placement=${F_PLACEMENT:-*} limit=${LIMIT:-0}"
   echo "ref:         $REF_ARG"
+  echo "fish-dir:    $FISH_DIR"
   echo "matched:     $total entries"
   echo
   echo "## host"
