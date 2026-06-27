@@ -188,12 +188,12 @@ pub fn evaluate(
 /// `sim_o`     — CAM++ speaker cosine between the reference clip and the CV3 output
 ///               (the same `speaker_embedding` path CV2 uses, here on `Cv3Synthesizer`);
 /// `rtf`       — synthesis wall-time / output audio duration;
-/// `ttfb_ms`   — time to the first audio. The current [`Cv3Synthesizer`] API exposes
-///               only the **batch** `synthesize` (no streaming entry point), so the
-///               whole clip is produced in one call: time-to-first-audio therefore
-///               equals the full synthesis wall-time. It is a real, finite, positive
-///               measurement (not a stub), it just cannot be smaller than `rtf`'s
-///               numerator for a non-streaming synth;
+/// `ttfb_ms`   — time to the **first streamed chunk**, measured via the chunk-causal
+///               [`Cv3Synthesizer::synthesize_streaming`] entry point (exactly as CV2's
+///               [`evaluate`] measures TTFB on its streaming callback). This is the real
+///               first-byte latency — the first chunk lands after `chunk_size +
+///               pre_lookahead` tokens, not the whole utterance — not the full-synth
+///               wall-time;
 /// `wer`       — `scripts/eval_wer.py` (Whisper) via `SYRINX_WER_HELPER`, on the CV3 WAV;
 /// `mos_proxy` — `scripts/eval_mos.py` (UTMOS) via `SYRINX_MOS_HELPER`, on the CV3 WAV.
 ///
@@ -244,8 +244,8 @@ pub fn evaluate_cv3(
         }
     }
 
-    // --- RTF + TTFB: one batch synthesis. Wall-time drives RTF; for the non-streaming
-    //     CV3 API the whole clip is the "first chunk", so TTFB = the same wall-time. ---
+    // --- RTF: one batch synthesis. Wall-time drives RTF; TTFB is measured separately
+    //     below via the real chunk-causal streaming entry point. ---
     // SYRINX_CV3_QUALITY=1 uses the real random-phase NSF SineGen source + full
     // generation (`synthesize_quality`) instead of the deterministic single-harmonic
     // placeholder + cap — the fair quality A/B. The pin-ref diagnostic forces the
@@ -280,7 +280,29 @@ pub fn evaluate_cv3(
     let synth_secs = t0.elapsed().as_secs_f64();
     let audio_secs = wav.len() as f64 / SR_24K as f64;
     let rtf = (audio_secs > 0.0).then(|| synth_secs / audio_secs);
-    let ttfb_ms = Some(synth_secs * 1000.0);
+
+    // --- TTFB: real time to the first STREAMED chunk via `synthesize_streaming` (the
+    //     chunk-causal DiT path), mirroring CV2's `evaluate`. `inputs` (incl. any
+    //     pinned ref tokens / z / seed / cap) is honoured exactly as in the batch path;
+    //     the first chunk lands after `chunk_size + pre_lookahead` tokens. ---
+    let t1 = Instant::now();
+    let mut ttfb_ms: Option<f64> = None;
+    synth
+        .synthesize_streaming(
+            input.text,
+            input.prompt_text,
+            input.ref_wav_16k,
+            input.ref_wav_24k,
+            &inputs,
+            25,
+            |_chunk| {
+                if ttfb_ms.is_none() {
+                    ttfb_ms = Some(t1.elapsed().as_secs_f64() * 1000.0);
+                }
+                Ok(())
+            },
+        )
+        .map_err(|e| e.to_string())?;
 
     // --- SIM-o: speaker cosine between the reference and the CV3 output, both embedded
     //     through the same CAM++ `speaker_embedding` path CV2 uses. ---
