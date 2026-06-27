@@ -9,9 +9,10 @@ name = "syrinx"
 path = "src/main.rs"
 
 [features]
-# The real `synth` command: loads the CosyVoice2 `Synthesizer` (via syrinx-serve's
-# `real` capstone) and renders `text + reference voice -> 24 kHz WAV`. Off by
-# default so the scaffold build stays Candle-free; enabled on the model box.
+# The real `synth`/`serve`/`stream` commands are the primary build — ON BY DEFAULT.
+# They load the CosyVoice2/3 `Synthesizer` (via syrinx-serve's `real` capstone) and
+# render `text + reference voice -> 24 kHz WAV`.
+default = ["real"]
 real = [
     "dep:syrinx-serve",
     "dep:syrinx-prosody",

@@ -40,9 +40,8 @@ low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a **~270&n
 > sample-faithful streaming. CV3 adds a new 22-layer DiT flow + causal-f64 HiFT + v3 tokenizer.
 > **Remaining:** sub-200 ms TTFB (CPU is LM-bound) and a full cross-lingual WER sweep. (Earlier
 > "emotion needs an instruct checkpoint" was wrong — CV2/CV3 do instruct on the base weights.)
-> The original "deterministic spec engine" was Ratchet's GPU-less, parity-gated
-> *proxy*; the real pipeline supersedes it (and orphans some of it). See
-> [Build status](#build-status) and [Roadmap](#roadmap).
+> The real CosyVoice2 / CosyVoice3 ports are the **default build** — a plain `cargo build`
+> builds the real Candle model stack. See [Build status](#build-status) and [Roadmap](#roadmap).
 
 ---
 
@@ -96,21 +95,19 @@ under-counted the Qwen2-0.5B body; int4 is a size win, not a speed win (dequant-
 
 ## Workspace layout
 
-An eleven-crate Rust workspace; each crate owns one stage of the pipeline.
+A nine-crate Rust workspace; each crate owns one stage of the real pipeline.
 
 | Crate | Responsibility |
 |-------|----------------|
-| [`syrinx-frontend`](crates/syrinx-frontend) | Text normalization, numbers/dates, G2P, SSML, lexicon, heteronyms, context windowing |
-| [`syrinx-core`](crates/syrinx-core) | Tensor ops, weight loading, quantization, device management |
-| [`syrinx-lm`](crates/syrinx-lm) | Autoregressive semantic LM forward pass + paralinguistic tokens |
-| [`syrinx-speaker`](crates/syrinx-speaker) | Speaker encoder, embedding store, blend/morph, attributes |
-| [`syrinx-acoustic`](crates/syrinx-acoustic) | Flow-matching decoder (DiT blocks + ODE solver), chunk-aware streaming |
-| [`syrinx-vocoder`](crates/syrinx-vocoder) | HiFi-GAN/Vocos waveform synthesis, 48 kHz / 8 kHz paths |
-| [`syrinx-prosody`](crates/syrinx-prosody) | Editable prosody plan model + override API |
-| [`syrinx-stream`](crates/syrinx-stream) | Packet streaming, ring buffer, audio out, TTFB path |
-| [`syrinx-serve`](crates/syrinx-serve) | Server, OpenAI-compatible `/v1/audio`, watermarking |
-| [`syrinx-eval`](crates/syrinx-eval) | MOS/SIM-o/WER/latency harness, frozen eval-set runner |
-| [`syrinx-cli`](crates/syrinx-cli) | Local runner / dev harness |
+| [`syrinx-frontend`](crates/syrinx-frontend) | Qwen2 BPE text tokenizer, wetext-style normalization (`tn`), kaldi fbank + prompt mel, `speech_tokenizer_v2/v3.onnx` |
+| [`syrinx-lm`](crates/syrinx-lm) | Real CV2/CV3 Qwen2-0.5B LM forward (Candle) + KV-cache autoregressive generation |
+| [`syrinx-speaker`](crates/syrinx-speaker) | Real CAM++ x-vector speaker encoder (Candle) |
+| [`syrinx-acoustic`](crates/syrinx-acoustic) | Real flow-matching mel decoder — CV2 conformer / CV3 22-layer DiT (Candle) |
+| [`syrinx-vocoder`](crates/syrinx-vocoder) | Real HiFT vocoder — CV2 + CV3 causal-f64 variant (Candle) |
+| [`syrinx-prosody`](crates/syrinx-prosody) | Editable prosody plan model + render-time rate/pitch transforms |
+| [`syrinx-serve`](crates/syrinx-serve) | End-to-end `Synthesizer` capstone, OpenAI-compatible `/v1/audio` server, watermarking |
+| [`syrinx-eval`](crates/syrinx-eval) | Measured SIM-o/WER/MOS/RTF/TTFB metrics over the real synthesizer |
+| [`syrinx-cli`](crates/syrinx-cli) | `syrinx synth\|serve\|stream` (CV2 + `--cv3`) |
 
 ---
 
@@ -120,33 +117,12 @@ Syrinx is built **test-first behind deterministic gates** (see
 [How this was built](#how-this-was-built)). A task is `done` only when its frozen tests
 pass — there are no stubbed greens.
 
-**✅ Done — the deterministic spec engine (Ratchet's GPU-less proxy)**
-
-> **Note:** this layer was Ratchet's parity-gated *proxy* — it is built + test-gated, but
-> the **real CosyVoice2 pipeline below supersedes most of it**. In particular the rich
-> text frontend (normalization beyond the `tn` path, G2P, SSML, lexicon, heteronyms) and
-> the toy prosody contours are **not wired into the real `Synthesizer`** today — they are
-> orphaned, slated for the consolidation pass on the [Roadmap](#roadmap).
-
-- **Text frontend:** normalization, number/date/currency expansion, acronym + custom
-  lexicon, G2P, heteronym resolution, SSML subset, punctuation→prosody, context
-  windowing, breathing/pacing, and the typed frontend→LM contract.
-- **LM inference runtime:** the full transformer forward in Rust —
-  `embed → 4× (RoPE multi-head attention + SwiGLU block, pre-RMSNorm residuals) →
-  final RMSNorm → untied head` — **byte-parity to a pure-Python reference within
-  1e-3**, with the transformer blocks pinned numerically at activation scale.
-- **Prosody control:** speech-rate scaling, intonation contours, phoneme-level plan
-  edits, and plan round-tripping.
-- **Audio streaming:** packet buffering and the 8&nbsp;kHz telephony resample path.
-- **Substrate:** the eleven-crate workspace, core tensor ops, the deterministic
-  name-seeded weight generator, and the parity harness.
-
 **✅ Real CosyVoice2 model — DONE (a standalone, near-real-time Rust TTS)**
 
-On top of the deterministic spec engine, the real **CosyVoice2-0.5B** model is now
-reimplemented in pure-Rust **[Candle](https://github.com/huggingface/candle)** and verified
-numerically against the real PyTorch model — every stage behind a `real` cargo feature
-(the default build stays Candle-free):
+The real **CosyVoice2-0.5B** model is reimplemented in pure-Rust
+**[Candle](https://github.com/huggingface/candle)** and verified numerically against the
+real PyTorch model. The real ports are the **default build** (Candle is a normal
+dependency):
 
 - **LM** — Qwen2-0.5B forward + **KV-cache autoregressive generation**: logits 1.3e-4,
   per-step gen logits 2.9e-5, argmax-exact.
@@ -160,8 +136,8 @@ numerically against the real PyTorch model — every stage behind a `real` cargo
   (near real-time) on a single consumer GPU.
 
 The parity fixtures (real weights + Python reference dumps) live on the model box, so these
-tests are **env-gated and skip cleanly in CI** — the default build + CI stay green and
-Candle-free, while the real path runs for real where the weights exist.
+tests are **env-gated and skip cleanly in CI** — the build stays green without the weights,
+while the real path runs for real where the weights exist.
 
 **✅ Real CosyVoice3 model — DONE (a second pure-Rust CosyVoice, feature-complete)**
 
@@ -196,60 +172,57 @@ speaker as-is, the Qwen2 LM body, the CFM Euler/CFG solver, the matcha mel + `or
 
 ## The parity approach (why the numbers are trustworthy)
 
-The inference runtime is built against a **concrete reference architecture** with
-**deterministic weights derived from each tensor's name** (FNV-1a-64 hash → xorshift64
-PRNG → f32), implemented **identically in Python and Rust** — so there is no weights
-file to ship and the two implementations must agree *bit-for-bit on the algorithm*.
-
-A pure-Python reference ([`reference.py`](REFERENCE.md)) emits **golden fixtures**; the
-Rust code is gated against them within documented tolerances (1e-4 for single ops,
-1e-3 for the full forward, 1e-4 for intermediate activations where the signal is small).
-Real pretrained weights later drop into the *same verified shapes* — the structure is
-already proven correct. See [`PARITY.md`](PARITY.md) and [`REFERENCE.md`](REFERENCE.md).
+Every numerical stage of the real port is gated against **golden fixtures dumped from the
+real PyTorch CosyVoice2 / CosyVoice3 models** — the real pretrained weights and the
+reference's intermediate activations. The Rust (Candle) stage must match within documented
+tolerances (≈1e-4/1e-5 per stage, down to the fp32 accumulation floor on the CV3 DiT), so
+"done" means a frozen parity test passes against the real model, never an assertion. See
+[`PARITY.md`](PARITY.md) and [`REFERENCE.md`](REFERENCE.md).
 
 ---
 
 ## Getting started
 
-> **Heads up:** the default build is the deterministic spec engine (Candle-free). The
-> **real CosyVoice2 *and* CosyVoice3 models** — full `text + ref → audio` synthesis — run
-> behind the `real` / `cuda` features against on-disk weights; see *Real CosyVoice2/3 model* above.
+> **Heads up:** the **default build is the real CosyVoice2 / CosyVoice3 model stack** —
+> a plain `cargo build` pulls Candle and compiles the real ports. Weights are supplied at
+> runtime via the `SYRINX_*` env vars (or `--model-dir`); the parity tests are env-gated and
+> skip without them. `--features cuda` adds the GPU path.
 
 ```bash
-# Build the whole workspace (default, Candle-free)
+# Build the whole workspace (default = the real model stack, Candle-backed)
 cargo build --workspace
 
-# Run the full test suite (frozen parity + property tests)
+# Run the test suite (real parity/eval tests skip cleanly without on-disk weights)
 cargo test --workspace
 
-# Explore a stage, e.g. the text frontend
+# CLI help
 cargo run -p syrinx-cli -- --help
 ```
 
-**Real synthesis** — `text + reference clip → 24 kHz wav`, behind `--features real` (add
-`--features cuda` + `--cuda` for the GPU path). Pick the model with `--cv3`:
+**Real synthesis** — `text + reference clip → 24 kHz wav`. Pick the model with `--cv3`
+(add `--features cuda` + `--cuda` for the GPU path):
 
 ```bash
 # CosyVoice2 (default): weights via SYRINX_*_WEIGHTS env (or --model-dir)
-cargo run -p syrinx-cli --features real -- synth \
+cargo run -p syrinx-cli -- synth \
   --text "Hello from Syrinx." --prompt-text "<ref transcript>" \
   --ref-wav ref.wav --out out.wav
 
 # CosyVoice3: same CLI, add --cv3 (weights via SYRINX_CV3_*; v3 speech tokenizer)
-cargo run -p syrinx-cli --features real -- synth --cv3 \
+cargo run -p syrinx-cli -- synth --cv3 \
   --text "收到好友从远方寄来的生日礼物。" --prompt-text "希望你以后能够做的比我还好呦。" \
   --ref-wav ref.wav --out out_cv3.wav
 
 # OpenAI-compatible server (either model): `serve` / `serve --cv3`
-cargo run -p syrinx-cli --features real -- serve --cv3 --ref-wav ref.wav --port 8080
+cargo run -p syrinx-cli -- serve --cv3 --ref-wav ref.wav --port 8080
 curl -s localhost:8080/v1/audio/speech -H 'content-type: application/json' \
   -d '{"model":"syrinx-cv3","input":"hello","voice":"v","response_format":"wav"}' -o out.wav
 ```
 
-**Requirements:** a stable Rust toolchain for the default build. The **real** model path
-(`--features real`) additionally needs the CosyVoice2-0.5B **or** CosyVoice3-0.5B weights +
-reference fixtures on disk (the parity tests are env-gated on them); the **`cuda`** speed path
-needs an NVIDIA GPU + the Candle-CUDA toolchain (~26× faster, near real-time).
+**Requirements:** a stable Rust toolchain. Synthesis needs the CosyVoice2-0.5B **or**
+CosyVoice3-0.5B weights + reference fixtures on disk (the parity tests are env-gated on
+them); the **`cuda`** speed path needs an NVIDIA GPU + the Candle-CUDA toolchain (~26×
+faster, near real-time).
 
 ---
 
@@ -271,7 +244,7 @@ the harness will not mark a task done on belief.
 ## Roadmap
 
 **Done (real, verified):**
-- [x] Eleven-crate workspace + CI
+- [x] Nine-crate workspace + CI (the real ports are the default build)
 - [x] **Real CosyVoice2-0.5B port** — LM (+ KV-cache gen) · CAM++ speaker · flow-matching · HiFT · frontend, all Candle, all parity-verified
 - [x] **End-to-end `Synthesizer`** — `text + ref → audio`, full-chain parity 7.7e-5, no Python on the hot path
 - [x] **GPU runtime** (Candle-CUDA) — ~26×, RTF ≈ 1.67 (near real-time on a consumer GPU)
@@ -289,11 +262,12 @@ the harness will not mark a task done on belief.
 - [ ] **Cross-lingual eval set** — the SIM-o/WER/MOS harness already handles it; just needs a multilingual frozen eval set + a sweep (the Whisper helper is language-aware).
 - [x] **Smaller footprint** — int4 LM linears + int4 embeddings + int4 flow/HiFT/speaker + **dropping the unused `lm_head`** (519 MB of dead weight CV2's speech path never calls) land the whole model at **388 MB** (from ~2983 fp32, **~7.7×**). The README's "270 MB" budget under-counted the Qwen2-0.5B body; 388 MB is the honest 4-bit floor. ⚠️ The int4 dequant-on-fetch is **slow to load/infer** — it's an **opt-in** path (`load_quantized`), not the default; fast int4 kernels are the follow-up.
 - [x] **Perceptual-quality source + CFM noise** — `synthesize_quality` uses the real random-phase NSF SineGen (8 overtones + uv mask + Gaussian breath + learned source merge) **and** a seeded standard-normal CFM init (the model's `rand_noise`) instead of the deterministic zero-phase source + zeros. Measured UTMOS: **2.03 → 2.21 (source) → 2.36 (+`z`)**. Remaining quality headroom is the capped-gen mel + the model's true RNG byte-stream (not portable).
-- [ ] **Consolidation** — retire the orphaned deterministic spec-engine modules (frontend normalize/G2P/SSML, toy prosody) now superseded by the real pipeline.
+- [x] **Consolidation** — the original Ratchet build-methodology scaffold (the GPU-less,
+  FNV-name-seeded "deterministic spec engine" proxy: `syrinx-core`, `syrinx-stream`, the toy
+  LM/attention/tensor modules, the eval-harness skeleton, the toy prosody/eval tests) has been
+  **removed**; the real CosyVoice2/3 ports are now the primary/default build.
 
-The "deterministic spec engine" rows above were Ratchet's GPU-less, parity-gated **proxy**; the real
-CosyVoice2 pipeline supersedes them, and several of those modules are now orphaned (slated for the
-consolidation pass). See [`DESIGN.md`](DESIGN.md) for the full task-based plan.
+See [`DESIGN.md`](DESIGN.md) for the full task-based plan.
 
 ---
 

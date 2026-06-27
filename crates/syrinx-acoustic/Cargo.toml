@@ -5,11 +5,12 @@ edition = "2021"
 publish = false
 
 [features]
+# The real ports are the primary build — ON BY DEFAULT.
+default = ["real"]
 # The real CosyVoice2 flow-matching mel decoder (CausalMaskedDiffWithXvec) on
-# Candle. Off by default so the default build stays Candle-free; enabled on the
-# model box for numerical parity against the Python reference. Also enables the
-# real HiFT vocoder so the deterministic `token2wav` (tokens -> mel -> audio)
-# zero-shot slice can be wired end-to-end behind this one feature.
+# Candle. Also enables the real HiFT vocoder so the deterministic `token2wav`
+# (tokens -> mel -> audio) zero-shot slice can be wired end-to-end behind this
+# one feature.
 real = ["dep:candle-core", "dep:candle-nn", "dep:syrinx-vocoder", "syrinx-vocoder/real"]
 # GPU (CUDA) speed path: the flow-matching CFM ODE + HiFT on GPU. Output is not
 # bit-equal to CPU (CUDA is for speed only).

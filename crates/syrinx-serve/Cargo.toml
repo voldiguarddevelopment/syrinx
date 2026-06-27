@@ -5,10 +5,11 @@ edition = "2021"
 publish = false
 
 [features]
-# The real CosyVoice2 end-to-end synthesizer (the capstone). Off by default so the
-# Axum scaffold + CI stay Candle-free; enabled on the model box to wire the five
-# parity-verified components into one `text + voice -> 24 kHz audio` pipeline. Pulls
-# Candle + each sub-crate's own `real` feature.
+# The real CosyVoice2 end-to-end synthesizer (the capstone) is the primary build —
+# ON BY DEFAULT. It wires the five parity-verified components into one
+# `text + voice -> 24 kHz audio` pipeline; pulls Candle + each sub-crate's own
+# `real` feature. The Axum server router/`Synth` trait stay available regardless.
+default = ["real"]
 real = [
     "dep:candle-core",
     "dep:hound",

@@ -18,68 +18,30 @@ publish = false
 resolver = "2"
 members = [
     "crates/syrinx-frontend",
-    "crates/syrinx-core",
     "crates/syrinx-lm",
     "crates/syrinx-speaker",
     "crates/syrinx-acoustic",
     "crates/syrinx-vocoder",
     "crates/syrinx-prosody",
-    "crates/syrinx-stream",
     "crates/syrinx-serve",
     "crates/syrinx-eval",
     "crates/syrinx-cli",
 ]
 
-# Dev-deps for the frozen integration tests under tests/. `syrinx-eval` hosts the
-# eval-harness skeleton (T-00.03); `serde_json` is used by the tests to parse the
-# metrics JSON the harness writes. These appear on the root package only, so they
-# do not touch the [workspace]/members assertions the scaffold tests pin.
+# Dev-deps for the integration tests under tests/. The real_* parity/eval tests
+# parse JSON goldens (`serde_json`); the audio-server tests drive the Axum
+# `/v1/audio/speech` router via `tower::oneshot` (axum/tower/tokio/http-body).
 [dev-dependencies]
-syrinx-eval = { path = "crates/syrinx-eval" }
 serde_json = "1"
-# The prosody-plan / render-plan frozen tests at the repo root drive
-# `syrinx-frontend` (kept modules) and `syrinx-prosody`.
-syrinx-frontend = { path = "crates/syrinx-frontend" }
-# T-03.01 prosody-plan frozen tests drive the editable prosody-plan data model
-# (`syrinx-prosody::plan`) through the root `tests/`. RED: the crate exposes no
-# `plan` module yet, so the test target fails to build; GREEN adds it.
-syrinx-prosody = { path = "crates/syrinx-prosody" }
-# T-08.01 audio-server scaffold frozen tests drive the Axum `/v1/audio/speech`
-# route and the pluggable synth trait (`syrinx-serve`) through the root `tests/`.
-# RED: `syrinx-serve` exposes no router/request/synth types yet, so the test
-# target fails to build; GREEN adds them. axum/tower/tokio/http-body let the test
-# drive the router via `tower`'s `oneshot` and inspect the response shape.
-syrinx-serve = { path = "crates/syrinx-serve" }
 axum = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tower = { version = "0.5", features = ["util"] }
 http-body = "1"
-# T-02.01a core-arith frozen tests drive `syrinx-core`'s `Tensor` plus the
-# `matmul`/`add`/`mul` reference path and its typed `ShapeError`, gated on the
-# parity goldens under `tests/golden/parity/`, through the root `tests/`. RED:
-# `syrinx-core` exposes no `Tensor`/`matmul`/`add`/`mul`/`ShapeError` yet, so the
-# test target fails to build; GREEN adds them. `serde_json` (already a dev-dep
-# above) parses the goldens.
-syrinx-core = { path = "crates/syrinx-core" }
-# T-02.02a multi-head causal attention frozen tests drive `syrinx-lm::attention`
-# (which composes the `syrinx-core` primitives) through the root `tests/`. RED:
-# `syrinx-lm` exposes no `attention` yet, so `tests/attention_prop.rs` fails to
-# build; GREEN adds it. The test also uses `syrinx-core`'s `Tensor`/`linear`/
-# `rope`/`weights` (already a dep above) to build inputs and an independent
-# reference. (syrinx-lm is declared in [dependencies] below — non-dev — so the
-# `real` feature can toggle its real-model module; the attention test uses it
-# the same way regardless of the section.)
-# T-07.01 streaming ring-buffer frozen tests drive `syrinx-stream`'s `RingBuffer`
-# plus its `BufferError::Backpressure` full-buffer signal through the root
-# `tests/`. RED: `syrinx-stream` exposes no `RingBuffer`/`BufferError` yet, so
-# `tests/stream_ring_buffer.rs` fails to build; GREEN adds them.
-syrinx-stream = { path = "crates/syrinx-stream" }
 
-# Real-model (Candle) parity tests live at the repo root (`tests/real_*.rs`) per
-# the frozen scaffold rule that member crates host no tests. They run only with
-# `--features real`, which pulls Candle + each crate's own `real` feature; the
-# default build stays Candle-free. `syrinx-lm` is non-optional (the T-02.02a
-# attention frozen test uses it); the rest are pulled in only by `real`.
+# The real ports are the primary surface and are ON BY DEFAULT (see `[features]`).
+# The real-model (Candle) parity/eval tests live at the repo root (`tests/real_*.rs`)
+# — member crates host no tests. `syrinx-lm` is non-optional; the rest are pulled in
+# by the default `real` feature.
 [dependencies]
 syrinx-lm = { path = "crates/syrinx-lm" }
 syrinx-speaker = { path = "crates/syrinx-speaker", optional = true }
@@ -99,6 +61,10 @@ syrinx-eval = { path = "crates/syrinx-eval", optional = true }
 candle-core = { version = "0.8", optional = true }
 
 [features]
+# The real CosyVoice2/3 ports are the primary build — ON BY DEFAULT, so a plain
+# `cargo build` / `cargo test` builds the real model stack (Candle as a normal dep)
+# and the `real_*` + `tn` tests.
+default = ["real", "tn"]
 real = [
     "dep:candle-core",
     "dep:syrinx-speaker",

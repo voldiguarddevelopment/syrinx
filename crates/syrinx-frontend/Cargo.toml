@@ -5,9 +5,10 @@ edition = "2021"
 publish = false
 
 [features]
-# Real-model track (model box only): off by default so the toy/CI build stays
-# light + dependency-free. Enabled for numerical parity against the CosyVoice2
-# Python reference. The text tokenizer pulls the Hugging Face `tokenizers` crate;
+# The real text frontend is the primary build — ON BY DEFAULT.
+default = ["real"]
+# Real-model track: numerical parity against the CosyVoice2 Python reference.
+# The text tokenizer pulls the Hugging Face `tokenizers` crate;
 # the audio feature extractor (kaldi fbank + prompt mel) pulls `rustfft`; the
 # prompt speech-token tokenizer pulls `ndarray` + `ort` (ONNX Runtime).
 real = ["dep:tokenizers", "dep:rustfft", "dep:ndarray", "dep:ort", "tn"]

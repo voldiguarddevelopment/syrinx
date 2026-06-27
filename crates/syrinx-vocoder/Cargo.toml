@@ -5,8 +5,9 @@ edition = "2021"
 publish = false
 
 [features]
-# The real CosyVoice2 HiFT vocoder forward on Candle (CPU fp32). Off by default so
-# the toy build + CI stay Candle-free; enabled on the model box for real parity.
+# The real ports are the primary build — ON BY DEFAULT.
+default = ["real"]
+# The real CosyVoice2 HiFT vocoder forward on Candle (CPU fp32).
 real = ["dep:candle-core", "dep:candle-nn"]
 # GPU (CUDA) speed path (see syrinx-lm `cuda`). Output is not bit-equal to CPU.
 cuda = ["real", "candle-core/cuda", "candle-nn/cuda"]

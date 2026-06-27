@@ -5,9 +5,9 @@ edition = "2021"
 publish = false
 
 [features]
-# The real CosyVoice2 speaker encoder (CAM++ / campplus) forward on Candle. Off by
-# default so the toy parity build + CI stay Candle-free; enabled on the model box for
-# real numerical parity against `campplus.onnx`.
+# The real ports are the primary build — ON BY DEFAULT.
+default = ["real"]
+# The real CosyVoice2 speaker encoder (CAM++ / campplus) forward on Candle.
 real = ["dep:candle-core", "dep:candle-nn"]
 # GPU (CUDA) speed path (see syrinx-lm `cuda`). Output is not bit-equal to CPU.
 cuda = ["real", "candle-core/cuda", "candle-nn/cuda"]
