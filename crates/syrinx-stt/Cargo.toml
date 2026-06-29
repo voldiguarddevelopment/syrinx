@@ -1,0 +1,43 @@
+[package]
+name = "syrinx-stt"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+# The real pure-Rust/Candle Whisper speech-to-text path is the primary build —
+# ON BY DEFAULT, mirroring the TTS crates. It pulls Candle + candle-transformers'
+# `models::whisper` (encoder/decoder + log-mel) in as normal dependencies.
+# Building `--no-default-features` yields an empty, Candle-free crate (the `wer`
+# helper stays available — it is pure Rust and not feature-gated).
+default = ["real"]
+real = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:candle-transformers",
+    "dep:tokenizers",
+    "dep:serde",
+    "dep:serde_json",
+]
+# GPU (CUDA) speed path: the same Whisper forward with Candle's CUDA backend so
+# `Stt::load(.., Device::new_cuda(..))` runs the encoder/decoder on GPU. Output is
+# not bit-equal to the CPU reference — CUDA is for speed only; CPU stays the oracle.
+cuda = [
+    "real",
+    "candle-core/cuda",
+    "candle-nn/cuda",
+    "candle-transformers/cuda",
+]
+
+[dependencies]
+# Candle backend (feature `real`, default-on) pinned to the workspace's 0.8 line.
+# `candle-transformers` provides `models::whisper` (the Whisper encoder/decoder +
+# `audio` log-mel helper) — we reuse it rather than reimplement Whisper.
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
+# The Whisper tokenizer is a HF `tokenizers` `tokenizer.json` (workspace dep).
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+# Parse the Whisper `config.json` into `candle_transformers::models::whisper::Config`.
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }

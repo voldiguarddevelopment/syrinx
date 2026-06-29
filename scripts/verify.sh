@@ -40,7 +40,10 @@ GROUP_cv3="real_cv3_lm_parity real_cv3_flow_parity real_cv3_flow_stream_consiste
 GROUP_cv3e2e="real_cv3_e2e_parity real_cv3_eval_metrics real_cv3_voice real_cv3_emotion"
 GROUP_fish_s1="real_fish_s1_parity real_fish_s1_e2e"
 GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e"
-ALL_GROUPS="modelfree cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2"
+# STT (pure-Rust Whisper): audio->text + the native TTS oracle. Self-skips off-box.
+#   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
+GROUP_stt="real_stt"
+ALL_GROUPS="modelfree cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
 [ "$QUICK" = 1 ] && ALL_GROUPS="modelfree"
 group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
 

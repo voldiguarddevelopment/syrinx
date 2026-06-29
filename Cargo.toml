@@ -27,6 +27,7 @@ members = [
     "crates/syrinx-eval",
     "crates/syrinx-cli",
     "crates/syrinx-fish",
+    "crates/syrinx-stt",
 ]
 
 # Dev-deps for the integration tests under tests/. The real_* parity/eval tests
@@ -63,6 +64,10 @@ syrinx-eval = { path = "crates/syrinx-eval", optional = true }
 # Fish Audio e2e + parity tests at the repo root (`tests/real_fish_*.rs`). Mirrors how
 # syrinx-serve / syrinx-eval are wired.
 syrinx-fish = { path = "crates/syrinx-fish", optional = true }
+# Optional normal dep so the root `real` feature can toggle `syrinx-stt/real` for the
+# Whisper STT e2e test at the repo root (`tests/real_stt.rs`) + the TTS↔STT oracle.
+# Mirrors how syrinx-eval / syrinx-fish are wired.
+syrinx-stt = { path = "crates/syrinx-stt", optional = true }
 candle-core = { version = "0.8", optional = true }
 
 [features]
@@ -87,6 +92,8 @@ real = [
     "syrinx-eval/real",
     "dep:syrinx-fish",
     "syrinx-fish/real",
+    "dep:syrinx-stt",
+    "syrinx-stt/real",
 ]
 # Text-normalizer parity track: enables `syrinx-frontend/textnorm` for the root
 # `tests/real_textnorm_parity.rs` test. Lightweight (pure Rust, no model deps), so
@@ -106,4 +113,5 @@ cuda = [
     "syrinx-vocoder/cuda",
     "syrinx-serve/cuda",
     "syrinx-fish/cuda",
+    "syrinx-stt/cuda",
 ]

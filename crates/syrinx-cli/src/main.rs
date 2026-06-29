@@ -53,6 +53,7 @@ COMMANDS:
     synth    Render text in a reference voice to a WAV file.
     serve    Boot the OpenAI-compatible audio server (POST /v1/audio/speech).
     stream   Chunk-streaming synthesis to a WAV (low first-chunk latency path).
+    stt      Transcribe a WAV to text (pure-Rust Whisper; the TTS test oracle).
 
 Run `syrinx <COMMAND> --help` for command-specific options.
 
@@ -154,6 +155,24 @@ syrinx stream — chunk-streaming synthesis to a WAV
     --hop <TOKENS>         Finalized speech tokens per emitted chunk (default 25).
 ";
 
+    const STT_USAGE: &str = "\
+syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
+
+    syrinx stt --wav <FILE> [--model-dir <DIR>] [--lang <L>] [--cuda]
+               [--check-tts \"<expected text>\"]
+
+    --wav <FILE>           Audio clip to transcribe (any rate; resampled to 16 kHz).
+    --model-dir <DIR>      Whisper model dir: config.json + tokenizer.json +
+                           model.safetensors (HF openai/whisper-* layout).
+                           Defaults to $SYRINX_STT_MODEL_DIR.
+    --lang <L>             Force the language (e.g. en, zh); default auto-detect.
+    --check-tts <TEXT>     Also print the word error rate (WER) of the transcript
+                           against <TEXT> — the TTS-intelligibility oracle.
+    --cuda                 Run on GPU (requires a --features cuda build).
+
+    Prints the transcript and the detected language to stdout.
+";
+
     #[derive(Default)]
     struct Opts {
         text: Option<String>,
@@ -181,6 +200,10 @@ syrinx stream — chunk-streaming synthesis to a WAV
         // --- Fish Audio front door (`synth --fish` only) ---
         fish: Option<String>,
         fish_dir: Option<PathBuf>,
+        // --- speech-to-text (`stt` only) ---
+        wav: Option<PathBuf>,
+        lang: Option<String>,
+        check_tts: Option<String>,
     }
 
     pub fn run() -> i32 {
@@ -196,6 +219,7 @@ syrinx stream — chunk-streaming synthesis to a WAV
             "synth" => (SYNTH_USAGE, cmd_synth),
             "serve" => (SERVE_USAGE, cmd_serve),
             "stream" => (STREAM_USAGE, cmd_stream),
+            "stt" => (STT_USAGE, cmd_stt),
             "-h" | "--help" | "help" => {
                 println!("{USAGE}");
                 return 0;
@@ -272,6 +296,9 @@ syrinx stream — chunk-streaming synthesis to a WAV
                 "--emotion-lang" => o.emotion_lang = Some(need(&mut argv, "--emotion-lang")?),
                 "--fish" => o.fish = Some(need(&mut argv, "--fish")?),
                 "--fish-dir" => o.fish_dir = Some(PathBuf::from(need(&mut argv, "--fish-dir")?)),
+                "--wav" => o.wav = Some(PathBuf::from(need(&mut argv, "--wav")?)),
+                "--lang" => o.lang = Some(need(&mut argv, "--lang")?),
+                "--check-tts" => o.check_tts = Some(need(&mut argv, "--check-tts")?),
                 "-h" | "--help" => {
                     println!("{usage}");
                     std::process::exit(0);
@@ -843,5 +870,62 @@ syrinx stream — chunk-streaming synthesis to a WAV
         let real = RealSynth::new(synth, prompt_text, r16, r24).with_max_gen_steps(o.max_steps);
         eprintln!("syrinx serve: listening on http://{addr}  (POST /v1/audio/speech)");
         syrinx_serve::serve_blocking(real, addr).map_err(|e| e.to_string())
+    }
+
+    /// `stt` — transcribe a WAV with the pure-Rust Whisper engine. The mirror of
+    /// the synth path: `audio -> text`, and the native TTS-intelligibility oracle
+    /// (`--check-tts` prints the WER of the transcript vs. the expected text).
+    fn cmd_stt(o: Opts) -> Result<(), String> {
+        let wav = o.wav.clone().ok_or("missing required --wav")?;
+
+        // Model dir: --model-dir, else $SYRINX_STT_MODEL_DIR.
+        let model_dir = o
+            .model_dir
+            .clone()
+            .or_else(|| std::env::var("SYRINX_STT_MODEL_DIR").ok().map(PathBuf::from))
+            .ok_or(
+                "no Whisper model: pass --model-dir <DIR> or set SYRINX_STT_MODEL_DIR \
+                 (dir with config.json + tokenizer.json + model.safetensors)",
+            )?;
+
+        if o.cuda && !cfg!(feature = "cuda") {
+            eprintln!(
+                "syrinx: --cuda requested but this binary was built without the `cuda` \
+                 feature; running on CPU"
+            );
+        }
+        let dev = if o.cuda {
+            syrinx_serve::synth::pick_device(None)
+        } else {
+            candle_core::Device::Cpu
+        };
+
+        // Reuse syrinx-serve's WAV reader/resampler — its 16 kHz mono buffer is
+        // exactly what Whisper consumes.
+        let (samples_16k, _r24) = wavio::read_ref_wav(&wav).map_err(|e| e.to_string())?;
+
+        let stt = syrinx_stt::Stt::load(&model_dir, dev).map_err(|e| e.to_string())?;
+        let transcript = stt
+            .transcribe_lang(&samples_16k, 16_000, o.lang.as_deref())
+            .map_err(|e| e.to_string())?;
+
+        let lang = transcript.language.as_deref().unwrap_or("?");
+        eprintln!(
+            "syrinx stt: {} ({} segment(s), language: {lang})",
+            wav.display(),
+            transcript.segments.len()
+        );
+        println!("language: {lang}");
+        println!("{}", transcript.text);
+
+        if let Some(expected) = &o.check_tts {
+            let score = syrinx_stt::wer(expected, &transcript.text);
+            println!("wer: {score:.4}");
+            eprintln!(
+                "syrinx stt --check-tts: WER {score:.4} (expected {:?} vs transcript {:?})",
+                expected, transcript.text
+            );
+        }
+        Ok(())
     }
 }

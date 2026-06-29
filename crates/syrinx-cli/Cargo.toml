@@ -17,10 +17,12 @@ real = [
     "dep:syrinx-serve",
     "dep:syrinx-prosody",
     "dep:syrinx-fish",
+    "dep:syrinx-stt",
     "dep:serde_json",
     "dep:candle-core",
     "syrinx-serve/real",
     "syrinx-fish/real",
+    "syrinx-stt/real",
 ]
 # Text normalization: build the CLI with `tn` to normalize text (wetext-style zh+en)
 # before tokenizing in the `synth`/`serve`/`stream` paths. A build-time choice (the
@@ -29,7 +31,7 @@ tn = ["real", "syrinx-serve/tn"]
 # GPU (CUDA) speed path for `--cuda`: pulls syrinx-serve's `cuda` feature so
 # `pick_device`/`load_on_device` can open `cuda:i`. Output is not bit-equal to the
 # CPU reference — CUDA is for speed only.
-cuda = ["real", "syrinx-serve/cuda", "syrinx-fish/cuda"]
+cuda = ["real", "syrinx-serve/cuda", "syrinx-fish/cuda", "syrinx-stt/cuda"]
 
 [dependencies]
 # The synthesizer + WAV-I/O helpers live behind syrinx-serve's `real` feature;
@@ -41,6 +43,9 @@ syrinx-prosody = { path = "../syrinx-prosody", optional = true }
 # The pure-Rust Fish Audio port (openaudio-s1-mini / s2-pro) behind `synth --fish`;
 # pulled only under `real` (its Candle backends live behind `syrinx-fish/real`).
 syrinx-fish = { path = "../syrinx-fish", optional = true }
+# The pure-Rust Whisper STT engine behind the `stt` command (audio -> text) and the
+# native TTS-intelligibility oracle (`--check-tts` WER). Real-gated like the rest.
+syrinx-stt = { path = "../syrinx-stt", optional = true }
 # Parse a `--plan <FILE.json>` render plan.
 serde_json = { version = "1", optional = true }
 # The `Device` handed to `Cv3Synthesizer::load_with_lm` for the `--rl` checkpoint

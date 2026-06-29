@@ -44,8 +44,12 @@ GROUP_cv3e2e="real_cv3_e2e_parity real_cv3_eval_metrics real_cv3_voice real_cv3_
 # tolerates absent files (reports SKIP) so this script is stable as the port lands.
 GROUP_fish_s1="real_fish_s1_parity real_fish_s1_e2e"
 GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e"
+# STT (pure-Rust Whisper) — the audio->text reverse path + the native TTS oracle.
+# Env-gated on a Whisper model dir + a test clip; self-skips off-box. Download:
+#   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
+GROUP_stt="real_stt"
 
-ALL_GROUPS="modelfree cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2"
+ALL_GROUPS="modelfree cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
 
 group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
 
