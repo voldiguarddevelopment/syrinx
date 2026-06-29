@@ -71,13 +71,16 @@ impl SlowAr {
     }
 
     fn attn_shape(&self) -> AttnShape {
+        // The REAL s2-pro slow backbone carries QK-RMSNorm (`attention.{q,k}_norm`) and
+        // NO qkv/o bias. Derive these from the actual checkpoint tensors so the block is
+        // correct regardless of what the (sometimes incomplete) config.json declares.
         AttnShape {
             n_head: self.cfg.slow.n_head,
             n_local_heads: self.cfg.slow.n_local_heads,
             head_dim: self.cfg.slow.head_dim,
-            qkv_bias: self.cfg.slow.attention_qkv_bias,
-            o_bias: self.cfg.slow.attention_o_bias,
-            qk_norm: self.cfg.slow.attention_qk_norm,
+            qkv_bias: self.w.has("layers.0.attention.wqkv.bias"),
+            o_bias: self.w.has("layers.0.attention.wo.bias"),
+            qk_norm: self.w.has("layers.0.attention.q_norm.weight"),
             eps: self.cfg.slow.norm_eps,
         }
     }
@@ -179,8 +182,10 @@ impl SlowAr {
         let eps = self.cfg.slow.norm_eps;
         let normed = self.w.rms_norm(&last, "norm.weight", eps)?; // [1, 1, dim]
 
-        // Tied head (text_config.tie_word_embeddings == true): F.linear(norm, embeddings).
-        let logits = if self.cfg.slow.tie_word_embeddings {
+        // Tied head: the REAL s2-pro checkpoint ships NO `lm_head`/`output.weight`, so the
+        // slow head reuses `embeddings.weight` (`F.linear(norm, embeddings)`). Fall back to
+        // the tied path whenever a dedicated head is absent, independent of the config flag.
+        let logits = if self.cfg.slow.tie_word_embeddings || !self.w.has("output.weight") {
             let emb = self.w.g("embeddings.weight")?; // [vocab, dim]
             self.w.linear_w(&normed, &emb)?
         } else {
@@ -189,8 +194,11 @@ impl SlowAr {
         let logits = logits.reshape((self.cfg.slow.vocab_size,))?;
 
         // Hidden for the fast head: the report projects the slow hidden h_t^slow to the
-        // Fast AR's dim via `fast_project_in` (identity when fast_dim == slow dim, which
-        // is the published s2-pro case where both are 2560).
+        // Fast AR's dim via `fast_project_in` (identity when fast_dim == slow dim — the
+        // real s2-pro case, both 2560; the checkpoint carries NO `fast_project_in`).
+        // PARITY: `audio_decoder_config.norm_fastlayer_input` is true; the reference may
+        // feed the FINAL-RMSNorm'd hidden (`normed`, above) as the position-0 conditioning
+        // prefix rather than this pre-norm residual. Confirm the conditioning tap on-box.
         let hidden = if self.has_project_in {
             // PARITY: confirm whether fast_project_in carries a bias on-box.
             if self.w.has("fast_project_in.bias") {

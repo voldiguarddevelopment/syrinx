@@ -42,15 +42,18 @@ impl FastAr {
         Ok(Self { cos, sin, cfg })
     }
 
-    fn attn_shape(&self) -> AttnShape {
+    fn attn_shape(&self, w: &Weights) -> AttnShape {
         let f = &self.cfg.fast.transformer;
+        // The REAL s2-pro fast AR (`audio_decoder.*`) has the SAME block geometry as the
+        // slow backbone (head_dim 128, GQA 32:8, fused wqkv 6144 = q4096+k1024+v1024) but
+        // carries NO QK-norm and NO qkv/o bias — derive those from the actual tensors.
         AttnShape {
             n_head: f.n_head,
             n_local_heads: f.n_local_heads,
             head_dim: f.head_dim,
-            qkv_bias: f.attention_qkv_bias,
-            o_bias: f.attention_o_bias,
-            qk_norm: f.attention_qk_norm,
+            qkv_bias: w.has("fast_layers.0.attention.wqkv.bias"),
+            o_bias: w.has("fast_layers.0.attention.wo.bias"),
+            qk_norm: w.has("fast_layers.0.attention.q_norm.weight"),
             eps: f.norm_eps,
         }
     }
@@ -62,7 +65,7 @@ impl FastAr {
         let cos = self.cos.narrow(0, pos, 1)?;
         let sin = self.sin.narrow(0, pos, 1)?;
         let eps = self.cfg.fast.transformer.norm_eps;
-        let shape = self.attn_shape();
+        let shape = self.attn_shape(w);
         let mut h = x.clone();
         // Single new token attending over the full local cache ⇒ no mask needed.
         for l in 0..self.cfg.fast.transformer.n_layer {

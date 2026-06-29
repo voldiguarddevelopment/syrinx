@@ -11,11 +11,10 @@
 //!     `candle_core::pickle` (no on-box conversion required), strips a leading
 //!     `generator.` prefix if present, folds weight-norm, and casts to f32.
 //!
-//! PARITY: the exact published key layout is unconfirmed offline. The remap below handles
-//! BOTH (a) HF-Qwen3 names (`model.layers.N.self_attn.q_proj`, `model.embed_tokens`, …)
-//! and (b) fish-native names (`layers.N.attention.wqkv`, `embeddings`, …) by passing the
-//! latter through unchanged. Confirm which the real `s2-pro` checkpoint uses on-box, and
-//! confirm the audio-decoder / codebook-embedding key prefixes (the least-certain remap).
+//! The remap is keyed to the REAL `s2-pro` layout (dumped on-box, 358 tensors): the slow
+//! AR under `text_model.model.*` (qkv pre-fused, tied head) and the fast AR under
+//! `audio_decoder.*` (no QK-norm; shared value table + per-codebook MCF table + output
+//! head). HF-Qwen3 names and bare fish-native names are still accepted as fallbacks.
 
 use candle_core::{safetensors, DType, Device, Result, Tensor, D};
 use std::collections::{HashMap, HashSet};
@@ -118,13 +117,50 @@ fn resolve_shards(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     )))
 }
 
-/// Remap a Qwen3 / `fish_qwen3_omni` weight key to this backend's fish-native module
-/// name. Returns `None` to drop a key. Fish-native keys are passed through unchanged.
-//
-// PARITY: this remap is the single most checkpoint-layout-sensitive piece of the s2
-// loader. It assumes HF-Qwen3 naming for the slow backbone and a `fast`/`codebook`
-// naming for the audio decoder; confirm the real prefixes on-box and extend as needed.
+/// Remap a `fish_qwen3_omni` weight key to this backend's fish-native module name.
+/// Returns `None` to drop a key. Fish-native keys are passed through unchanged.
+///
+/// The REAL `s2-pro` checkpoint (358 tensors) uses two top prefixes:
+///   * `text_model.model.*` — the Qwen3-4B **slow** AR (36 layers). Its per-layer tails
+///     are already fish-native (`attention.wqkv` — pre-FUSED q4096+k1024+v1024,
+///     `attention.{q,k}_norm`, `attention_norm`, `ffn_norm`, `feed_forward.{w1,w2,w3}`).
+///     The LM head is **tied** (no `lm_head` tensor ships) → the slow head reuses
+///     `text_model.model.embeddings.weight`.
+///   * `audio_decoder.*` — the 4-layer **fast** AR. Same block tails as the slow AR but
+///     WITHOUT `q_norm`/`k_norm`, plus the shared value table (`embeddings`), the
+///     per-codebook MCF offset table (`codebook_embeddings`, 10×4096, consumed by the
+///     SLOW embed), the final `norm` and the `output` head.
 fn remap_qwen3_key(k: &str) -> Option<String> {
+    // ---- The REAL s2-pro namespace (text_model.* slow, audio_decoder.* fast) -------
+    // Slow backbone: strip `text_model.model.layers.N.` → `layers.N.` (tail unchanged).
+    if let Some(rest) = k.strip_prefix("text_model.model.layers.") {
+        let (n, tail) = rest.split_once('.')?;
+        return Some(format!("layers.{n}.{tail}"));
+    }
+    match k {
+        "text_model.model.embeddings.weight" => return Some("embeddings.weight".to_string()),
+        "text_model.model.norm.weight" => return Some("norm.weight".to_string()),
+        // The head is tied (no lm_head ships); honour an explicit head if a future
+        // export adds one.
+        "text_model.lm_head.weight" => return Some("output.weight".to_string()),
+        _ => {}
+    }
+    // Fast AR (audio decoder): strip `audio_decoder.layers.N.` → `fast_layers.N.`.
+    if let Some(rest) = k.strip_prefix("audio_decoder.layers.") {
+        let (n, tail) = rest.split_once('.')?;
+        return Some(format!("fast_layers.{n}.{tail}"));
+    }
+    match k {
+        "audio_decoder.embeddings.weight" => return Some("fast_embeddings.weight".to_string()),
+        "audio_decoder.codebook_embeddings.weight" => {
+            return Some("codebook_embeddings.weight".to_string())
+        }
+        "audio_decoder.norm.weight" => return Some("fast_norm.weight".to_string()),
+        "audio_decoder.output.weight" => return Some("fast_output.weight".to_string()),
+        _ => {}
+    }
+
+    // ---- Fish-native passthrough + legacy HF-Qwen3 fallback ------------------------
     // Already fish-native (the fish-speech `DualARTransformer` state dict) → pass through.
     if k.starts_with("layers.")
         || k.starts_with("fast_layers.")

@@ -52,6 +52,42 @@ mod backend {
     use crate::common::sampling::Sampler;
     use crate::FishVariant;
 
+    /// Reconcile the fast-AR geometry + residual codebook width against the REAL loaded
+    /// `audio_decoder.*` tensors. In the published s2-pro checkpoint the fast AR block is
+    /// structurally identical to the slow backbone (dim 2560, GQA 32:8, head_dim 128, ffn
+    /// 9728, fused wqkv 6144 = q4096+k1024+v1024) — only the layer count (4), the shared
+    /// 4096-wide code table, and the absence of QK-norm/qkv-o bias differ. Deriving from
+    /// the tensors guarantees the right shapes even when config.json's
+    /// `audio_decoder_config` omits fields (whose variant defaults are a smaller head).
+    fn reconcile_fast_cfg(cfg: &mut FishConfig, w: &super::nn::Weights) -> Result<()> {
+        // No fast tables loaded (e.g. a slow-only checkpoint) → leave the config as-is.
+        if !w.has("fast_embeddings.weight") {
+            return Ok(());
+        }
+        // The fast block mirrors the slow backbone's geometry.
+        let s = cfg.slow.clone();
+        {
+            let f = &mut cfg.fast.transformer;
+            f.dim = s.dim;
+            f.n_head = s.n_head;
+            f.n_local_heads = s.n_local_heads;
+            f.head_dim = s.head_dim;
+            f.intermediate_size = s.intermediate_size;
+            f.rope_base = s.rope_base;
+            f.norm_eps = s.norm_eps;
+            // Verified against the tensors: the fast AR has no QK-norm and no qkv/o bias.
+            f.attention_qk_norm = w.has("fast_layers.0.attention.q_norm.weight");
+            f.attention_qkv_bias = w.has("fast_layers.0.attention.wqkv.bias");
+            f.attention_o_bias = w.has("fast_layers.0.attention.wo.bias");
+        }
+        // Residual codebook width == the shared value/output table height (4096). This is
+        // both the MCF per-codebook stride on the slow embed and the fast head's logit
+        // width (and so `first_code`'s clamp ceiling).
+        let residual = w.g("fast_embeddings.weight")?.dim(0)?;
+        cfg.codec.residual_size = residual;
+        Ok(())
+    }
+
     /// The fully-wired s2 backend: tokenizer + slow AR + fast AR + codec.
     pub struct S2Pro {
         cfg: FishConfig,
@@ -91,6 +127,9 @@ mod backend {
             cfg.stop_token_id = tokenizer.im_end_id;
 
             let lm_w = load_lm(dir, dev.clone())?;
+            // Reconcile the fast-AR geometry + residual codebook width against the REAL
+            // `audio_decoder.*` tensors before wiring the heads (see `reconcile_fast_cfg`).
+            reconcile_fast_cfg(&mut cfg, &lm_w)?;
             let slow = SlowAr::new(lm_w, cfg.clone())?;
             let fast = FastAr::new(cfg.clone(), &dev)?;
 
