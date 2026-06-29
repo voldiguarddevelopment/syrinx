@@ -19,18 +19,27 @@
 // bias, applied to q and k *before* RoPE). config.json says attention_qkv_bias=false,
 // attention_o_bias=false, attention_qk_norm=true for text_config.
 
-use candle_core::{Device, Result, Tensor, D};
+use candle_core::{Device, DType, Result, Tensor, D};
 use std::collections::HashMap;
 
-/// A name → f32 `Tensor` weight bag (the loaded checkpoint), plus the device.
+/// A name → `Tensor` weight bag (the loaded checkpoint), plus the device and the
+/// **compute dtype** `dt` every weight is stored in.
 ///
-/// All weights are normalised to f32 at load (the parity build), so `linear` is the
-/// plain `x @ Wᵀ` reference matmul and `rms_norm` runs in f32 — matching the Python
-/// reference (which casts to f32 inside RMSNorm). The published `s2-pro` LM ships bf16
-/// across two shards; [`super::load`] casts every shard to f32 here.
+/// `dt` selects the precision of the whole forward: **f32** on CPU (the parity build —
+/// `linear` is the plain `x @ Wᵀ` reference matmul) and **bf16** on CUDA (so the 4.4B
+/// LM fits a 12 GB GPU). The published `s2-pro` LM ships bf16 across two shards;
+/// [`super::load`] casts every shard to `dt` here.
+///
+// PARITY: bf16 (`dt == BF16`) is the GPU-fit path and may diverge numerically from the
+// f32 CPU parity path. To stay stable, every variance/normalisation reduction below is
+// computed in f32 internally (cast x→f32, reduce, normalise, cast back to `dt`) and the
+// final logits are returned in f32 for the sampler. When `dt == F32` every such cast is
+// an identity, so the CPU path is byte-unchanged.
 pub struct Weights {
     pub map: HashMap<String, Tensor>,
     pub dev: Device,
+    /// The dtype every weight is stored in and the transformer runs in (f32 or bf16).
+    pub dt: DType,
 }
 
 impl Weights {
@@ -64,13 +73,14 @@ impl Weights {
         x.broadcast_matmul(&w.t()?)
     }
 
-    /// RMSNorm: `x * rsqrt(mean(x², -1) + eps) * weight`, computed in f32 (the
-    /// reference casts `x.float()` inside `_norm`, then re-applies the weight).
+    /// RMSNorm: `x * rsqrt(mean(x², -1) + eps) * weight`. The normalisation is computed
+    /// in f32 (the reference casts `x.float()` inside `_norm`), then the result is cast
+    /// back to `x`'s dtype and the weight (in `dt`) is re-applied. For the f32 CPU path
+    /// the f32 round-trip is an identity.
+    // PARITY: bf16-stability — the mean-of-squares reduction stays in f32 regardless of `dt`.
     pub fn rms_norm(&self, x: &Tensor, wname: &str, eps: f64) -> Result<Tensor> {
         let w = self.g(wname)?;
-        let var = x.sqr()?.mean_keepdim(D::Minus1)?;
-        let xn = x.broadcast_div(&(var + eps)?.sqrt()?)?;
-        xn.broadcast_mul(&w)
+        rms_norm_w(x, &w, eps)
     }
 
     /// Gather rows `ids` of the embedding table `table` → `[ids.len(), dim]`.
@@ -83,9 +93,15 @@ impl Weights {
 
 /// Bare RMSNorm against an explicit weight tensor (used inside per-head QK-norm,
 /// where the weight is a `[head_dim]` vector, not a named-bag lookup).
+///
+/// The variance reduction + normalisation run in f32 for bf16-stability; the normalised
+/// activation is cast back to `x`'s dtype before the (dtype-`dt`) weight multiply. When
+/// `x` is already f32 every cast is an identity, so the CPU path is byte-unchanged.
 pub fn rms_norm_w(x: &Tensor, w: &Tensor, eps: f64) -> Result<Tensor> {
-    let var = x.sqr()?.mean_keepdim(D::Minus1)?;
-    let xn = x.broadcast_div(&(var + eps)?.sqrt()?)?;
+    let dt = x.dtype();
+    let xf = x.to_dtype(DType::F32)?;
+    let var = xf.sqr()?.mean_keepdim(D::Minus1)?;
+    let xn = xf.broadcast_div(&(var + eps)?.sqrt()?)?.to_dtype(dt)?;
     xn.broadcast_mul(w)
 }
 
@@ -94,11 +110,16 @@ pub fn rms_norm_w(x: &Tensor, w: &Tensor, eps: f64) -> Result<Tensor> {
 /// Mirrors `precompute_freqs_cis`: `inv_freq[i] = base^-(2i/head_dim)`,
 /// `angle[t,i] = t * inv_freq[i]`, and the cos/sin are the real/imag of
 /// `polar(1, angle)`. The interleaved [`apply_rotary_emb`] consumes these.
+///
+/// The angles are always computed in f32 (precision), then the cos/sin tables are cast
+/// to `dt` so they can be consumed by `dt`-typed activations — Candle errors on a mixed
+/// f32-table × bf16-x op. For `dt == F32` the cast is an identity (CPU path unchanged).
 pub fn precompute_rope(
     seq_len: usize,
     head_dim: usize,
     base: f64,
     dev: &Device,
+    dt: DType,
 ) -> Result<(Tensor, Tensor)> {
     let half = head_dim / 2;
     let inv_freq: Vec<f32> = (0..half)
@@ -114,8 +135,8 @@ pub fn precompute_rope(
         }
     }
     Ok((
-        Tensor::from_vec(cos, (seq_len, half), dev)?,
-        Tensor::from_vec(sin, (seq_len, half), dev)?,
+        Tensor::from_vec(cos, (seq_len, half), dev)?.to_dtype(dt)?,
+        Tensor::from_vec(sin, (seq_len, half), dev)?.to_dtype(dt)?,
     ))
 }
 
@@ -157,7 +178,9 @@ pub fn repeat_kv(x: &Tensor, n: usize) -> Result<Tensor> {
 
 /// Additive causal mask `[t_new, offset + t_new]`: query row `i` (absolute position
 /// `offset + i`) may attend key `j` iff `j <= offset + i`, else `-inf`.
-pub fn causal_mask_at(offset: usize, t_new: usize, dev: &Device) -> Result<Tensor> {
+/// Built in f32 then cast to `dt` so it adds cleanly onto `dt`-typed attention scores
+/// (bf16 represents `-inf` exactly). For `dt == F32` the cast is an identity.
+pub fn causal_mask_at(offset: usize, t_new: usize, dev: &Device, dt: DType) -> Result<Tensor> {
     let total = offset + t_new;
     let mut data = vec![0f32; t_new * total];
     for i in 0..t_new {
@@ -166,7 +189,7 @@ pub fn causal_mask_at(offset: usize, t_new: usize, dev: &Device) -> Result<Tenso
             data[i * total + j] = f32::NEG_INFINITY;
         }
     }
-    Tensor::from_vec(data, (t_new, total), dev)
+    Tensor::from_vec(data, (t_new, total), dev)?.to_dtype(dt)
 }
 
 /// One layer's running K/V for incremental autoregressive decoding. K is stored

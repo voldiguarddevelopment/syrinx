@@ -235,8 +235,14 @@ impl EvaGanDac {
     /// `[B, T, C]`): `gx = ‖x‖_2(dim=T)`, `nx = gx / mean(gx, dim=C)`, then
     /// `gamma * (x * nx) + beta + x`.
     fn grn(&self, x: &Tensor, prefix: &str) -> Result<Tensor> {
-        let gx = x.sqr()?.sum_keepdim(1)?.sqrt()?; // [B, 1, C]
-        let nx = gx.broadcast_div(&(gx.mean_keepdim(D::Minus1)? + 1e-6)?)?; // [B, 1, C]
+        // PARITY: the response-norm reduction runs in f32 for bf16-stability; `nx` is
+        // cast back to `x`'s dtype before the elementwise combine. Identity for f32.
+        let dt = x.dtype();
+        let xf = x.to_dtype(DType::F32)?;
+        let gx = xf.sqr()?.sum_keepdim(1)?.sqrt()?; // [B, 1, C]
+        let nx = gx
+            .broadcast_div(&(gx.mean_keepdim(D::Minus1)? + 1e-6)?)?
+            .to_dtype(dt)?; // [B, 1, C]
         let gamma = self.w.g(&format!("{prefix}.grn.gamma"))?;
         let beta = self.w.g(&format!("{prefix}.grn.beta"))?;
         let c = x.dim(D::Minus1)?;
@@ -363,7 +369,9 @@ impl EvaGanDac {
         let z = self.transformer("quantizer.post_module", &z)?;
         let z = self.upsample(&z)?;
         let wav = self.run_generator(&z)?; // [1, 1, L]
-        wav.reshape((wav.dim(D::Minus1)?,))
+        // PARITY: return the waveform in f32 regardless of the compute dtype — the WAV
+        // writer / `to_vec1::<f32>` consumers expect f32. Identity on the f32 CPU path.
+        wav.reshape((wav.dim(D::Minus1)?,))?.to_dtype(DType::F32)
     }
 
     // --- Encoder + RVQ analysis (encode / cloning) ----------------------------
@@ -465,7 +473,9 @@ impl EvaGanDac {
         let cbn = l2_normalize(&cb)?;
         let sim = enc.matmul(&cbn.t()?)?; // [T, size]
         let size = cb.dim(0)?;
-        let sim_host: Vec<f32> = sim.flatten_all()?.to_vec1()?;
+        // PARITY: the nearest-codebook argmin reads f32 similarities — cast up before the
+        // host copy (bf16 `to_vec1::<f32>` would fail and the argmin wants f32 precision).
+        let sim_host: Vec<f32> = sim.to_dtype(DType::F32)?.flatten_all()?.to_vec1()?;
         let mut codes = vec![0u32; t];
         for (ti, code) in codes.iter_mut().enumerate() {
             let row = &sim_host[ti * size..(ti + 1) * size];
@@ -561,8 +571,9 @@ impl EvaGanDac {
         let t = xt.dim(1)?;
         let head_dim = TF_HEAD_DIM;
         let n_head = dim / head_dim;
-        let (cos, sin) = precompute_rope(t, head_dim, TF_ROPE_BASE, self.dev())?;
-        let mask = causal_mask_at(0, t, self.dev())?; // full lower-triangular causal mask
+        let dt = self.w.dt;
+        let (cos, sin) = precompute_rope(t, head_dim, TF_ROPE_BASE, self.dev(), dt)?;
+        let mask = causal_mask_at(0, t, self.dev(), dt)?; // full lower-triangular causal mask
         let shape = AttnShape {
             n_head,
             n_local_heads: n_head,
@@ -627,16 +638,26 @@ fn extra_padding(length: usize, kernel_eff: usize, stride: usize, padding_total:
 }
 
 /// Channels-last `LayerNorm` over the last dim.
+//
+// PARITY: the mean/variance reduction runs in f32 for bf16-stability; the normalised
+// activation is cast back to `x`'s dtype before the (dtype-`dt`) affine. Identity for f32.
 fn layer_norm(x: &Tensor, w: &Tensor, b: &Tensor, eps: f64) -> Result<Tensor> {
-    let mean = x.mean_keepdim(D::Minus1)?;
-    let xc = x.broadcast_sub(&mean)?;
+    let dt = x.dtype();
+    let xf = x.to_dtype(DType::F32)?;
+    let mean = xf.mean_keepdim(D::Minus1)?;
+    let xc = xf.broadcast_sub(&mean)?;
     let var = xc.sqr()?.mean_keepdim(D::Minus1)?;
-    let xn = xc.broadcast_div(&(var + eps)?.sqrt()?)?;
+    let xn = xc.broadcast_div(&(var + eps)?.sqrt()?)?.to_dtype(dt)?;
     xn.broadcast_mul(w)?.broadcast_add(b)
 }
 
 /// `F.normalize(x, p=2, dim=-1)` with eps `1e-12`.
+//
+// PARITY: the L2 norm reduction runs in f32 for bf16-stability, then the result is cast
+// back to `x`'s dtype. Identity for the f32 CPU path.
 fn l2_normalize(x: &Tensor) -> Result<Tensor> {
-    let norm = x.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
-    x.broadcast_div(&norm.affine(1.0, NORM_EPS)?)
+    let dt = x.dtype();
+    let xf = x.to_dtype(DType::F32)?;
+    let norm = xf.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
+    xf.broadcast_div(&norm.affine(1.0, NORM_EPS)?)?.to_dtype(dt)
 }

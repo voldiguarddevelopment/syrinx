@@ -39,7 +39,7 @@ pub use backend::S2Pro;
 mod backend {
     use std::path::Path;
 
-    use candle_core::{Device, Result, Tensor};
+    use candle_core::{Device, DType, Result, Tensor};
 
     use super::codec::EvaGanDac;
     use super::fast_ar::FastAr;
@@ -102,7 +102,19 @@ mod backend {
         /// Load every s2 component from a checkpoint directory `dir` containing the
         /// sharded LM (`model-*-of-*.safetensors` + `model.safetensors.index.json`),
         /// `codec.pth`, `tokenizer.json`, and `config.json`.
+        ///
+        /// The compute dtype is chosen by the device: **f32 on CPU** (the parity path,
+        /// byte-unchanged) and **bf16 on CUDA** (so the 4.4B LM fits a 12 GB GPU — f32
+        /// would need ~18 GB). Use [`S2Pro::load_with_dtype`] to override.
         pub fn load(dir: impl AsRef<Path>, dev: Device) -> Result<Self> {
+            // CPU must stay f32 (parity); CUDA defaults to bf16 (fit).
+            let dt = if dev.is_cuda() { DType::BF16 } else { DType::F32 };
+            Self::load_with_dtype(dir, dev, dt)
+        }
+
+        /// Like [`S2Pro::load`] but with an explicit compute dtype `dt`. CPU callers
+        /// should pass `DType::F32` to preserve parity; CUDA callers `DType::BF16` to fit.
+        pub fn load_with_dtype(dir: impl AsRef<Path>, dev: Device, dt: DType) -> Result<Self> {
             let dir = dir.as_ref();
 
             let tok_path = dir.join("tokenizer.json");
@@ -126,18 +138,19 @@ mod backend {
             cfg.semantic_end_id = tokenizer.semantic_end_id;
             cfg.stop_token_id = tokenizer.im_end_id;
 
-            let lm_w = load_lm(dir, dev.clone())?;
+            let lm_w = load_lm(dir, dev.clone(), dt)?;
             // Reconcile the fast-AR geometry + residual codebook width against the REAL
             // `audio_decoder.*` tensors before wiring the heads (see `reconcile_fast_cfg`).
             reconcile_fast_cfg(&mut cfg, &lm_w)?;
             let slow = SlowAr::new(lm_w, cfg.clone())?;
-            let fast = FastAr::new(cfg.clone(), &dev)?;
+            let fast = FastAr::new(cfg.clone(), &dev, dt)?;
 
             let codec_w = load_codec(
                 dir.join("codec.pth")
                     .to_str()
                     .ok_or_else(|| candle_core::Error::Msg("non-utf8 codec path".into()))?,
                 dev.clone(),
+                dt,
             )?;
             let codec = EvaGanDac::new(codec_w, cfg.codec.clone());
 

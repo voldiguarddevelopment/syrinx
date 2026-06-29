@@ -22,8 +22,14 @@ use std::path::Path;
 
 use super::nn::Weights;
 
-/// Load the sharded Qwen3 LM checkpoint from `dir` into a [`Weights`] bag (f32).
-pub fn load_lm(dir: &Path, dev: Device) -> Result<Weights> {
+/// Load the sharded Qwen3 LM checkpoint from `dir` into a [`Weights`] bag in `dt`.
+///
+/// `dt` is the **compute dtype**: `F32` for the CPU parity path (byte-unchanged) or
+/// `BF16` for the CUDA-fit path (the 4.4B LM is ~9 GB in bf16 vs ~18 GB in f32, so bf16
+/// fits a 12 GB GPU). Each shard tensor is cast to `dt` as it is read, keeping peak load
+/// memory at the bf16 footprint rather than a transient f32 blow-up. The published LM
+/// carries no weight-norm, so `fold_weight_norm` is a no-op here.
+pub fn load_lm(dir: &Path, dev: Device, dt: DType) -> Result<Weights> {
     let shard_files = resolve_shards(dir)?;
     let mut map: HashMap<String, Tensor> = HashMap::new();
     for file in &shard_files {
@@ -37,16 +43,21 @@ pub fn load_lm(dir: &Path, dev: Device) -> Result<Weights> {
                 Some(nk) => nk,
                 None => continue,
             };
-            map.insert(key, v.to_dtype(DType::F32)?);
+            map.insert(key, v.to_dtype(dt)?);
         }
     }
     fuse_qkv(&mut map)?;
     fold_weight_norm(&mut map)?;
-    Ok(Weights { map, dev })
+    Ok(Weights { map, dev, dt })
 }
 
-/// Load the `codec.pth` EVA-GAN/DAC checkpoint into a [`Weights`] bag (f32).
-pub fn load_codec(path: &str, dev: Device) -> Result<Weights> {
+/// Load the `codec.pth` EVA-GAN/DAC checkpoint into a [`Weights`] bag in `dt`.
+///
+/// Weight-norm is **folded in f32** (folding in bf16 loses precision on the `‖v‖`
+/// reduction), and only after folding is the whole bag cast to `dt`. The codec is small
+/// (~446M), so the transient f32 footprint is negligible. For `dt == F32` the final cast
+/// is skipped entirely, leaving the CPU parity path byte-unchanged.
+pub fn load_codec(path: &str, dev: Device, dt: DType) -> Result<Weights> {
     // `candle_core::pickle::read_all` reads a torch `.pth` directly (CPU tensors).
     let tensors = candle_core::pickle::read_all(path)?;
     let has_generator = tensors.iter().any(|(k, _)| k.contains("generator."));
@@ -60,12 +71,18 @@ pub fn load_codec(path: &str, dev: Device) -> Result<Weights> {
         } else {
             k
         };
-        // Move to the target device + normalise to f32 (the parity build).
+        // Move to the target device + normalise to f32 for the (f32) weight-norm fold.
         let v = v.to_device(&dev)?.to_dtype(DType::F32)?;
         map.insert(key, v);
     }
     fold_weight_norm(&mut map)?;
-    Ok(Weights { map, dev })
+    // PARITY: fold first (f32), then cast to the compute dtype. Skipped for f32 (CPU).
+    if dt != DType::F32 {
+        for v in map.values_mut() {
+            *v = v.to_dtype(dt)?;
+        }
+    }
+    Ok(Weights { map, dev, dt })
 }
 
 /// Resolve the LM shard files: prefer the `model.safetensors.index.json` weight map,

@@ -669,6 +669,10 @@ syrinx stream — chunk-streaming synthesis to a WAV
                 model.synthesize(text, &params).map_err(|e| e.to_string())?
             }
             FishVariant::S2Pro => {
+                // `S2Pro::load` picks the compute dtype from the device: f32 on CPU
+                // (parity) and bf16 on CUDA (the 4.4B LM fits a 12 GB GPU in bf16, ~9 GB,
+                // where f32 ~18 GB would OOM). So a `--features cuda` + `--cuda` run gets
+                // the bf16-fit path automatically; the CPU path is byte-unchanged.
                 let mut model = S2Pro::load(dir, dev.clone()).map_err(|e| e.to_string())?;
                 match &o.ref_wav {
                     Some(ref_wav) => {

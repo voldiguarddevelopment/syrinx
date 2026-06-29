@@ -47,7 +47,8 @@ impl SlowAr {
         // PARITY: 32 768 RoPE positions × head_dim/2 is large; cap the precompute to a
         // practical synthesis length. Confirm the production max frame budget on-box.
         let rope_cap = cfg.slow.max_seq_len.min(8192);
-        let (cos, sin) = precompute_rope(rope_cap, cfg.slow.head_dim, cfg.slow.rope_base, &w.dev)?;
+        let (cos, sin) =
+            precompute_rope(rope_cap, cfg.slow.head_dim, cfg.slow.rope_base, &w.dev, w.dt)?;
         let has_project_in = w.has("fast_project_in.weight");
         let cache = KvCache::new(cfg.slow.n_layer);
         Ok(Self {
@@ -125,7 +126,9 @@ impl SlowAr {
             .iter()
             .map(|&id| if id >= begin && id <= end { 1.0 } else { 0.0 })
             .collect();
-        let mask = Tensor::from_vec(mask, (t, 1), &self.w.dev)?;
+        // Cast the f32 mask to the compute dtype so the multiply doesn't mix dtypes
+        // (Candle errors on f32 × bf16); identity for the f32 CPU path.
+        let mask = Tensor::from_vec(mask, (t, 1), &self.w.dev)?.to_dtype(self.w.dt)?;
         let vq_sum = vq_sum.broadcast_mul(&mask)?;
 
         let x = (emb_tok + vq_sum)?; // [t, dim]
@@ -140,7 +143,7 @@ impl SlowAr {
         let cos = self.cos.narrow(0, offset, t_new)?;
         let sin = self.sin.narrow(0, offset, t_new)?;
         let mask = if causal {
-            Some(super::nn::causal_mask_at(offset, t_new, &self.w.dev)?)
+            Some(super::nn::causal_mask_at(offset, t_new, &self.w.dev, self.w.dt)?)
         } else {
             None
         };
@@ -191,7 +194,11 @@ impl SlowAr {
         } else {
             self.w.linear(&normed, "output.weight", None)?
         };
-        let logits = logits.reshape((self.cfg.slow.vocab_size,))?;
+        // PARITY: the sampler (and the driver's RAS / semantic constraint) operate in
+        // f32; cast the head logits up before returning. Identity on the f32 CPU path.
+        let logits = logits
+            .reshape((self.cfg.slow.vocab_size,))?
+            .to_dtype(candle_core::DType::F32)?;
 
         // Hidden for the fast head: the report projects the slow hidden h_t^slow to the
         // Fast AR's dim via `fast_project_in` (identity when fast_dim == slow dim — the

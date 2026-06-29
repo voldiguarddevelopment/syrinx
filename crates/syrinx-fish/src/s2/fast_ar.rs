@@ -35,10 +35,13 @@ pub struct FastAr {
 }
 
 impl FastAr {
-    /// Build from the resolved config (RoPE tables sized to the codebook count).
-    pub fn new(cfg: FishConfig, dev: &candle_core::Device) -> Result<Self> {
+    /// Build from the resolved config (RoPE tables sized to the codebook count). `dt` is
+    /// the compute dtype — the codebook-axis RoPE tables are materialised in it so they
+    /// match the `dt`-typed fast activations (f32 on CPU, bf16 on GPU).
+    pub fn new(cfg: FishConfig, dev: &candle_core::Device, dt: candle_core::DType) -> Result<Self> {
         let fast = &cfg.fast.transformer;
-        let (cos, sin) = precompute_rope(cfg.codec.num_codebooks, fast.head_dim, fast.rope_base, dev)?;
+        let (cos, sin) =
+            precompute_rope(cfg.codec.num_codebooks, fast.head_dim, fast.rope_base, dev, dt)?;
         Ok(Self { cos, sin, cfg })
     }
 
@@ -90,7 +93,10 @@ impl FastAr {
         }
         cache.advance(1);
         let fast_out = w.rms_norm(&h, "fast_norm.weight", eps)?;
-        w.linear(&fast_out, "fast_output.weight", None)
+        // PARITY: residual-codebook logits go to the f32 sampler — cast up here so the
+        // bf16 GPU path matches the f32 sampling semantics. Identity on the CPU path.
+        w.linear(&fast_out, "fast_output.weight", None)?
+            .to_dtype(candle_core::DType::F32)
     }
 
     /// Map a sampled semantic token id to codebook-0: `clamp(tok - semantic_begin, 0,
