@@ -19,9 +19,11 @@
 //! the per-frame `hidden` the fast head expands — already passed through
 //! `fast_project_in` (the slow→fast dim projection) when the checkpoint carries it.
 
-use candle_core::{Result, Tensor};
+use candle_core::{DType, Result, Tensor};
 
-use super::nn::{attention, precompute_rope, swiglu, AttnShape, KvCache, Weights};
+use super::nn::{
+    attention, attention_batched, precompute_rope, swiglu, AttnShape, KvCache, Weights,
+};
 use crate::common::config::FishConfig;
 
 /// The loaded slow backbone + its KV cache + precomputed RoPE tables.
@@ -35,6 +37,12 @@ pub struct SlowAr {
     /// Whether the checkpoint carries a `fast_project_in` Linear (s2: the slow hidden is
     /// "linearly projected to the Fast AR's dimension"; identity when fast_dim == dim).
     has_project_in: bool,
+    /// Per-sample left-pad lengths for the BATCHED generation path (set by
+    /// [`SlowAr::prefill_batch`], read by [`SlowAr::slow_step_batch`]). Sample `i`'s real
+    /// token at physical column `c` has RoPE position `c - pad_lens[i]`, so padding is
+    /// position-invisible and the real tokens keep positions `0..T_i`. Empty on the
+    /// single-sample path (which never touches it).
+    pad_lens: Vec<usize>,
 }
 
 impl SlowAr {
@@ -58,6 +66,7 @@ impl SlowAr {
             sin,
             cache,
             has_project_in,
+            pad_lens: Vec::new(),
         })
     }
 
@@ -259,5 +268,233 @@ impl SlowAr {
         // Single new token over the full cache: causal visibility is total ⇒ no mask.
         let h = self.run_layers(&embeds, pos, false)?;
         self.head(&h)
+    }
+
+    // ====================================================================================
+    // Batched generation path (N samples rendered together). The 5B forward is memory-
+    // bandwidth-bound at batch=1 (one weight read per token), so batching N short samples
+    // gives ~Nx throughput. The single-sample path above is ADDITIVE-untouched.
+    //
+    // Left-pad scheme: the N prompts have different lengths T_i. Pad each on the LEFT to
+    // Tmax = max(T_i) (real tokens right-aligned in columns [pad_i, Tmax)). Then:
+    //   * RoPE positions: sample i's physical column c has position `c - pad_i` (clamped to
+    //     0 in the pad region), so the real tokens keep positions 0..T_i and the padding is
+    //     position-invisible. After prefill, physical position `pos` (≥ Tmax) maps to
+    //     sample i's real position `pos - pad_i` (= T_i for the first generated frame).
+    //   * Attention mask: a real query attends only real keys j ≥ pad_i, causally (j ≤ qi);
+    //     a pad query (discarded) attends causally in the pad region (kept non-empty so the
+    //     softmax never sees an all -inf row → no NaN). Padded keys are -inf for everyone,
+    //     so a sample's left-pad can never leak into any real position.
+    //   * The LAST physical column (Tmax-1) is a real token for EVERY sample (right-aligned),
+    //     so the prefill head reads logits/hidden from that single column for all samples.
+    // ====================================================================================
+
+    /// Run the decoder stack over a left-padded batch `embeds` `[N, t_new, dim]` with
+    /// **per-sample** RoPE tables `cos`/`sin` `[N, t_new, head_dim/2]` and an optional
+    /// per-sample additive mask `[N, 1, t_new, total]`, KV-cached. Returns `[N, t_new, dim]`
+    /// (pre-final-RMSNorm) and advances the cache by `t_new`.
+    fn run_layers_batch(
+        &mut self,
+        embeds: &Tensor,
+        cos: &Tensor,
+        sin: &Tensor,
+        mask: Option<&Tensor>,
+    ) -> Result<Tensor> {
+        let t_new = embeds.dim(1)?;
+        let shape = self.attn_shape();
+        let eps = self.cfg.slow.norm_eps;
+        let mut h = embeds.clone();
+        for l in 0..self.cfg.slow.n_layer {
+            let pre = format!("layers.{l}");
+            let r = h.clone();
+            let hn = self
+                .w
+                .rms_norm(&h, &format!("{pre}.attention_norm.weight"), eps)?;
+            let a = attention_batched(
+                &self.w,
+                &format!("{pre}.attention"),
+                &hn,
+                cos,
+                sin,
+                mask,
+                shape,
+                &mut self.cache,
+                l,
+            )?;
+            h = (r + a)?;
+            let r = h.clone();
+            let hn = self.w.rms_norm(&h, &format!("{pre}.ffn_norm.weight"), eps)?;
+            h = (r + swiglu(&self.w, &format!("{pre}.feed_forward"), &hn)?)?;
+        }
+        self.cache.advance(t_new);
+        Ok(h)
+    }
+
+    /// Batched embed: build `[N, Tmax, dim]` by embedding each prompt with the (unchanged)
+    /// single-sample MCF [`SlowAr::embed`] and LEFT-padding the result with zero rows. The
+    /// pad rows are masked out as keys for every real position, so a zero embedding there is
+    /// inert; using the real `embed` per sample keeps the MCF math byte-identical to batch=1.
+    fn embed_batch_padded(&self, prompts: &[Tensor], pad: &[usize], tmax: usize) -> Result<Tensor> {
+        let dim = self.cfg.slow.dim;
+        let mut rows: Vec<Tensor> = Vec::with_capacity(prompts.len());
+        for (i, p) in prompts.iter().enumerate() {
+            let e = self.embed(p)?; // [1, T_i, dim]
+            let padded = if pad[i] == 0 {
+                e
+            } else {
+                let zeros = Tensor::zeros((1, pad[i], dim), self.w.dt, &self.w.dev)?;
+                Tensor::cat(&[&zeros, &e], 1)? // [1, Tmax, dim]
+            };
+            debug_assert_eq!(padded.dim(1)?, tmax, "left-padded row must reach Tmax");
+            rows.push(padded);
+        }
+        Tensor::cat(&rows, 0) // [N, Tmax, dim]
+    }
+
+    /// Gather per-sample RoPE cos/sin for the supplied flat `position_ids` (length
+    /// `N * t_new`, row-major over `[N, t_new]`) → `(cos, sin)` each `[N, t_new, half]`.
+    // PARITY: positions index the precomputed RoPE table (capped at `rope_cap` in `new`),
+    // exactly like the single path's `self.cos.narrow`. Generation beyond `rope_cap` would
+    // overflow the table on BOTH paths; the driver bounds frames well below it.
+    fn gather_rope(&self, position_ids: &[u32], n: usize, t_new: usize) -> Result<(Tensor, Tensor)> {
+        let half = self.cfg.slow.head_dim / 2;
+        let idx = Tensor::from_vec(position_ids.to_vec(), (position_ids.len(),), &self.w.dev)?;
+        let cos = self.cos.index_select(&idx, 0)?.reshape((n, t_new, half))?;
+        let sin = self.sin.index_select(&idx, 0)?.reshape((n, t_new, half))?;
+        Ok((cos, sin))
+    }
+
+    /// Final RMSNorm → tied LM-head logits + the fast-head hidden for the **last** column of
+    /// a batched hidden `h` `[N, t_new, dim]`. Returns `(logits [N, vocab], hidden [N, 1,
+    /// fast_dim])`. The per-step math matches [`SlowAr::head`]; only the batch axis is added.
+    fn head_batch(&self, h: &Tensor) -> Result<(Tensor, Tensor)> {
+        let n = h.dim(0)?;
+        let t = h.dim(1)?;
+        let eps = self.cfg.slow.norm_eps;
+        let last = h.narrow(1, t - 1, 1)?; // [N, 1, dim]
+        let normed = self.w.rms_norm(&last, "norm.weight", eps)?; // [N, 1, dim]
+
+        let logits = if self.cfg.slow.tie_word_embeddings || !self.w.has("output.weight") {
+            let emb = self.w.g("embeddings.weight")?;
+            self.w.linear_w(&normed, &emb)?
+        } else {
+            self.w.linear(&normed, "output.weight", None)?
+        };
+        let logits = logits
+            .reshape((n, self.cfg.slow.vocab_size))?
+            .to_dtype(DType::F32)?;
+
+        let hidden = if self.has_project_in {
+            if self.w.has("fast_project_in.bias") {
+                self.w
+                    .linear(&normed, "fast_project_in.weight", Some("fast_project_in.bias"))?
+            } else {
+                self.w.linear(&normed, "fast_project_in.weight", None)?
+            }
+        } else {
+            normed
+        };
+        Ok((logits, hidden))
+    }
+
+    /// Prefill N left-padded prompts into a shared `[N, ...]` slow KV cache and return the
+    /// slow step for the last (real) prompt column of every sample. Records each sample's
+    /// left-pad length for the subsequent [`SlowAr::slow_step_batch`] calls. Returns
+    /// `(logits [N, vocab], hidden [N, 1, fast_dim])`.
+    pub fn prefill_batch(&mut self, prompts: &[Tensor]) -> Result<(Tensor, Tensor)> {
+        let n = prompts.len();
+        let lens: Vec<usize> = prompts
+            .iter()
+            .map(|p| p.dim(1))
+            .collect::<Result<Vec<_>>>()?;
+        let tmax = lens.iter().copied().max().unwrap_or(0);
+        let pad: Vec<usize> = lens.iter().map(|&l| tmax - l).collect();
+        self.pad_lens = pad.clone();
+
+        let embeds = self.embed_batch_padded(prompts, &pad, tmax)?; // [N, Tmax, dim]
+
+        // Per-sample RoPE position ids: column c → max(c - pad_i, 0).
+        let mut pos_ids = vec![0u32; n * tmax];
+        for (s, &ps) in pad.iter().enumerate() {
+            for c in 0..tmax {
+                pos_ids[s * tmax + c] = c.saturating_sub(ps) as u32;
+            }
+        }
+        let (cos, sin) = self.gather_rope(&pos_ids, n, tmax)?;
+
+        // Per-sample causal + left-pad mask [N, 1, Tmax, Tmax].
+        let mut data = vec![0f32; n * tmax * tmax];
+        for (s, &ps) in pad.iter().enumerate() {
+            for qi in 0..tmax {
+                for j in 0..tmax {
+                    let allow = if qi >= ps {
+                        // real query: causal over the sample's real keys only
+                        j >= ps && j <= qi
+                    } else {
+                        // pad query (output discarded): causal in the pad region; kept
+                        // non-empty (j == qi always allowed) so softmax never gets all -inf
+                        j <= qi
+                    };
+                    if !allow {
+                        data[(s * tmax + qi) * tmax + j] = f32::NEG_INFINITY;
+                    }
+                }
+            }
+        }
+        let mask = Tensor::from_vec(data, (n, tmax, tmax), &self.w.dev)?
+            .to_dtype(self.w.dt)?
+            .reshape((n, 1, tmax, tmax))?;
+
+        let h = self.run_layers_batch(&embeds, &cos, &sin, Some(&mask))?;
+        self.head_batch(&h)
+    }
+
+    /// One batched slow step: feed every sample's previous full frame `[1 + num_codebooks]`
+    /// (`frames[i]`) at physical position `pos`, advancing the shared cache by one. The new
+    /// token attends all of its sample's real past (left-pad keys masked out per sample).
+    /// Returns `(logits [N, vocab], hidden [N, 1, fast_dim])`.
+    pub fn slow_step_batch(&mut self, frames: &[Vec<u32>], pos: usize) -> Result<(Tensor, Tensor)> {
+        debug_assert_eq!(
+            pos,
+            self.cache.len(),
+            "slow_step_batch pos must equal the current cache length"
+        );
+        let n = frames.len();
+        debug_assert_eq!(n, self.pad_lens.len(), "batch size changed mid-utterance");
+
+        // Embed each one-column frame with the single-sample MCF embed, then stack → [N,1,dim].
+        let n_full = 1 + self.cfg.codec.num_codebooks;
+        let mut rows: Vec<Tensor> = Vec::with_capacity(n);
+        for f in frames {
+            debug_assert_eq!(f.len(), n_full, "frame must be [1 + num_codebooks]");
+            let inp = Tensor::from_vec(f.clone(), (n_full, 1), &self.w.dev)?;
+            rows.push(self.embed(&inp)?); // [1, 1, dim]
+        }
+        let embeds = Tensor::cat(&rows, 0)?; // [N, 1, dim]
+
+        // The new token's RoPE position for sample i is `pos - pad_i`.
+        let pos_ids: Vec<u32> = self
+            .pad_lens
+            .iter()
+            .map(|&ps| (pos - ps) as u32)
+            .collect();
+        let (cos, sin) = self.gather_rope(&pos_ids, n, 1)?;
+
+        // Mask the new query against the full cache (length `total = pos + 1`): real keys
+        // are j ≥ pad_i; the new token itself (j == pos) is always real. Causal is implicit
+        // (the query is the newest position).
+        let total = pos + 1;
+        let mut data = vec![0f32; n * total];
+        for (s, &ps) in self.pad_lens.iter().enumerate() {
+            for j in 0..ps.min(total) {
+                data[s * total + j] = f32::NEG_INFINITY;
+            }
+        }
+        let mask = Tensor::from_vec(data, (n, total), &self.w.dev)?
+            .to_dtype(self.w.dt)?
+            .reshape((n, 1, 1, total))?;
+
+        let h = self.run_layers_batch(&embeds, &cos, &sin, Some(&mask))?;
+        self.head_batch(&h)
     }
 }

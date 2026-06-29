@@ -165,6 +165,31 @@ pub fn apply_rotary_emb(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor
     Ok(out)
 }
 
+/// Batched Fish interleaved rotary embedding: like [`apply_rotary_emb`], but the cos/sin
+/// slices are **per-batch-element** `[b, t, d/2]` rather than the shared `[t, d/2]`. This
+/// is what the left-padded batched generation path needs: every sample in the batch has a
+/// DIFFERENT RoPE position id at the same physical column (its real-token positions skip
+/// the sample's left-pad), so the rotation angle differs across the batch dim.
+///
+/// The pairing/rotation math is byte-identical to [`apply_rotary_emb`]; only the cos/sin
+/// rank (and hence the broadcast over heads) changes. For `b == 1` with a position-aligned
+/// table this would reduce to the single-sample function, so the two cannot disagree on
+/// the batch=1 path (which keeps calling [`apply_rotary_emb`], unchanged).
+pub fn apply_rotary_emb_batched(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
+    let (b, t, h, d) = x.dims4()?;
+    let half = d / 2;
+    let xs = x.reshape((b, t, h, half, 2))?;
+    let x0 = xs.narrow(4, 0, 1)?.reshape((b, t, h, half))?;
+    let x1 = xs.narrow(4, 1, 1)?.reshape((b, t, h, half))?;
+    // cos/sin are [b, t, half] → [b, t, 1, half] so they broadcast over the head axis.
+    let cos = cos.reshape((b, t, 1, half))?;
+    let sin = sin.reshape((b, t, 1, half))?;
+    let o0 = x0.broadcast_mul(&cos)?.sub(&x1.broadcast_mul(&sin)?)?;
+    let o1 = x1.broadcast_mul(&cos)?.add(&x0.broadcast_mul(&sin)?)?;
+    let out = Tensor::stack(&[&o0, &o1], 4)?.reshape((b, t, h, d))?;
+    Ok(out)
+}
+
 /// GQA: expand `[b, kv, t, d]` KV heads so each serves `n` query heads → `[b, kv*n, t, d]`.
 pub fn repeat_kv(x: &Tensor, n: usize) -> Result<Tensor> {
     if n == 1 {
@@ -307,6 +332,95 @@ pub fn attention(
 
     let q = apply_rotary_emb(&q, cos, sin)?;
     let k = apply_rotary_emb(&k, cos, sin)?;
+
+    let q = q.transpose(1, 2)?.contiguous()?; // [b, n_head, t, hd]
+    let k = k.transpose(1, 2)?.contiguous()?; // [b, n_local, t, hd]
+    let v = v.transpose(1, 2)?.contiguous()?;
+
+    let (k_full, v_full) = cache.append(layer, &k, &v)?;
+    let k_full = repeat_kv(&k_full, n_head / n_local_heads)?;
+    let v_full = repeat_kv(&v_full, n_head / n_local_heads)?;
+
+    let scale = 1.0 / (head_dim as f64).sqrt();
+    let scores = (q.matmul(&k_full.transpose(2, 3)?.contiguous()?)? * scale)?;
+    let scores = match mask {
+        Some(m) => scores.broadcast_add(m)?,
+        None => scores,
+    };
+    let probs = candle_nn::ops::softmax(&scores, D::Minus1)?;
+    let ctx = probs.matmul(&v_full)?; // [b, n_head, t, hd]
+    let ctx = ctx.transpose(1, 2)?.contiguous()?.reshape((b, t, q_size))?;
+
+    let o_bias_name = format!("{prefix}.wo.bias");
+    w.linear(
+        &ctx,
+        &format!("{prefix}.wo.weight"),
+        if o_bias { Some(o_bias_name.as_str()) } else { None },
+    )
+}
+
+/// Batched GQA self-attention for the left-padded generation path. Identical in every
+/// respect to [`attention`] except:
+///   * `cos`/`sin` are **per-sample** `[b, t_new, head_dim/2]` (consumed by
+///     [`apply_rotary_emb_batched`]) instead of the shared `[t_new, head_dim/2]`, because
+///     each batch element's real-token RoPE positions skip its own left-pad;
+///   * `mask` is the **per-sample** additive mask `[b, 1, t_new, total]` (causal AND the
+///     left-pad key positions masked to `-inf` for each sample independently), which
+///     broadcasts over the head axis onto the `[b, n_head, t_new, total]` scores.
+///
+/// Batch elements never attend across the batch dim (attention is per-element), so a
+/// finished/frozen sample's stale K/V can never leak into another sample. The single
+/// `attention` path is left untouched, so the batch=1 code is byte-for-byte unchanged.
+#[allow(clippy::too_many_arguments)]
+pub fn attention_batched(
+    w: &Weights,
+    prefix: &str,
+    x: &Tensor,
+    cos: &Tensor,
+    sin: &Tensor,
+    mask: Option<&Tensor>,
+    shape: AttnShape,
+    cache: &mut KvCache,
+    layer: usize,
+) -> Result<Tensor> {
+    let (b, t, _) = x.dims3()?;
+    let AttnShape {
+        n_head,
+        n_local_heads,
+        head_dim,
+        qkv_bias,
+        o_bias,
+        qk_norm,
+        eps,
+    } = shape;
+    let q_size = n_head * head_dim;
+    let kv_size = n_local_heads * head_dim;
+
+    let qkv_bias_name = format!("{prefix}.wqkv.bias");
+    let qkv = w.linear(
+        x,
+        &format!("{prefix}.wqkv.weight"),
+        if qkv_bias { Some(qkv_bias_name.as_str()) } else { None },
+    )?; // [b, t, q_size + 2*kv_size]
+
+    let q = qkv.narrow(D::Minus1, 0, q_size)?;
+    let k = qkv.narrow(D::Minus1, q_size, kv_size)?;
+    let v = qkv.narrow(D::Minus1, q_size + kv_size, kv_size)?;
+
+    let q = q.reshape((b, t, n_head, head_dim))?;
+    let k = k.reshape((b, t, n_local_heads, head_dim))?;
+    let v = v.reshape((b, t, n_local_heads, head_dim))?;
+
+    let (q, k) = if qk_norm {
+        let qn = w.g(&format!("{prefix}.q_norm.weight"))?;
+        let kn = w.g(&format!("{prefix}.k_norm.weight"))?;
+        (rms_norm_w(&q, &qn, eps)?, rms_norm_w(&k, &kn, eps)?)
+    } else {
+        (q, k)
+    };
+
+    let q = apply_rotary_emb_batched(&q, cos, sin)?;
+    let k = apply_rotary_emb_batched(&k, cos, sin)?;
 
     let q = q.transpose(1, 2)?.contiguous()?; // [b, n_head, t, hd]
     let k = k.transpose(1, 2)?.contiguous()?; // [b, n_local, t, hd]

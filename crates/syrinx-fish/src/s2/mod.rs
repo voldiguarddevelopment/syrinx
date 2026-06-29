@@ -50,7 +50,7 @@ mod backend {
     };
     use crate::common::codec::RvqCodec;
     use crate::common::config::{CodecConfig, FishConfig};
-    use crate::common::dualar::{drive, DriveParams, DualArBackend, SlowStep};
+    use crate::common::dualar::{drive, DriveParams, DualArBackend, SlowStep, SlowStepBatch};
     use crate::common::sampling::Sampler;
     use crate::FishVariant;
 
@@ -364,6 +364,28 @@ mod backend {
             // The fast head shares the slow backbone's checkpoint; pass its weight bag.
             self.fast
                 .expand(self.slow.weights(), hidden, first_code, sampler)
+        }
+
+        // --- Batched generation overrides (corpus-render speedup) -----------------------
+        fn prefill_batch(&mut self, prompts: &[Tensor]) -> Result<SlowStepBatch> {
+            let (logits, hidden) = self.slow.prefill_batch(prompts)?;
+            Ok(SlowStepBatch { logits, hidden })
+        }
+
+        fn slow_step_batch(&mut self, frames: &[Vec<u32>], pos: usize) -> Result<SlowStepBatch> {
+            let (logits, hidden) = self.slow.slow_step_batch(frames, pos)?;
+            Ok(SlowStepBatch { logits, hidden })
+        }
+
+        fn fast_expand_batch(
+            &self,
+            hidden: &Tensor,
+            first_codes: &[u32],
+            active: &[bool],
+            samplers: &mut [Sampler],
+        ) -> Result<Vec<Vec<u32>>> {
+            self.fast
+                .expand_batch(self.slow.weights(), hidden, first_codes, active, samplers)
         }
     }
 

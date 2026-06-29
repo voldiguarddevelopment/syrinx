@@ -114,6 +114,11 @@ syrinx synth — render text in a reference voice
                            the variant ONCE and (s2-pro + --ref-wav) encodes the
                            reference ONCE, then loops. Requires --out-dir.
     --out-dir <DIR>        Where <id>.wav and manifest.tsv are written.   [batch]
+    --batch-size <N>       (s2-pro) Render N samples per forward pass in parallel
+                           (default 1 = one-at-a-time). The 5B forward is memory-
+                           bandwidth-bound at batch=1, so N>1 gives ~Nx throughput;
+                           entries are grouped into chunks of N. Output is identical
+                           to batch=1 (left-pad + masking make padding invisible).
     --filter-lang <L>      Keep only entries whose lang == L.
     --filter-scale <S>     Keep only entries whose scale == S (small|reply|chapter).
     --limit <N>            Cap the kept list to the first N entries.
@@ -218,6 +223,7 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
         // --- Fish batch render mode (`synth --fish --batch` only) ---
         batch: Option<PathBuf>,
         out_dir: Option<PathBuf>,
+        batch_size: Option<usize>,
         filter_lang: Option<String>,
         filter_scale: Option<String>,
         limit: Option<usize>,
@@ -319,6 +325,13 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                 "--fish-dir" => o.fish_dir = Some(PathBuf::from(need(&mut argv, "--fish-dir")?)),
                 "--batch" => o.batch = Some(PathBuf::from(need(&mut argv, "--batch")?)),
                 "--out-dir" => o.out_dir = Some(PathBuf::from(need(&mut argv, "--out-dir")?)),
+                "--batch-size" => {
+                    let v = need(&mut argv, "--batch-size")?;
+                    o.batch_size = Some(
+                        v.parse()
+                            .map_err(|_| format!("--batch-size expects an integer, got `{v}`"))?,
+                    );
+                }
                 "--filter-lang" => o.filter_lang = Some(need(&mut argv, "--filter-lang")?),
                 "--filter-scale" => o.filter_scale = Some(need(&mut argv, "--filter-scale")?),
                 "--limit" => {
@@ -1012,31 +1025,145 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                     }
                     None => None,
                 };
-                for (i, e) in kept.iter().enumerate() {
-                    let res = match &ref_ctx {
-                        Some((ref_text, ref_codes)) => {
-                            model.synthesize_cloned(ref_text, ref_codes, &e.text, &params)
+                let bs = o.batch_size.unwrap_or(1).max(1);
+                if bs <= 1 {
+                    // batch-size 1: byte-identical to the original one-at-a-time path.
+                    for (i, e) in kept.iter().enumerate() {
+                        let res = match &ref_ctx {
+                            Some((ref_text, ref_codes)) => {
+                                model.synthesize_cloned(ref_text, ref_codes, &e.text, &params)
+                            }
+                            None => model.synthesize(&e.text, &params),
+                        };
+                        match res {
+                            Ok(wav) => {
+                                match finish_batch_sample(out_dir, &manifest, i, total, e, &wav) {
+                                    Ok(()) => rendered += 1,
+                                    Err(err) => {
+                                        eprintln!(
+                                            "[{}/{}] {} WRITE FAILED: {err}",
+                                            i + 1,
+                                            total,
+                                            e.id
+                                        );
+                                        failed += 1;
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("[{}/{}] {} SYNTH FAILED: {err}", i + 1, total, e.id);
+                                failed += 1;
+                            }
                         }
-                        None => model.synthesize(&e.text, &params),
-                    };
-                    match res {
-                        Ok(wav) => {
-                            match finish_batch_sample(out_dir, &manifest, i, total, e, &wav) {
-                                Ok(()) => rendered += 1,
+                    }
+                } else {
+                    // Batched render: group the kept entries into chunks of `bs`, build each
+                    // entry's prompt (reusing the once-encoded `ref_codes`), drive all N
+                    // together, then decode each → write. A per-sample prompt/decode/write
+                    // error is logged and skipped; the chunk continues. The N samples render
+                    // in ONE forward per token (the ~Nx corpus-render speedup).
+                    eprintln!(
+                        "syrinx synth --fish s2-pro --batch: batch-size {} ({} chunks).",
+                        bs,
+                        total.div_ceil(bs)
+                    );
+                    let chunks: Vec<Vec<&BatchEntry>> = kept
+                        .chunks(bs)
+                        .map(|c| c.iter().collect())
+                        .collect();
+                    for (chunk_idx, chunk) in chunks.iter().enumerate() {
+                        let base = chunk_idx * bs;
+                        // Build each entry's prompt; a prompt failure drops just that sample.
+                        let mut prompts: Vec<candle_core::Tensor> = Vec::with_capacity(chunk.len());
+                        let mut slots: Vec<usize> = Vec::with_capacity(chunk.len());
+                        for (k, e) in chunk.iter().enumerate() {
+                            let pr = match &ref_ctx {
+                                Some((ref_text, ref_codes)) => {
+                                    model.build_prompt_with_reference(ref_text, ref_codes, &e.text)
+                                }
+                                None => model.build_prompt(&e.text),
+                            };
+                            match pr {
+                                Ok(p) => {
+                                    prompts.push(p);
+                                    slots.push(k);
+                                }
                                 Err(err) => {
-                                    eprintln!("[{}/{}] {} WRITE FAILED: {err}", i + 1, total, e.id);
+                                    let i = base + k;
+                                    eprintln!(
+                                        "[{}/{}] {} PROMPT FAILED: {err}",
+                                        i + 1,
+                                        total,
+                                        e.id
+                                    );
                                     failed += 1;
                                 }
                             }
                         }
-                        Err(err) => {
-                            eprintln!("[{}/{}] {} SYNTH FAILED: {err}", i + 1, total, e.id);
-                            failed += 1;
+                        if prompts.is_empty() {
+                            continue;
+                        }
+                        // Drive the whole chunk in one batched generation.
+                        let codes_vec = match syrinx_fish::common::dualar::drive_batch(
+                            &mut model, &prompts, &params,
+                        ) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                eprintln!(
+                                    "syrinx synth --fish s2-pro --batch: chunk {} (samples \
+                                     {}..{}) DRIVE FAILED: {err}",
+                                    chunk_idx,
+                                    base + 1,
+                                    base + chunk.len()
+                                );
+                                failed += prompts.len();
+                                continue;
+                            }
+                        };
+                        // Decode + write each rendered sample (codec per-sample is fine).
+                        for (slot, &k) in slots.iter().enumerate() {
+                            let e = chunk[k];
+                            let i = base + k;
+                            let wav = model
+                                .decode_codes(&codes_vec[slot])
+                                .and_then(|t| t.to_vec1::<f32>());
+                            match wav {
+                                Ok(wav) => {
+                                    match finish_batch_sample(out_dir, &manifest, i, total, e, &wav)
+                                    {
+                                        Ok(()) => rendered += 1,
+                                        Err(err) => {
+                                            eprintln!(
+                                                "[{}/{}] {} WRITE FAILED: {err}",
+                                                i + 1,
+                                                total,
+                                                e.id
+                                            );
+                                            failed += 1;
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    eprintln!(
+                                        "[{}/{}] {} DECODE FAILED: {err}",
+                                        i + 1,
+                                        total,
+                                        e.id
+                                    );
+                                    failed += 1;
+                                }
+                            }
                         }
                     }
                 }
             }
             FishVariant::S1Mini => {
+                if o.batch_size.unwrap_or(1) > 1 {
+                    eprintln!(
+                        "syrinx synth --fish s1-mini --batch: --batch-size is an s2-pro-only \
+                         render path; s1-mini renders one-at-a-time."
+                    );
+                }
                 let mut model = S1Mini::load(dir, dev).map_err(|e| e.to_string())?;
                 if o.ref_wav.is_some() {
                     eprintln!(

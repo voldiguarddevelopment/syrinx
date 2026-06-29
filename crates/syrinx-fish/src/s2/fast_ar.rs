@@ -152,4 +152,73 @@ impl FastAr {
         }
         Ok(codes)
     }
+
+    /// Batched fast AR: expand N frames' slow hiddens together. The fast head's per-frame KV
+    /// cache becomes `[N, ...]`; the codebook-axis RoPE is per-POSITION (the codebook index),
+    /// so it is the SAME for all N — the existing single-sample [`attention`](super::nn::attention)
+    /// (whose `cos`/`sin` broadcast over the batch dim and which carries no mask) drives the
+    /// batched step verbatim. Sampling is **per-sample**: residual `cb` of sample `i` is drawn
+    /// from `samplers[i]` so each sample's PRNG stream matches a batch=1 run seeded the same.
+    ///
+    /// `hidden` is `[N, 1, fast_dim]`; `first_codes[i]` seeds sample `i`'s codebook-0; `active`
+    /// marks samples still generating (a finished sample draws no codes — its RNG must not
+    /// advance, and its row is discarded by the driver). Returns `N` frames `[num_codebooks]`,
+    /// index 0 == `first_codes[i]`.
+    pub fn expand_batch(
+        &self,
+        w: &Weights,
+        hidden: &Tensor,
+        first_codes: &[u32],
+        active: &[bool],
+        samplers: &mut [Sampler],
+    ) -> Result<Vec<Vec<u32>>> {
+        let n = first_codes.len();
+        let n_cb = self.cfg.codec.num_codebooks;
+        let residual = self.cfg.codec.residual_size;
+        let fast_dim = self.cfg.fast.transformer.dim;
+        debug_assert_eq!(active.len(), n);
+        debug_assert_eq!(samplers.len(), n);
+
+        let mut cache = KvCache::new(self.cfg.fast.transformer.n_layer); // batch dim = N
+
+        // Position 0: prime the cache with each sample's slow hidden (logits discarded —
+        // codebook-0 is the deterministic `first_codes[i]`).
+        let h0 = hidden.reshape((n, 1, fast_dim))?;
+        let _ = self.step(w, &h0, 0, &mut cache)?;
+
+        let mut codes: Vec<Vec<u32>> = first_codes
+            .iter()
+            .map(|&c| {
+                let mut v = Vec::with_capacity(n_cb);
+                v.push(c);
+                v
+            })
+            .collect();
+
+        // Seed the next input with the embedding of each sample's codebook-0.
+        let mut cur = w
+            .embedding("fast_embeddings.weight", first_codes)?
+            .reshape((n, 1, fast_dim))?;
+
+        for cb in 1..n_cb {
+            let logits = self.step(w, &cur, cb, &mut cache)?; // [N, 1, residual]
+            let rows: Vec<Vec<f32>> = logits.reshape((n, residual))?.to_vec2()?;
+            let mut next_codes = vec![0u32; n];
+            for i in 0..n {
+                // Inactive (finished) samples draw nothing — their RNG must not advance and
+                // their codes are discarded by the driver. Use 0 as an inert placeholder.
+                let code = if active[i] {
+                    samplers[i].sample_codebook(&rows[i], &[])
+                } else {
+                    0
+                };
+                codes[i].push(code);
+                next_codes[i] = code;
+            }
+            cur = w
+                .embedding("fast_embeddings.weight", &next_codes)?
+                .reshape((n, 1, fast_dim))?;
+        }
+        Ok(codes)
+    }
 }
