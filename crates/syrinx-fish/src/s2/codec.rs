@@ -1,63 +1,69 @@
-//! The s2 **446M EVA-GAN / causal-DAC** RVQ codec: `[10, T]` codes ↔ 44.1 kHz waveform.
+//! The s2 **causal-DAC** RVQ codec: `[10, T]` codes ↔ 44.1 kHz waveform.
 //!
-//! ⚠ THIS IS THE RISKIEST, MOST PARITY-UNCONFIRMED MODULE IN THE s2 BACKEND. ⚠
-//! There is no in-repo reference for the s2 codec (the RVQ lives in the external `dac`
-//! package and the generator is a custom EVA-GAN), and the box is offline so the exact
-//! `codec.pth` key layout / channel schedule / block dilations cannot be verified. The
-//! math below is **real and complete** (real causal convs, real factorized RVQ, real
-//! sliding-window transformer), reconstructed from the S2 technical report
-//! (arXiv:2603.08823) plus the s1 modded-DAC as a structural starting point — but EVERY
-//! structural choice marked `// PARITY:` MUST be reconciled against the real `codec.pth`
-//! on-box. Treat any numeric output as unvalidated until then.
+//! Reconciled against the REAL `codec.pth` state dict (541 keys, dumped on-box). The
+//! top-level prefixes are `encoder.`, `quantizer.`, `decoder.`; the codec is a strictly
+//! causal Descript-Audio-Codec (DAC) — Snake + dilated ResidualUnits + weight-normed
+//! convs — with a ConvNeXt down/up-sampler and full-causal Transformer bottlenecks.
 //!
-//! ## What the tech report fixes (and we implement)
-//! * RVQ: 10 codebooks (1 **semantic** + 9 **residual**), factorized to `codebook_dim`,
-//!   the Descript-Audio-Codec (DAC) quantizer math (`in_proj` → L2 nearest codebook →
-//!   `out_proj`), exactly as s1's modded-DAC.
-//! * Strictly **causal** convolutions everywhere (masked / left-padded), for streaming.
-//! * **Mimi-style** causal sliding-window Transformer blocks **both before and after**
-//!   the RVQ layers (the "bottleneck"). We run a `pre_rvq` transformer on the encoder
-//!   side (after downsample, before quantize) and a `post_rvq` transformer on the decode
-//!   side (after `from_codes`, before the generator). Applied only when the checkpoint
-//!   carries those weights (so a codec without an explicit bottleneck still loads).
-//! * Downsampling = standard DAC encoder (**512×**) + extra **ConvNeXt-V2 (4×)** ⇒
-//!   total **2048×** ⇒ ~21 Hz frame rate at 44.1 kHz.
-//! * Decoder = the **EVA-GAN** generator structure (replaces the DAC decoder), causal.
+//! ## Confirmed structure (mapped key-for-key)
+//! * **Encoder** `encoder.block.{0..6}`: `block.0` first conv (1→64, k7); `block.{1..4}`
+//!   are DAC EncoderBlocks (3 dilated{1,3,9} ResidualUnits → Snake → strided downsample
+//!   conv), channel schedule 64→128→256→512→1024, strides [2,4,8,8] (×512); `block.5`
+//!   Snake; `block.6` latent conv (1024→1024, k3). The **deepest** block carries a
+//!   4-layer Transformer at `block.4.block.5` (applied after that block's downsample
+//!   conv, at 1024-dim / 512× resolution).
+//! * **Quantizer** `quantizer.*`: 1 semantic RVQ (`semantic_quantizer.quantizers.0`,
+//!   codebook 4096×8) + 9 residual RVQs (`quantizer.quantizers.0..8`, codebook 1024×8),
+//!   each factorized (`in_proj` 1024→8 / `out_proj` 8→1024, DAC `in_proj` → L2 nearest
+//!   codebook → `out_proj` math). A ConvNeXt ×4 down/up-sampler (`downsample`/`upsample`
+//!   .{0,1}, each = plain strided conv + ConvNeXt block) sits around the RVQ, and two
+//!   8-layer full-causal Transformers (`pre_module` after downsample/before RVQ,
+//!   `post_module` after RVQ/before upsample) form the bottleneck.
+//! * **Decoder** `decoder.model.{0..6}`: DAC Decoder (first conv 1024→1536 → 4
+//!   DecoderBlocks Snake→ConvTranspose→3 dilated{1,3,9} ResidualUnits, channels
+//!   1536→768→384→192→96, strides [8,8,4,2] → Snake → final conv 96→1, k7) + a final
+//!   paramless `Tanh` (index 7, not in the state dict).
 //!
-//! ## Least-confident parts (be honest)
-//! 1. The EVA-GAN generator's exact block layout — MRF residual kernel/dilation sets,
-//!    channel schedule, and whether it uses Snake or anti-aliased (AMP) activations.
-//!    Implemented here as the DAC-style causal upsampler (Snake + ConvTranspose + dilated
-//!    ResidualUnits); the real EVA-GAN generator differs and is `// PARITY:`-flagged.
-//! 2. The Mimi bottleneck transformer depth / window size / placement.
-//! 3. Every `codec.pth` weight key name (no reference state-dict offline).
+//! ## Weight-norm (folded at load, see `load.rs`)
+//! * RVQ `in_proj`/`out_proj`: old `weight_g`/`weight_v`. Encoder/decoder convs: new
+//!   `parametrizations.weight.original{0,1}`. Plain convs (`downsample/upsample.*.0.conv`,
+//!   ConvNeXt `dwconv`/`pwconv`, the Transformer linears) have no weight-norm.
+//!
+//! ## Least-confident parts (`// PARITY:`-flagged below)
+//! 1. The bottleneck/encoder Transformer is **full causal** (the skipped `causal_mask`
+//!    bool buffers are triangular, matching the fish reference `register_buffer`); the
+//!    RoPE base (10_000) and RMSNorm eps are best-effort.
+//! 2. Whether the encode-side RVQ residual order / semantic+residual summation exactly
+//!    matches the reference `DownsampleResidualVectorQuantize.forward`.
 
 use candle_core::{DType, Device, Result, Tensor, D};
 
-use super::nn::{attention, precompute_rope, swiglu, AttnShape, KvCache, Weights};
+use super::nn::{attention, causal_mask_at, precompute_rope, swiglu, AttnShape, KvCache, Weights};
 use crate::common::config::CodecConfig;
 
-// --- s2 EVA-GAN / causal-DAC structural constants -----------------------------
-// PARITY: confirm every constant here against `s2-pro/codec.pth` + its config on-box.
+// --- s2 causal-DAC structural constants ---------------------------------------
+// These are now reconciled against the REAL `codec.pth` state dict (541 keys): the
+// top-level prefixes are `encoder.`, `quantizer.`, `decoder.`, and the codec is a
+// strictly-causal Descript-DAC (Snake + dilated ResidualUnits) with a ConvNeXt
+// down/up-sampler and full-causal Transformer bottlenecks (`quantizer.pre_module`/
+// `post_module`) plus a Transformer inside the deepest encoder block (`block.4.block.5`).
 
-/// Encoder base channels (`encoder_dim`). PARITY: confirm on-box.
+/// Encoder base channels (`encoder.block.0.conv` out = 64).
 const ENCODER_DIM: usize = 64;
-/// Number of **residual** RVQ codebooks (the semantic codebook is separate).
-const N_RESIDUAL: usize = 9; // PARITY: confirm n_codebooks == 1 + 9 on-box.
-/// The factorized down/up-sample factors (extra ConvNeXt-V2 ×4 on top of DAC's 512×),
-/// product == ×4. PARITY: confirm downsample_factor on-box.
+/// Number of **residual** RVQ codebooks (`quantizer.quantizer.quantizers.0..8`); the
+/// semantic codebook (`quantizer.semantic_quantizer.quantizers.0`) is separate.
+const N_RESIDUAL: usize = 9;
+/// The ConvNeXt down/up-sample factors (`quantizer.downsample.{0,1}` k2/stride2 each),
+/// product == ×4 on top of the DAC encoder's 512× ⇒ 2048× total hop.
 const DOWNSAMPLE_FACTOR: [usize; 2] = [2, 2];
-/// Mimi-style bottleneck transformer depth (one stack pre-RVQ, one post-RVQ).
-/// PARITY: confirm the bottleneck layer count on-box (Mimi uses 8; s2 unknown).
-const BOTTLENECK_LAYERS: usize = 8;
-/// Bottleneck transformer head dim. PARITY: confirm on-box.
-const BOTTLENECK_HEAD_DIM: usize = 64;
-/// Causal sliding-window attention window (`window_size`). PARITY: confirm on-box.
-const WINDOW_SIZE: usize = 250;
-/// Codec transformer RoPE base. PARITY: confirm on-box.
-const DAC_ROPE_BASE: f64 = 10_000.0;
-/// Codec transformer / norm epsilon. PARITY: confirm on-box.
-const DAC_NORM_EPS: f64 = 1e-5;
+/// Codec Transformer head dim (`freqs_cis (.., 32, 2)` ⇒ head_dim/2 == 32 ⇒ 64; the
+/// fused `attention.wqkv (3072, 1024)` ⇒ q=k=v=1024 ⇒ 16 heads × 64).
+const TF_HEAD_DIM: usize = 64;
+/// Codec Transformer RoPE base. PARITY: the fish reference uses 10_000 for the codec
+/// Transformer; confirm on-box (the LM backbone uses a larger base).
+const TF_ROPE_BASE: f64 = 10_000.0;
+/// Codec Transformer / norm epsilon. PARITY: confirm the codec RMSNorm eps on-box.
+const TF_NORM_EPS: f64 = 1e-5;
 /// `Snake1d` numerical epsilon (`(alpha + 1e-9).reciprocal()`).
 const SNAKE_EPS: f64 = 1e-9;
 /// `F.normalize` epsilon (p=2).
@@ -268,12 +274,12 @@ impl EvaGanDac {
         for (s, &factor) in DOWNSAMPLE_FACTOR.iter().rev().enumerate() {
             z = self.causal_transpose1d(
                 &z,
-                &format!("upsample.{s}.0.conv.weight"),
-                &format!("upsample.{s}.0.conv.bias"),
+                &format!("quantizer.upsample.{s}.0.conv.weight"),
+                &format!("quantizer.upsample.{s}.0.conv.bias"),
                 factor,
                 factor,
             )?;
-            z = self.convnext(&z, &format!("upsample.{s}.1"))?;
+            z = self.convnext(&z, &format!("quantizer.upsample.{s}.1"))?;
         }
         Ok(z)
     }
@@ -341,18 +347,20 @@ impl EvaGanDac {
         let sem_max = (self.cfg.semantic_size - 1) as u32;
         let res_max = (self.cfg.residual_size - 1) as u32;
 
-        // Factorized RVQ from_codes: semantic codebook 0 + 9 residual codebooks.
+        // Factorized RVQ from_codes: semantic codebook 0 + 9 residual codebooks, all
+        // summed into the shared 1024-dim latent.
         let sem: Vec<u32> = row(0).iter().map(|&c| c.min(sem_max)).collect();
-        let mut z = self.decode_codebook("semantic_quantizer.quantizers.0", &sem)?;
+        let mut z = self.decode_codebook("quantizer.semantic_quantizer.quantizers.0", &sem)?;
         for i in 0..(n_cb - 1) {
             let res: Vec<u32> = row(i + 1).iter().map(|&c| c.min(res_max)).collect();
-            let zr = self.decode_codebook(&format!("quantizer.quantizers.{i}"), &res)?;
+            let zr =
+                self.decode_codebook(&format!("quantizer.quantizer.quantizers.{i}"), &res)?;
             z = (z + zr)?;
         }
 
-        // Decoder-side Mimi bottleneck (after RVQ), then ConvNeXt upsample, then the
-        // EVA-GAN generator.
-        let z = self.maybe_bottleneck(&z, "decoder_transformer")?;
+        // Decode bottleneck: `post_module` Transformer (after RVQ, before upsample), then
+        // the ConvNeXt upsample, then the DAC decoder.
+        let z = self.transformer("quantizer.post_module", &z)?;
         let z = self.upsample(&z)?;
         let wav = self.run_generator(&z)?; // [1, 1, L]
         wav.reshape((wav.dim(D::Minus1)?,))
@@ -380,7 +388,9 @@ impl EvaGanDac {
     }
 
     /// The causal DAC `Encoder` forward (512×): first conv → 4 `EncoderBlock`s → Snake →
-    /// latent conv. The Mimi bottleneck + ConvNeXt downsample are applied by the caller.
+    /// latent conv. The deepest EncoderBlock additionally carries a Transformer at
+    /// `encoder.block.<i>.block.5` (applied after its downsample conv). The ConvNeXt
+    /// downsample + the `pre_module` bottleneck are applied by the caller (encode).
     fn run_encoder(&self, wav: &Tensor) -> Result<Tensor> {
         let mut x = self.causal_conv1d(
             wav,
@@ -395,7 +405,13 @@ impl EvaGanDac {
         for (i, &stride) in self.cfg.encoder_rates.iter().enumerate() {
             dim *= 2;
             let _ = dim;
-            x = self.encoder_block(&x, &format!("encoder.block.{}", i + 1), stride)?;
+            let bp = format!("encoder.block.{}", i + 1);
+            x = self.encoder_block(&x, &bp, stride)?;
+            // The deepest EncoderBlock embeds a full-causal Transformer (`block.5`),
+            // applied after the downsample conv at 1024-dim / 512× resolution.
+            if self.w.has(&format!("{bp}.block.5.norm.weight")) {
+                x = self.transformer(&format!("{bp}.block.5"), &x)?;
+            }
         }
         x = self.snake(
             &x,
@@ -418,14 +434,14 @@ impl EvaGanDac {
         for (s, &factor) in DOWNSAMPLE_FACTOR.iter().enumerate() {
             z = self.causal_conv1d(
                 &z,
-                &format!("downsample.{s}.0.conv.weight"),
-                &format!("downsample.{s}.0.conv.bias"),
+                &format!("quantizer.downsample.{s}.0.conv.weight"),
+                &format!("quantizer.downsample.{s}.0.conv.bias"),
                 factor,
                 factor,
                 1,
                 1,
             )?;
-            z = self.convnext(&z, &format!("downsample.{s}.1"))?;
+            z = self.convnext(&z, &format!("quantizer.downsample.{s}.1"))?;
         }
         Ok(z)
     }
@@ -487,15 +503,17 @@ impl EvaGanDac {
 
         let z = self.run_encoder(&wav)?; // [1, latent, T_512]
         let z = self.downsample(&z)?; // [1, latent, T_2048]
-        // Encoder-side Mimi bottleneck (before RVQ).
-        let z = self.maybe_bottleneck(&z, "encoder_transformer")?;
+        // Encode-side bottleneck: `pre_module` Transformer (after downsample, before RVQ).
+        let z = self.transformer("quantizer.pre_module", &z)?;
 
         // Factorized RVQ: 1 semantic codebook, then 9 residual codebooks on the residual.
-        let (sem_codes, z_sem) = self.quantize_one("semantic_quantizer.quantizers.0", &z)?;
+        let (sem_codes, z_sem) =
+            self.quantize_one("quantizer.semantic_quantizer.quantizers.0", &z)?;
         let mut residual = (z - z_sem)?;
         let mut rows: Vec<Vec<u32>> = vec![sem_codes];
         for i in 0..N_RESIDUAL {
-            let (codes, zq) = self.quantize_one(&format!("quantizer.quantizers.{i}"), &residual)?;
+            let (codes, zq) =
+                self.quantize_one(&format!("quantizer.quantizer.quantizers.{i}"), &residual)?;
             residual = (residual - zq)?;
             rows.push(codes);
         }
@@ -511,27 +529,40 @@ impl EvaGanDac {
         Tensor::from_vec(flat, (n, t), self.dev())
     }
 
-    // --- Mimi-style causal sliding-window transformer bottleneck --------------
+    // --- full-causal RoPE Transformer bottleneck ------------------------------
 
-    /// Apply the Mimi bottleneck transformer at `prefix` (`{prefix}.layers.N.*`) iff the
-    /// checkpoint carries it; otherwise identity. Channels-first in/out; channels-last
-    /// window-causal RoPE transformer inside (`Attention` + `LayerScale`d residual +
-    /// SwiGLU), matching the s1 codec's `WindowLimitedTransformer`.
-    fn maybe_bottleneck(&self, x: &Tensor, prefix: &str) -> Result<Tensor> {
-        if !self.w.has(&format!("{prefix}.layers.0.attention.wqkv.weight"))
-            && !self.w.has(&format!("{prefix}.layers.0.attention.wq.weight"))
+    /// Apply the codec Transformer rooted at `prefix` (`{prefix}.layers.N.*` + a final
+    /// `{prefix}.norm`). Used for `quantizer.pre_module` / `quantizer.post_module` (8
+    /// layers) and the deepest encoder block's `encoder.block.4.block.5` (4 layers); the
+    /// layer count is discovered from the checkpoint. Channels-first in/out; inside it is
+    /// a channels-last pre-norm RoPE Transformer (RMSNorm → `Attention` → LayerScale
+    /// residual → RMSNorm → SwiGLU → LayerScale residual), matching the fish reference
+    /// `TransformerBlock`. Attention is **full causal** (the `causal_mask` bool buffer in
+    /// the checkpoint is a triangular `register_buffer`, recomputed here since Candle's
+    /// pickle reader skips BoolStorage).
+    //
+    // PARITY: RoPE base (`TF_ROPE_BASE`) + RMSNorm eps (`TF_NORM_EPS`) are best-effort;
+    // the `freqs_cis` buffer in the checkpoint is ignored in favour of recomputation.
+    fn transformer(&self, prefix: &str, x: &Tensor) -> Result<Tensor> {
+        // Discover the layer count from the checkpoint (8 for pre/post_module, 4 for the
+        // encoder block.4 Transformer).
+        let mut n_layers = 0usize;
+        while self
+            .w
+            .has(&format!("{prefix}.layers.{n_layers}.attention_norm.weight"))
         {
-            // No explicit bottleneck weights → treat as identity (real codec may fold the
-            // bottleneck elsewhere). PARITY: confirm the bottleneck key prefix on-box.
+            n_layers += 1;
+        }
+        if n_layers == 0 {
             return Ok(x.clone());
         }
         let dim = x.dim(1)?;
         let xt = x.transpose(1, 2)?.contiguous()?; // [B, T, dim]
         let t = xt.dim(1)?;
-        let head_dim = BOTTLENECK_HEAD_DIM;
+        let head_dim = TF_HEAD_DIM;
         let n_head = dim / head_dim;
-        let (cos, sin) = precompute_rope(t, head_dim, DAC_ROPE_BASE, self.dev())?;
-        let mask = window_causal_mask(t, WINDOW_SIZE, self.dev())?;
+        let (cos, sin) = precompute_rope(t, head_dim, TF_ROPE_BASE, self.dev())?;
+        let mask = causal_mask_at(0, t, self.dev())?; // full lower-triangular causal mask
         let shape = AttnShape {
             n_head,
             n_local_heads: n_head,
@@ -539,17 +570,14 @@ impl EvaGanDac {
             qkv_bias: false,
             o_bias: false,
             qk_norm: false,
-            eps: DAC_NORM_EPS,
+            eps: TF_NORM_EPS,
         };
-        let mut cache = KvCache::new(BOTTLENECK_LAYERS);
+        let mut cache = KvCache::new(n_layers);
         let mut h = xt;
-        for l in 0..BOTTLENECK_LAYERS {
+        for l in 0..n_layers {
             let p = format!("{prefix}.layers.{l}");
-            if !self.w.has(&format!("{p}.attention_norm.weight")) {
-                break; // fewer layers than the default cap → stop at the last present.
-            }
             let r = h.clone();
-            let hn = self.w.rms_norm(&h, &format!("{p}.attention_norm.weight"), DAC_NORM_EPS)?;
+            let hn = self.w.rms_norm(&h, &format!("{p}.attention_norm.weight"), TF_NORM_EPS)?;
             let a = attention(
                 &self.w,
                 &format!("{p}.attention"),
@@ -561,36 +589,23 @@ impl EvaGanDac {
                 &mut cache,
                 l,
             )?;
-            // Optional LayerScale on the attention branch.
-            let a = if self.w.has(&format!("{p}.attention_layer_scale.gamma")) {
-                let g = self
-                    .w
-                    .g(&format!("{p}.attention_layer_scale.gamma"))?
-                    .reshape((1, 1, dim))?;
-                a.broadcast_mul(&g)?
-            } else {
-                a
-            };
+            let g = self
+                .w
+                .g(&format!("{p}.attention_layer_scale.gamma"))?
+                .reshape((1, 1, dim))?;
+            let a = a.broadcast_mul(&g)?;
             h = (r + a)?;
             let r = h.clone();
-            let hn = self.w.rms_norm(&h, &format!("{p}.ffn_norm.weight"), DAC_NORM_EPS)?;
+            let hn = self.w.rms_norm(&h, &format!("{p}.ffn_norm.weight"), TF_NORM_EPS)?;
             let f = swiglu(&self.w, &format!("{p}.feed_forward"), &hn)?;
-            let f = if self.w.has(&format!("{p}.ffn_layer_scale.gamma")) {
-                let g2 = self
-                    .w
-                    .g(&format!("{p}.ffn_layer_scale.gamma"))?
-                    .reshape((1, 1, dim))?;
-                f.broadcast_mul(&g2)?
-            } else {
-                f
-            };
+            let g2 = self
+                .w
+                .g(&format!("{p}.ffn_layer_scale.gamma"))?
+                .reshape((1, 1, dim))?;
+            let f = f.broadcast_mul(&g2)?;
             h = (r + f)?;
         }
-        let h = if self.w.has(&format!("{prefix}.norm.weight")) {
-            self.w.rms_norm(&h, &format!("{prefix}.norm.weight"), DAC_NORM_EPS)?
-        } else {
-            h
-        };
+        let h = self.w.rms_norm(&h, &format!("{prefix}.norm.weight"), TF_NORM_EPS)?;
         h.transpose(1, 2)?.contiguous()
     }
 }
@@ -624,20 +639,4 @@ fn layer_norm(x: &Tensor, w: &Tensor, b: &Tensor, eps: f64) -> Result<Tensor> {
 fn l2_normalize(x: &Tensor) -> Result<Tensor> {
     let norm = x.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?;
     x.broadcast_div(&norm.affine(1.0, NORM_EPS)?)
-}
-
-/// Additive window-limited causal mask `[t, t]`: query `i` may attend key `j` iff
-/// `i - window + 1 <= j <= i`, else `-inf`.
-fn window_causal_mask(t: usize, window: usize, dev: &Device) -> Result<Tensor> {
-    let mut data = vec![0f32; t * t];
-    for i in 0..t {
-        for j in 0..t {
-            let too_late = j > i;
-            let too_old = i >= window && j < i - window + 1;
-            if too_late || too_old {
-                data[i * t + j] = f32::NEG_INFINITY;
-            }
-        }
-    }
-    Tensor::from_vec(data, (t, t), dev)
 }
