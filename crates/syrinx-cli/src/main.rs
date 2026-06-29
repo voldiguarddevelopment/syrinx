@@ -721,9 +721,17 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                             n,
                             ref_text
                         );
-                        model
-                            .synthesize_cloned(&ref_text, &ref_codes, text, &params)
-                            .map_err(|e| e.to_string())?
+                        if std::env::var("SYRINX_FISH_CODEC_ROUNDTRIP").is_ok() {
+                            // DIAGNOSTIC: encode -> decode the reference with NO LM, to isolate
+                            // whether garbled output is the codec (round-trip sounds bad) or the
+                            // LM (round-trip reconstructs the reference voice => codec is fine).
+                            eprintln!("syrinx synth --fish s2-pro: CODEC ROUND-TRIP (no LM)");
+                            model.decode_codes(&ref_codes).map_err(|e| e.to_string())?
+                        } else {
+                            model
+                                .synthesize_cloned(&ref_text, &ref_codes, text, &params)
+                                .map_err(|e| e.to_string())?
+                        }
                     }
                     None => model.synthesize(text, &params).map_err(|e| e.to_string())?,
                 }
