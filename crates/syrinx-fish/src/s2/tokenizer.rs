@@ -24,6 +24,14 @@ use tokenizers::Tokenizer;
 pub const IM_START_TOKEN: &str = "<|im_start|>";
 /// `<|im_end|>` — the end-of-utterance stop token (Qwen3 `eos`, id 151645).
 pub const IM_END_TOKEN: &str = "<|im_end|>";
+/// `<|voice|>` — the audio/voice modality marker placed after `assistant\n`; generation
+/// of semantic tokens begins immediately after it (reference `fish_qwen3_omni` prompt).
+/// PARITY: confirm `<|voice|>` is a registered added-token (single id) in the on-box
+/// `tokenizer.json`; if it is NOT, it will be split into BPE pieces here.
+pub const VOICE_TOKEN: &str = "<|voice|>";
+/// `<|speaker:0|>` — the speaker tag prepended to the reference transcript in the cloning
+/// prompt. PARITY: confirm it resolves to a single id on-box.
+pub const SPEAKER0_TOKEN: &str = "<|speaker:0|>";
 /// The number of contiguous `<|semantic:i|>` ids in the s2 vocabulary.
 pub const N_SEMANTIC: usize = 4096;
 /// config.json `semantic_start_token_id` — the fallback `<|semantic:0|>` id.

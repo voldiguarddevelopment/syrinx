@@ -45,7 +45,9 @@ mod backend {
     use super::fast_ar::FastAr;
     use super::load::{load_codec, load_lm};
     use super::slow_ar::SlowAr;
-    use super::tokenizer::{Qwen3Tokenizer, IM_END_TOKEN, IM_START_TOKEN};
+    use super::tokenizer::{
+        Qwen3Tokenizer, IM_END_TOKEN, IM_START_TOKEN, SPEAKER0_TOKEN, VOICE_TOKEN,
+    };
     use crate::common::codec::RvqCodec;
     use crate::common::config::{CodecConfig, FishConfig};
     use crate::common::dualar::{drive, DriveParams, DualArBackend, SlowStep};
@@ -170,30 +172,33 @@ mod backend {
         ///
         /// PARITY: `chat_template.jinja` is the standard Qwen3 text template — the audio
         /// modality assembly lives in model code, not the jinja. The system instruction
-        /// and exact turn spacing below are reconstructed from the Qwen3 chat format;
-        /// confirm the production TTS system prompt + any voice-modality marker on-box.
+        /// (lowercase, no trailing period) and the `<|voice|>` modality marker after
+        /// `assistant\n` mirror the `fish_qwen3_omni` reference; generation begins
+        /// immediately after `<|voice|>` (no trailing newline).
         pub fn build_prompt(&self, text: &str) -> Result<Tensor> {
             let im_s = IM_START_TOKEN;
             let im_e = IM_END_TOKEN;
+            let voice = VOICE_TOKEN;
             let prompt = format!(
-                "{im_s}system\nConvert the provided text to speech.{im_e}\n\
+                "{im_s}system\nconvert the provided text to speech{im_e}\n\
                  {im_s}user\n{text}{im_e}\n\
-                 {im_s}assistant\n"
+                 {im_s}assistant\n{voice}"
             );
             self.encode_prompt(&prompt)
         }
 
-        /// Build a voice-cloning prompt that **prepends the reference audio** to the
-        /// conversation: the reference transcript as the user turn and the reference RVQ
-        /// codes `ref_codes` `[num_codebooks, T_ref]` as the assistant audio turn, then
-        /// the target `text`. Row 0 carries the slow-vocab ids (text positions = BPE ids;
-        /// reference-audio positions = `semantic_begin + ref_codes[0]`); rows `1..` carry
-        /// the reference codes on the audio positions and 0 elsewhere.
+        /// Build a voice-cloning prompt that embeds the reference audio INSIDE the system
+        /// turn as a single `Text:`/`Speech:` block (`<|speaker:0|>{ref_text}` + the
+        /// reference RVQ codes `ref_codes` `[num_codebooks, T_ref]`), then the target
+        /// `text` as the user turn. Row 0 carries the slow-vocab ids (text positions = BPE
+        /// ids; reference-audio positions = `semantic_begin + ref_codes[0]`, i.e. the
+        /// `<|semantic:i|>` ids); rows `1..` carry the reference codes on the audio
+        /// positions and 0 elsewhere (the MCF sum, which receives FIX #1's semantic scale).
         ///
-        /// PARITY: the precise interleaving (where the `<|im_end|>`/turn markers sit
-        /// relative to the audio span, and whether a `<|semantic|>`-style opener precedes
-        /// the codes) is reconstructed and unconfirmed — verify against the s2 reference
-        /// `encode_tokens` / `ContentSequence` on-box.
+        /// PARITY: the reference embeds the ref audio INSIDE the system turn as a single
+        /// turn (`Text:`/`Speech:` blocks with a `<|speaker:0|>` tag), then the target text
+        /// as the user turn and `<|voice|>` after `assistant\n`. Confirm the exact spacing
+        /// + that `<|speaker:0|>`/`<|voice|>` are single ids against the s2 reference on-box.
         pub fn build_prompt_with_reference(
             &self,
             ref_text: &str,
@@ -202,19 +207,24 @@ mod backend {
         ) -> Result<Tensor> {
             let im_s = IM_START_TOKEN;
             let im_e = IM_END_TOKEN;
+            let voice = VOICE_TOKEN;
+            let spk0 = SPEAKER0_TOKEN;
             let n_cb = self.cfg.codec.num_codebooks;
 
-            // Text segments (their code rows are zero).
+            // Text segments (their code rows are zero). The reference audio span is embedded
+            // INSIDE the system turn: the system preamble + `Text:`/`<|speaker:0|>{ref_text}`
+            // + `Speech:` opener form the head; the `<|semantic:i|>` ref codes follow inline;
+            // the system turn then closes and the target user turn + `<|voice|>` follow.
             let head = format!(
-                "{im_s}system\nConvert the provided text to speech.{im_e}\n\
-                 {im_s}user\n{ref_text}{im_e}\n{im_s}assistant\n"
+                "{im_s}system\nconvert the provided text to speech reference to the following:\n\n\
+                 Text:\n{spk0}{ref_text}\n\nSpeech:\n"
             );
             let head_ids = self
                 .tokenizer
                 .encode(&head)
                 .map_err(|e| candle_core::Error::Msg(format!("encode ref head: {e}")))?;
 
-            let tail = format!("{im_e}\n{im_s}user\n{text}{im_e}\n{im_s}assistant\n");
+            let tail = format!("{im_e}\n{im_s}user\n{text}{im_e}\n{im_s}assistant\n{voice}");
             let tail_ids = self
                 .tokenizer
                 .encode(&tail)

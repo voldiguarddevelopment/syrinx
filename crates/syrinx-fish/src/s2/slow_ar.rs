@@ -119,12 +119,15 @@ impl SlowAr {
         }
         let vq_sum = acc.expect("num_codebooks >= 1"); // [t, dim]
 
-        // Zero the codebook sum on non-semantic positions.
+        // Identify the semantic positions (the only ones that carry codebook codes).
         let begin = self.cfg.semantic_begin_id;
         let end = self.cfg.semantic_end_id;
-        let mask: Vec<f32> = tok_ids
+        let is_semantic: Vec<bool> = tok_ids.iter().map(|&id| id >= begin && id <= end).collect();
+
+        // Zero the codebook sum on non-semantic positions (reference: `vq_embeds_sum[~is_semantic] = 0`).
+        let mask: Vec<f32> = is_semantic
             .iter()
-            .map(|&id| if id >= begin && id <= end { 1.0 } else { 0.0 })
+            .map(|&s| if s { 1.0 } else { 0.0 })
             .collect();
         // Cast the f32 mask to the compute dtype so the multiply doesn't mix dtypes
         // (Candle errors on f32 × bf16); identity for the f32 CPU path.
@@ -132,6 +135,19 @@ impl SlowAr {
         let vq_sum = vq_sum.broadcast_mul(&mask)?;
 
         let x = (emb_tok + vq_sum)?; // [t, dim]
+
+        // FIX #1 — MCF embedding scale (`scale_codebook_embeddings=True`, llama.py:416-420).
+        // On SEMANTIC positions only, divide the combined embedding by sqrt(num_codebooks + 1)
+        // (= 1/sqrt(11) for N=10); text positions are left unchanged. Build a per-row scale
+        // (1/sqrt(N+1) on semantic rows, 1.0 on text rows) and broadcast-multiply.
+        let inv_scale = 1.0f32 / ((n_cb as f32) + 1.0).sqrt();
+        let scale: Vec<f32> = is_semantic
+            .iter()
+            .map(|&s| if s { inv_scale } else { 1.0 })
+            .collect();
+        let scale = Tensor::from_vec(scale, (t, 1), &self.w.dev)?.to_dtype(self.w.dt)?;
+        let x = x.broadcast_mul(&scale)?; // [t, dim]
+
         x.reshape((1, t, self.cfg.slow.dim))
     }
 
@@ -200,22 +216,22 @@ impl SlowAr {
             .reshape((self.cfg.slow.vocab_size,))?
             .to_dtype(candle_core::DType::F32)?;
 
-        // Hidden for the fast head: the report projects the slow hidden h_t^slow to the
-        // Fast AR's dim via `fast_project_in` (identity when fast_dim == slow dim — the
-        // real s2-pro case, both 2560; the checkpoint carries NO `fast_project_in`).
-        // PARITY: `audio_decoder_config.norm_fastlayer_input` is true; the reference may
-        // feed the FINAL-RMSNorm'd hidden (`normed`, above) as the position-0 conditioning
-        // prefix rather than this pre-norm residual. Confirm the conditioning tap on-box.
+        // Hidden for the fast head. FIX #3 — `norm_fastlayer_input=True` (llama.py:459-461):
+        // the fast head is conditioned on `self.norm(x)`, i.e. the SAME post-final-RMSNorm
+        // hidden (`normed`) used for the slow logits — NOT the pre-norm residual `last`.
+        // This checkpoint carries NO `fast_project_in` (fast_dim == slow dim, both 2560), so
+        // no projection is needed; when a project_in IS present it operates on the normed
+        // hidden too.
         let hidden = if self.has_project_in {
             // PARITY: confirm whether fast_project_in carries a bias on-box.
             if self.w.has("fast_project_in.bias") {
                 self.w
-                    .linear(&last, "fast_project_in.weight", Some("fast_project_in.bias"))?
+                    .linear(&normed, "fast_project_in.weight", Some("fast_project_in.bias"))?
             } else {
-                self.w.linear(&last, "fast_project_in.weight", None)?
+                self.w.linear(&normed, "fast_project_in.weight", None)?
             }
         } else {
-            last
+            normed
         };
         Ok((logits, hidden))
     }
