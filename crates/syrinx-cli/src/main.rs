@@ -108,6 +108,21 @@ syrinx synth — render text in a reference voice
                            s1-mini has no reference-cloning path: --ref-wav is
                            ignored there (text-only synthesis).
 
+  Fish batch render (load the model + reference ONCE; mutually exclusive with --text/--out):
+    --batch <JSONL>        Render every matching corpus entry (one compact JSON
+                           object per line: id, model, lang, scale, text). Loads
+                           the variant ONCE and (s2-pro + --ref-wav) encodes the
+                           reference ONCE, then loops. Requires --out-dir.
+    --out-dir <DIR>        Where <id>.wav and manifest.tsv are written.   [batch]
+    --filter-lang <L>      Keep only entries whose lang == L.
+    --filter-scale <S>     Keep only entries whose scale == S (small|reply|chapter).
+    --limit <N>            Cap the kept list to the first N entries.
+                           An entry is kept when its model is the variant's family
+                           (s2-pro -> s2/both; s1-mini -> s1/both) AND it passes the
+                           lang/scale filters. A per-sample failure is logged and
+                           skipped; the batch continues. manifest.tsv columns:
+                           id<TAB>scale<TAB>lang<TAB>text<TAB>wav<TAB>n_samples.
+
   CV3-only feature flags (require --cv3):
     --quality              Render with the real random-phase NSF SineGen source
                            (perceptual-quality path) instead of the deterministic
@@ -200,6 +215,12 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
         // --- Fish Audio front door (`synth --fish` only) ---
         fish: Option<String>,
         fish_dir: Option<PathBuf>,
+        // --- Fish batch render mode (`synth --fish --batch` only) ---
+        batch: Option<PathBuf>,
+        out_dir: Option<PathBuf>,
+        filter_lang: Option<String>,
+        filter_scale: Option<String>,
+        limit: Option<usize>,
         // --- speech-to-text (`stt` only) ---
         wav: Option<PathBuf>,
         lang: Option<String>,
@@ -296,6 +317,17 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                 "--emotion-lang" => o.emotion_lang = Some(need(&mut argv, "--emotion-lang")?),
                 "--fish" => o.fish = Some(need(&mut argv, "--fish")?),
                 "--fish-dir" => o.fish_dir = Some(PathBuf::from(need(&mut argv, "--fish-dir")?)),
+                "--batch" => o.batch = Some(PathBuf::from(need(&mut argv, "--batch")?)),
+                "--out-dir" => o.out_dir = Some(PathBuf::from(need(&mut argv, "--out-dir")?)),
+                "--filter-lang" => o.filter_lang = Some(need(&mut argv, "--filter-lang")?),
+                "--filter-scale" => o.filter_scale = Some(need(&mut argv, "--filter-scale")?),
+                "--limit" => {
+                    let v = need(&mut argv, "--limit")?;
+                    o.limit = Some(
+                        v.parse()
+                            .map_err(|_| format!("--limit expects an integer, got `{v}`"))?,
+                    );
+                }
                 "--wav" => o.wav = Some(PathBuf::from(need(&mut argv, "--wav")?)),
                 "--lang" => o.lang = Some(need(&mut argv, "--lang")?),
                 "--check-tts" => o.check_tts = Some(need(&mut argv, "--check-tts")?),
@@ -749,6 +781,295 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
         Ok(())
     }
 
+    /// One kept corpus entry for batch rendering (the fields the loop needs).
+    struct BatchEntry {
+        id: String,
+        model: String,
+        lang: String,
+        scale: String,
+        text: String,
+    }
+
+    /// Parse the sample corpus JSONL (one compact JSON object per line) into the small
+    /// subset of fields the batch loop needs. Uses `serde_json` (already a `real` dep);
+    /// blank lines are skipped, a malformed line aborts the parse with its 1-based number.
+    fn parse_batch_jsonl(path: &std::path::Path) -> Result<Vec<BatchEntry>, String> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("cannot read --batch corpus {}: {e}", path.display()))?;
+        let mut out = Vec::new();
+        for (i, line) in content.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(line)
+                .map_err(|e| format!("--batch corpus line {}: invalid JSON: {e}", i + 1))?;
+            let get = |k: &str| {
+                v.get(k)
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            out.push(BatchEntry {
+                id: get("id"),
+                model: get("model"),
+                lang: get("lang"),
+                scale: get("scale"),
+                text: get("text"),
+            });
+        }
+        Ok(out)
+    }
+
+    /// Append one rendered sample's row to `<out-dir>/manifest.tsv`
+    /// (`id<TAB>scale<TAB>lang<TAB>text<TAB>wav<TAB>n_samples`; tabs in `text` are
+    /// flattened to spaces so the row stays single-column-safe).
+    fn append_batch_manifest(
+        manifest: &std::path::Path,
+        e: &BatchEntry,
+        wav_path: &std::path::Path,
+        n_samples: usize,
+    ) -> Result<(), String> {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(manifest)
+            .map_err(|err| format!("cannot open manifest {}: {err}", manifest.display()))?;
+        writeln!(
+            f,
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            e.id,
+            e.scale,
+            e.lang,
+            e.text.replace('\t', " "),
+            wav_path.display(),
+            n_samples
+        )
+        .map_err(|err| format!("cannot write manifest {}: {err}", manifest.display()))
+    }
+
+    /// Write one rendered sample's WAV to `<out-dir>/<id>.wav`, append its manifest row,
+    /// and print the per-sample progress line. Returns the WAV path's sample count.
+    fn finish_batch_sample(
+        out_dir: &std::path::Path,
+        manifest: &std::path::Path,
+        i: usize,
+        total: usize,
+        e: &BatchEntry,
+        wav: &[f32],
+    ) -> Result<(), String> {
+        let wav_path = out_dir.join(format!("{}.wav", e.id));
+        fish_audio::write_wav_44k(&wav_path, wav).map_err(|err| err.to_string())?;
+        append_batch_manifest(manifest, e, &wav_path, wav.len())?;
+        eprintln!(
+            "[{}/{}] {} ({}/{}) -> {} samples",
+            i + 1,
+            total,
+            e.id,
+            e.lang,
+            e.scale,
+            wav.len()
+        );
+        Ok(())
+    }
+
+    /// `synth --fish <VARIANT> --batch <corpus.jsonl> --out-dir <DIR>` — load the model
+    /// (and, for `s2-pro` with `--ref-wav`, encode the reference) ONCE, then synthesize
+    /// every matching corpus entry's `text` in a loop, writing `<out-dir>/<id>.wav` and a
+    /// `<out-dir>/manifest.tsv`. Mutually exclusive with `--text`/`--out`; a per-sample
+    /// failure is logged and skipped (the batch continues). `--cuda`-gated like the rest.
+    ///
+    /// Filtering: an entry is kept if its `model` is the variant's family (`s2-pro` ⇒
+    /// `s2`/`both`; `s1-mini` ⇒ `s1`/`both`) AND it matches `--filter-lang`/`--filter-scale`
+    /// when given; `--limit N` then caps the kept list to the first `N` entries.
+    fn cmd_synth_fish_batch(o: &Opts) -> Result<(), String> {
+        if o.cv3 {
+            return Err("--fish and --cv3 are mutually exclusive (pick one synthesizer)".to_string());
+        }
+        reject_cv3_feature_flags(o)?;
+        if o.fish.is_none() {
+            return Err(
+                "--batch is a Fish-only render mode; pass --fish <s1-mini|s2-pro>".to_string(),
+            );
+        }
+        if o.text.is_some() || o.out.is_some() {
+            return Err(
+                "--batch is mutually exclusive with --text/--out (batch reads each entry's \
+                 text from the corpus and writes <out-dir>/<id>.wav)"
+                    .to_string(),
+            );
+        }
+        let batch = o
+            .batch
+            .as_ref()
+            .ok_or("internal: cmd_synth_fish_batch entered without --batch")?;
+        let out_dir = o
+            .out_dir
+            .as_ref()
+            .ok_or("--batch requires --out-dir <DIR> (where <id>.wav + manifest.tsv go)")?;
+        if o.plan.is_some() || o.pitch.is_some() || o.rate.is_some() {
+            eprintln!(
+                "syrinx synth --fish --batch: prosody plan/pitch/rate are CosyVoice2-only \
+                 and are ignored on the Fish path"
+            );
+        }
+
+        let variant = FishVariant::from_id(o.fish.as_deref().unwrap_or_default())
+            .ok_or("--fish expects `s1-mini` or `s2-pro`")?;
+        let dir = o
+            .fish_dir
+            .as_ref()
+            .ok_or("--fish requires --fish-dir <DIR> (the checkpoint directory)")?;
+
+        if o.cuda {
+            #[cfg(not(feature = "cuda"))]
+            eprintln!(
+                "syrinx: --cuda requested but this binary was built without the `cuda` \
+                 feature; running on CPU"
+            );
+        }
+        let dev = if o.cuda {
+            syrinx_serve::synth::pick_device(None)
+        } else {
+            candle_core::Device::Cpu
+        };
+
+        let params = DriveParams {
+            seed: 0,
+            max_new_frames: o
+                .max_steps
+                .unwrap_or_else(|| DriveParams::default().max_new_frames),
+            ..Default::default()
+        };
+
+        // Parse + filter the corpus: variant family, then optional lang/scale, then limit.
+        let entries = parse_batch_jsonl(batch)?;
+        let mut kept: Vec<BatchEntry> = entries
+            .into_iter()
+            .filter(|e| {
+                let family_ok = match variant {
+                    FishVariant::S2Pro => e.model == "s2" || e.model == "both",
+                    FishVariant::S1Mini => e.model == "s1" || e.model == "both",
+                };
+                let lang_ok = o.filter_lang.as_deref().map_or(true, |l| e.lang == l);
+                let scale_ok = o.filter_scale.as_deref().map_or(true, |s| e.scale == s);
+                family_ok && lang_ok && scale_ok
+            })
+            .collect();
+        if let Some(n) = o.limit {
+            kept.truncate(n);
+        }
+        let total = kept.len();
+
+        std::fs::create_dir_all(out_dir)
+            .map_err(|e| format!("cannot create --out-dir {}: {e}", out_dir.display()))?;
+        let manifest = out_dir.join("manifest.tsv");
+        std::fs::write(&manifest, "id\tscale\tlang\ttext\twav\tn_samples\n")
+            .map_err(|e| format!("cannot init manifest {}: {e}", manifest.display()))?;
+
+        eprintln!(
+            "syrinx synth --fish {} --batch: {} entries matched (lang={:?} scale={:?} \
+             limit={:?}); model loads ONCE.",
+            variant.dir_name(),
+            total,
+            o.filter_lang,
+            o.filter_scale,
+            o.limit
+        );
+
+        let mut rendered = 0usize;
+        let mut failed = 0usize;
+
+        match variant {
+            FishVariant::S2Pro => {
+                let mut model = S2Pro::load(dir, dev.clone()).map_err(|e| e.to_string())?;
+                // Encode the reference ONCE; the prompt codes are reused for every sample.
+                let ref_ctx: Option<(String, candle_core::Tensor)> = match &o.ref_wav {
+                    Some(ref_wav) => {
+                        let ref_text = o.prompt_text.clone().unwrap_or_default();
+                        let samples =
+                            fish_audio::read_ref_wav_44k(ref_wav).map_err(|e| e.to_string())?;
+                        let n = samples.len();
+                        let wav_t = candle_core::Tensor::from_vec(samples, n, &dev)
+                            .map_err(|e| e.to_string())?;
+                        let ref_codes =
+                            model.encode_reference(&wav_t).map_err(|e| e.to_string())?;
+                        eprintln!(
+                            "syrinx synth --fish s2-pro --batch: cloning from {} ({} samples \
+                             @44.1k, ref-transcript {:?}) — encoded ONCE.",
+                            ref_wav.display(),
+                            n,
+                            ref_text
+                        );
+                        Some((ref_text, ref_codes))
+                    }
+                    None => None,
+                };
+                for (i, e) in kept.iter().enumerate() {
+                    let res = match &ref_ctx {
+                        Some((ref_text, ref_codes)) => {
+                            model.synthesize_cloned(ref_text, ref_codes, &e.text, &params)
+                        }
+                        None => model.synthesize(&e.text, &params),
+                    };
+                    match res {
+                        Ok(wav) => {
+                            match finish_batch_sample(out_dir, &manifest, i, total, e, &wav) {
+                                Ok(()) => rendered += 1,
+                                Err(err) => {
+                                    eprintln!("[{}/{}] {} WRITE FAILED: {err}", i + 1, total, e.id);
+                                    failed += 1;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("[{}/{}] {} SYNTH FAILED: {err}", i + 1, total, e.id);
+                            failed += 1;
+                        }
+                    }
+                }
+            }
+            FishVariant::S1Mini => {
+                let mut model = S1Mini::load(dir, dev).map_err(|e| e.to_string())?;
+                if o.ref_wav.is_some() {
+                    eprintln!(
+                        "syrinx synth --fish s1-mini --batch: s1-mini has no \
+                         reference-conditioned cloning path; --ref-wav is ignored."
+                    );
+                }
+                for (i, e) in kept.iter().enumerate() {
+                    match model.synthesize(&e.text, &params) {
+                        Ok(wav) => {
+                            match finish_batch_sample(out_dir, &manifest, i, total, e, &wav) {
+                                Ok(()) => rendered += 1,
+                                Err(err) => {
+                                    eprintln!("[{}/{}] {} WRITE FAILED: {err}", i + 1, total, e.id);
+                                    failed += 1;
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            eprintln!("[{}/{}] {} SYNTH FAILED: {err}", i + 1, total, e.id);
+                            failed += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        eprintln!(
+            "syrinx synth --fish {} --batch: done — {} rendered, {} failed, {} total -> {}",
+            variant.dir_name(),
+            rendered,
+            failed,
+            total,
+            out_dir.display()
+        );
+        eprintln!("syrinx: manifest -> {}", manifest.display());
+        Ok(())
+    }
+
     /// Resolve `--emotion-lang` (`zh` default, or `en`) into an [`InstructLang`].
     fn resolve_emotion_lang(o: &Opts) -> Result<InstructLang, String> {
         match o.emotion_lang.as_deref() {
@@ -788,6 +1109,13 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
         // the required-arg / model-load machinery.
         if o.list_emotions {
             return list_emotions(&o);
+        }
+        // Fish batch render mode: load the model + reference ONCE and synthesize every
+        // matching corpus entry in a loop (no per-sample reload). Fish-only and mutually
+        // exclusive with the single `--text`/`--out` path; routed before the required-arg
+        // reads because batch supplies its texts from the corpus, not `--text`.
+        if o.batch.is_some() {
+            return cmd_synth_fish_batch(&o);
         }
         let text = o.text.clone().ok_or("missing required --text")?;
         let out = o.out.clone().ok_or("missing required --out")?;

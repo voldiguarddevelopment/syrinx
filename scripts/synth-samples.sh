@@ -1,38 +1,53 @@
 #!/usr/bin/env bash
 #
-# synth-samples.sh — drive the Fish Audio sample corpus through the Syrinx synth CLI.
+# synth-samples.sh — drive the Fish Audio sample corpus through the Syrinx batch synth CLI.
 #
-# Reads samples/fish-samples.jsonl, filters by model variant / scale / language /
-# placement, and for every matching entry invokes the Fish synth front door:
+# Reads samples/fish-samples.jsonl and renders every entry matching the chosen variant /
+# scale / language / placement in a SINGLE CLI invocation that loads the 5 GB model (and,
+# for s2-pro + a reference, encodes the reference) exactly ONCE:
 #
 #   cargo run -p syrinx-cli --features real -- \
-#       synth --fish <variant> --fish-dir <CKPT> --text "<text>" \
-#             --ref-wav <REF.wav> --out <DIR>/<id>.wav
+#       synth --fish <variant> --fish-dir <CKPT> --batch <corpus.jsonl> \
+#             --out-dir <DIR> --ref-wav <REF.wav> \
+#             [--filter-lang L] [--filter-scale S] [--limit N] [--cuda]
+#
+# The script's filters map onto the CLI's native batch filters:
+#   --lang  -> --filter-lang     --scale -> --filter-scale     --limit -> --limit
+# Family (model) filtering (s2-pro => s2/both, s1-mini => s1/both) is done by the CLI.
+# --placement has no native CLI filter, so it is pre-applied here by writing a temp,
+# placement-filtered corpus (requires jq) that is then passed as --batch.
+#
+# The CLI writes the canonical <out-dir>/manifest.tsv
+# (id <tab> scale <tab> lang <tab> text <tab> wav <tab> n_samples). This script keeps a
+# model-free counts.txt + run-meta.txt summary so the corpus can be inspected off-box.
 #
 # The corpus is box-independent to *author*; actual synthesis runs on the GPU box.
-# Pass --dry-run to print each line as the command it WOULD run, tagged [DRY RUN] —
-# nothing is synthesized (no model load), but the manifest + counts are still produced
-# so the corpus can be inspected anywhere off-box.
+# Pass --dry-run to print the single command that WOULD run, tagged [DRY RUN] — nothing
+# is synthesized (no model load), but the matched counts are still produced.
 #
 # Usage:
 #   scripts/synth-samples.sh <s1-mini|s2-pro> [options]
 #
 # Options:
-#   --scale     small|reply|chapter   only synthesize this scale
-#   --lang      L                     only this language code (en, zh, ja, ...)
-#   --placement P                     only this placement (leading, mid, ...)
-#   --limit     N                     stop after N matching entries
-#   --ref       REF.wav               reference voice clip (default: $SYRINX_REF or none)
-#   --out       DIR                   output dir (default: samples/out/<variant>)
-#   --fish-dir  DIR                   checkpoint dir (default: $SYRINX_FISH_S{1,2}_DIR
-#                                     or checkpoints/<variant-dir>)
-#   --dry-run                         print the commands that WOULD run; synthesize
-#                                     nothing (off-box authoring; no model load)
-#   -h|--help                         this help
+#   --scale       small|reply|chapter   only synthesize this scale (-> --filter-scale)
+#   --lang        L                     only this language code (-> --filter-lang)
+#   --placement   P                     only this placement (pre-filtered here; needs jq)
+#   --limit       N                     stop after N matching entries (-> --limit)
+#   --ref         REF.wav               reference voice clip (default: $SYRINX_REF or none)
+#   --prompt-text TEXT                  reference transcript (s2-pro; -> --prompt-text)
+#   --max-steps   N                     LM frame cap (-> --max-steps)
+#   --cuda                              run on GPU (requires a --features cuda build)
+#   --out         DIR                   output dir (default: samples/out/<variant>)
+#   --fish-dir    DIR                   checkpoint dir (default: $SYRINX_FISH_S{1,2}_DIR
+#                                       or checkpoints/<variant-dir>)
+#   --dry-run                           print the command that WOULD run; synthesize
+#                                       nothing (off-box authoring; no model load)
+#   -h|--help                           this help
 #
 # Outputs (under the chosen --out DIR):
-#   manifest.tsv   id <tab> scale <tab> lang <tab> placement <tab> text <tab> wav
-#   counts.txt     per-scale (and per-lang/per-placement) summary
+#   manifest.tsv   id <tab> scale <tab> lang <tab> text <tab> wav <tab> n_samples  (CLI-written)
+#   counts.txt     per-scale (and per-lang/per-placement) summary  (script-written)
+#   run-meta.txt   host + gpu + toolchain specs                    (script-written)
 #
 set -euo pipefail
 
@@ -46,7 +61,7 @@ JSONL="$REPO_ROOT/samples/fish-samples.jsonl"
 die() { echo "synth-samples: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,52p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -65,20 +80,26 @@ esac
 # ---------------------------------------------------------------------------
 F_SCALE=""; F_LANG=""; F_PLACEMENT=""; LIMIT=0
 REF="${SYRINX_REF:-}"
+PROMPT_TEXT=""
+MAX_STEPS=""
+CUDA=0
 OUT=""
 FISH_DIR=""
 DRYRUN=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --scale)     F_SCALE="${2:?--scale needs a value}"; shift 2 ;;
-    --lang)      F_LANG="${2:?--lang needs a value}"; shift 2 ;;
-    --placement) F_PLACEMENT="${2:?--placement needs a value}"; shift 2 ;;
-    --limit)     LIMIT="${2:?--limit needs a value}"; shift 2 ;;
-    --ref)       REF="${2:?--ref needs a value}"; shift 2 ;;
-    --out)       OUT="${2:?--out needs a value}"; shift 2 ;;
-    --fish-dir)  FISH_DIR="${2:?--fish-dir needs a value}"; shift 2 ;;
-    --dry-run)   DRYRUN=1; shift ;;
-    -h|--help)   usage 0 ;;
+    --scale)       F_SCALE="${2:?--scale needs a value}"; shift 2 ;;
+    --lang)        F_LANG="${2:?--lang needs a value}"; shift 2 ;;
+    --placement)   F_PLACEMENT="${2:?--placement needs a value}"; shift 2 ;;
+    --limit)       LIMIT="${2:?--limit needs a value}"; shift 2 ;;
+    --ref)         REF="${2:?--ref needs a value}"; shift 2 ;;
+    --prompt-text) PROMPT_TEXT="${2:?--prompt-text needs a value}"; shift 2 ;;
+    --max-steps)   MAX_STEPS="${2:?--max-steps needs a value}"; shift 2 ;;
+    --cuda)        CUDA=1; shift ;;
+    --out)         OUT="${2:?--out needs a value}"; shift 2 ;;
+    --fish-dir)    FISH_DIR="${2:?--fish-dir needs a value}"; shift 2 ;;
+    --dry-run)     DRYRUN=1; shift ;;
+    -h|--help)     usage 0 ;;
     *) die "unknown option '$1' (see --help)" ;;
   esac
 done
@@ -87,15 +108,13 @@ FISH_DIR="${FISH_DIR:-$FISH_DIR_DEFAULT}"
 [[ -f "$JSONL" ]] || die "corpus not found: $JSONL"
 OUT="${OUT:-$REPO_ROOT/samples/out/$VARIANT}"
 mkdir -p "$OUT"
-MANIFEST="$OUT/manifest.tsv"
 COUNTS="$OUT/counts.txt"
 
 # ---------------------------------------------------------------------------
-# Live vs dry run. `--fish` is wired into the CLI (synth --fish <variant>); a LIVE
-# run loads the model and synthesizes, a --dry-run prints the commands only.
+# Live vs dry run.
 # ---------------------------------------------------------------------------
 if [[ $DRYRUN -eq 1 ]]; then
-  echo "synth-samples: --dry-run -> printing the commands that WOULD run; no audio is produced." >&2
+  echo "synth-samples: --dry-run -> printing the single command that WOULD run; no audio is produced." >&2
 fi
 if [[ $DRYRUN -eq 0 && -z "$REF" ]]; then
   die "a reference voice is required to synthesize; pass --ref REF.wav (or set \$SYRINX_REF), or use --dry-run"
@@ -103,64 +122,76 @@ fi
 REF_ARG="${REF:-<REF.wav>}"
 
 # ---------------------------------------------------------------------------
-# JSONL reader: jq when available, else a grep/sed fallback.
-# Emits TAB-separated: model<TAB>scale<TAB>lang<TAB>placement<TAB>text, one per line.
-# An entry matches the chosen variant if its model is the variant's model OR "both".
+# Placement pre-filter: the CLI has no --filter-placement, so when --placement is
+# requested we materialize a temp, placement-filtered corpus and feed THAT to --batch.
+# (jq required only for this case.) Otherwise the whole corpus is the batch input.
+# ---------------------------------------------------------------------------
+BATCH_CORPUS="$JSONL"
+TMP_CORPUS=""
+cleanup() { [[ -n "$TMP_CORPUS" && -f "$TMP_CORPUS" ]] && rm -f "$TMP_CORPUS"; }
+trap cleanup EXIT
+if [[ -n "$F_PLACEMENT" ]]; then
+  command -v jq >/dev/null 2>&1 || die "--placement filtering needs jq (no native CLI filter); install jq or drop --placement"
+  TMP_CORPUS="$(mktemp "${TMPDIR:-/tmp}/fish-samples.placement.XXXXXX.jsonl")"
+  jq -c --arg p "$F_PLACEMENT" 'select(.placement == $p)' "$JSONL" > "$TMP_CORPUS"
+  BATCH_CORPUS="$TMP_CORPUS"
+fi
+
+# ---------------------------------------------------------------------------
+# Build the ONE batch command.
+# ---------------------------------------------------------------------------
+cmd=(cargo run -q -p syrinx-cli --features real -- \
+     synth --fish "$VARIANT" --fish-dir "$FISH_DIR" \
+     --batch "$BATCH_CORPUS" --out-dir "$OUT")
+[[ -n "$REF" ]] && cmd+=(--ref-wav "$REF")
+[[ -n "$PROMPT_TEXT" ]] && cmd+=(--prompt-text "$PROMPT_TEXT")
+[[ -n "$F_LANG" ]] && cmd+=(--filter-lang "$F_LANG")
+[[ -n "$F_SCALE" ]] && cmd+=(--filter-scale "$F_SCALE")
+[[ "$LIMIT" -gt 0 ]] && cmd+=(--limit "$LIMIT")
+[[ -n "$MAX_STEPS" ]] && cmd+=(--max-steps "$MAX_STEPS")
+[[ $CUDA -eq 1 ]] && cmd+=(--cuda)
+
+if [[ $DRYRUN -eq 1 ]]; then
+  printf '[DRY RUN] '
+  printf '%q ' "${cmd[@]}"; printf '\n'
+else
+  echo ">> rendering Fish '$VARIANT' batch (model loads ONCE) -> $OUT" >&2
+  "${cmd[@]}"
+fi
+
+# ---------------------------------------------------------------------------
+# Model-free counts (works off-box; mirrors the CLI's family+lang+scale+limit set so a
+# --dry-run can preview how many entries the live batch will render). Placement is already
+# applied to BATCH_CORPUS, so the scan reads BATCH_CORPUS.
 # ---------------------------------------------------------------------------
 emit_rows() {
   if command -v jq >/dev/null 2>&1; then
     jq -r --arg m "$MODEL_FILTER" '
       select(.model == $m or .model == "both")
-      | [.id, .scale, .lang, .placement, (.text|gsub("\t";" "))] | @tsv
-    ' "$JSONL"
+      | [.id, .scale, .lang, .placement] | @tsv
+    ' "$BATCH_CORPUS"
   else
-    # Fallback parser (no jq). Pulls the six string fields per line with sed.
-    # Assumes one compact JSON object per line (as produced by the generator).
     while IFS= read -r line; do
       [[ -z "$line" ]] && continue
       get() { printf '%s' "$line" | sed -n 's/.*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p'; }
-      local id scale lang placement text model
+      local id scale lang placement model
       id=$(get id); scale=$(get scale); lang=$(get lang)
       placement=$(get placement); model=$(get model)
-      text=$(printf '%s' "$line" | sed -n 's/.*"text"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*,[[:space:]]*"desc".*/\1/p')
       [[ "$model" == "$MODEL_FILTER" || "$model" == "both" ]] || continue
-      printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$scale" "$lang" "$placement" "${text//	/ }"
-    done < "$JSONL"
+      printf '%s\t%s\t%s\t%s\n' "$id" "$scale" "$lang" "$placement"
+    done < "$BATCH_CORPUS"
   fi
 }
 
-# ---------------------------------------------------------------------------
-# main loop
-# ---------------------------------------------------------------------------
-: > "$MANIFEST"
-printf 'id\tscale\tlang\tplacement\ttext\twav\n' >> "$MANIFEST"
-
 declare -A SC_COUNT LANG_COUNT PL_COUNT
 total=0
-
-while IFS=$'\t' read -r id scale lang placement text; do
-  [[ -n "$F_SCALE"     && "$scale"     != "$F_SCALE"     ]] && continue
-  [[ -n "$F_LANG"      && "$lang"      != "$F_LANG"      ]] && continue
-  [[ -n "$F_PLACEMENT" && "$placement" != "$F_PLACEMENT" ]] && continue
-
-  wav="$OUT/$id.wav"
-  cmd=(cargo run -q -p syrinx-cli --features real -- \
-       synth --fish "$VARIANT" --fish-dir "$FISH_DIR" --text "$text" --ref-wav "$REF_ARG" --out "$wav")
-
-  if [[ $DRYRUN -eq 1 ]]; then
-    printf '[DRY RUN] '
-    printf '%q ' "${cmd[@]}"; printf '\n'
-  else
-    echo ">> $id"
-    "${cmd[@]}"
-  fi
-
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$scale" "$lang" "$placement" "$text" "$wav" >> "$MANIFEST"
+while IFS=$'\t' read -r id scale lang placement; do
+  [[ -n "$F_SCALE" && "$scale" != "$F_SCALE" ]] && continue
+  [[ -n "$F_LANG"  && "$lang"  != "$F_LANG"  ]] && continue
   SC_COUNT["$scale"]=$(( ${SC_COUNT["$scale"]:-0} + 1 ))
   LANG_COUNT["$lang"]=$(( ${LANG_COUNT["$lang"]:-0} + 1 ))
   PL_COUNT["$placement"]=$(( ${PL_COUNT["$placement"]:-0} + 1 ))
   total=$(( total + 1 ))
-
   if [[ "$LIMIT" -gt 0 && "$total" -ge "$LIMIT" ]]; then break; fi
 done < <(emit_rows)
 
@@ -201,6 +232,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
   echo "filters:     scale=${F_SCALE:-*} lang=${F_LANG:-*} placement=${F_PLACEMENT:-*} limit=${LIMIT:-0}"
   echo "ref:         $REF_ARG"
   echo "fish-dir:    $FISH_DIR"
+  echo "cuda:        $([[ $CUDA -eq 1 ]] && echo 'yes (--cuda)' || echo 'no (CPU)')"
   echo "matched:     $total entries"
   echo
   echo "## host"
@@ -234,6 +266,6 @@ have() { command -v "$1" >/dev/null 2>&1; }
 } > "$META"
 
 echo
-echo "manifest  -> $MANIFEST"
+echo "manifest  -> $OUT/manifest.tsv   (written by the synth CLI on a live run)"
 echo "counts    -> $COUNTS"
 echo "run-meta  -> $META   (host + gpu + toolchain specs)"
