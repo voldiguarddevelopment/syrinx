@@ -510,6 +510,9 @@ impl EvaGanDac {
         } else {
             wav
         };
+        // The reference wav arrives as f32, but the encoder convs run in the codec compute
+        // dtype (`dt` = f32 on CPU / bf16 on CUDA); cast so conv1d dtypes match.
+        let wav = wav.to_dtype(self.w.dt)?;
 
         let z = self.run_encoder(&wav)?; // [1, latent, T_512]
         let z = self.downsample(&z)?; // [1, latent, T_2048]
