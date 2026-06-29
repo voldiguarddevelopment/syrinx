@@ -700,8 +700,14 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                  feature; running on CPU"
             );
         }
+        // SYRINX_FISH_DEVICE=<N> selects the CUDA device ordinal (for multi-GPU batch
+        // rendering — one process per GPU). CUDA_VISIBLE_DEVICES is unreliable under WSL,
+        // so pick the ordinal explicitly. Unset => device 0.
         let dev = if o.cuda {
-            syrinx_serve::synth::pick_device(None)
+            let ord = std::env::var("SYRINX_FISH_DEVICE")
+                .ok()
+                .and_then(|s| s.trim().parse::<usize>().ok());
+            syrinx_serve::synth::pick_device(ord)
         } else {
             candle_core::Device::Cpu
         };
