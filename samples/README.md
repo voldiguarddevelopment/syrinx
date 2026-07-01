@@ -170,7 +170,7 @@ It writes three files under `--out` (default `samples/out/<variant>`):
 Examples:
 
 ```sh
-# Every s2-pro entry (dry-run if --fish isn't wired in yet)
+# Every s2-pro entry (the CLI `synth --fish` front door is wired in)
 scripts/synth-samples.sh s2-pro --ref voice.wav
 
 # Only the Japanese short sentences on s1-mini, first 10
@@ -180,11 +180,12 @@ scripts/synth-samples.sh s1-mini --scale small --lang ja --limit 10 --ref voice.
 scripts/synth-samples.sh s2-pro --scale chapter --ref voice.wav
 ```
 
-**`--fish` pending integration.** The CLI does not yet expose `synth --fish`. Until it
-does, the runner probes `synth --help`, detects the missing flag, and runs in **dry-run**
-mode: it prints each command it *would* run (tagged `[PENDING INTEGRATION]`) and still
-emits the manifest + counts, so the corpus is fully inspectable off-box. Once the flag
-lands, the same invocation synthesizes for real (a `--ref` voice clip is then required).
+**`--fish` is wired in.** The CLI exposes `synth --fish <s1-mini|s2-pro>`, so the runner
+synthesizes for real on the GPU box (a `--ref` voice clip is required for `s2-pro`
+cloning; `s1-mini` has no reference-cloning path). The runner still degrades to a
+**dry-run** if it probes `synth --help` and finds the flag missing (e.g. a `--no-default-features`
+build): it prints each command it *would* run and still emits the manifest + counts, so the
+corpus stays inspectable off-box.
 
 ## Honest quality note
 

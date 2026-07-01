@@ -4,12 +4,13 @@
 
 # Syrinx
 
-**A local, Rust-served neural TTS + zero-shot voice-cloning engine.**
+**A local, pure-Rust bidirectional speech engine — TTS *and* STT.**
 
-Clone a voice from seconds of reference audio and render it near real-time on a single
-consumer GPU — with editable speech-rate prosody as a typed plan, not a black box.
-Inference is **pure Rust** (Candle); no Python on the hot path. (Emotional control and
-sub-200 ms streaming are on the roadmap, not yet shipped — see [Status](#what-it-is).)
+Turn `text (+ voice) → audio` **and** `audio → text`, entirely on your own machine.
+Clone a voice from seconds of reference audio, tag emotion inline (`[happy]`), and render
+it on a single consumer GPU; then transcribe any clip back with a native Whisper. Every
+inference path is **pure Rust** (Candle) — no Python. The two directions close a loop:
+synthesize → transcribe → compare is Syrinx's own **WER oracle** for verifying the TTS.
 
 [![CI](https://github.com/voldiguarddevelopment/syrinx/actions/workflows/ci.yml/badge.svg)](https://github.com/voldiguarddevelopment/syrinx/actions/workflows/ci.yml)
 [![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org)
@@ -22,36 +23,59 @@ sub-200 ms streaming are on the roadmap, not yet shipped — see [Status](#what-
 
 ## What it is
 
-Syrinx is a text-to-speech and voice-cloning engine designed to run **entirely on your
-own machine**. It pairs an autoregressive semantic language model (for control and
-paralinguistics) with a non-autoregressive flow-matching acoustic decoder (for fast,
-high-fidelity waveform synthesis) — each paradigm used where it is strongest.
+Syrinx is a **bidirectional** speech engine designed to run **entirely on your own
+machine**, both directions in **pure Rust** ([Candle](https://github.com/huggingface/candle)),
+no Python in the inference path:
+
+- **TTS (`text + voice → audio`)** — two model families. The primary path is a pure-Rust
+  port of **Fish Audio's dual-AR TTS** (`s2-pro` 5B / `s1-mini` 0.5B): a semantic AR
+  transformer + a fast AR head over an RVQ codec at **44.1 kHz**, with zero-shot voice
+  cloning and inline, model-native **emotion/style tags** (`[happy]`, `[whispers]`). The
+  original stack — pure-Rust ports of **CosyVoice2-0.5B / CosyVoice3-0.5B** (AR Qwen2 LM →
+  flow-matching mel → HiFT vocoder, 24 kHz) — remains present and parity-verified.
+- **STT (`audio → text`)** — **`syrinx-stt`**, a pure-Rust **Candle Whisper**. It makes
+  Syrinx bidirectional and doubles as the **native WER oracle**: synthesize, transcribe,
+  compare — which is how the TTS is objectively verified, with no external `faster-whisper`.
 
 The design goal is the rare combination of **clone quality + expressive range +
-low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a compact
-**4-bit footprint** (realized int4: **≈388&nbsp;MB CV2 / ≈488&nbsp;MB CV3**; the early
-~270&nbsp;MB budget under-counted the Qwen2-0.5B body — see *Architecture*).
+local-only**, on a single consumer GPU.
 
-> **Status — honest snapshot.** **Both the CosyVoice2-0.5B *and* CosyVoice3-0.5B models are
-> fully reimplemented in pure-Rust [Candle](https://github.com/huggingface/candle) and
-> parity-verified** (`text + ref → 24 kHz audio`; CV2 full-chain 7.7e-5, CV3 components to
-> ~1e-5–1e-3). Each has a GPU runtime (RTF ≈ 1.67), a CLI + OpenAI-compatible server, measured
-> eval (CV2 SIM-o ≈ 0.74, CV3 ≈ 0.88), **emotion/instruct control**, a real-SineGen quality
-> source, an int4-quantized footprint, and (CV2) zh+en text-norm + speech-rate + watermark +
-> sample-faithful streaming. CV3 adds a new 22-layer DiT flow + causal-f64 HiFT + v3 tokenizer.
-> **Remaining:** sub-200 ms TTFB (CPU is LM-bound) and a full cross-lingual WER sweep. (Earlier
-> "emotion needs an instruct checkpoint" was wrong — CV2/CV3 do instruct on the base weights.)
-> The real CosyVoice2 / CosyVoice3 ports are the **default build** — a plain `cargo build`
-> builds the real Candle model stack. See [Build status](#build-status) and [Roadmap](#roadmap).
+> **Status — honest snapshot.**
+> - **Fish `s2-pro` (5B) — VERIFIED on GPU.** The pure-Rust dual-AR port produces correct,
+>   intelligible speech (confirmed objectively by the native Whisper oracle, **WER ≈ 0**),
+>   with zero-shot voice cloning and inline emotion tags, clean across ~11 of 13 languages
+>   tested. License = **Fish Audio Research License (non-commercial)**.
+> - **Fish `s1-mini` (0.5B) — code-complete, not yet run.** The port compiles and is wired
+>   end-to-end, but its weights are HF-gated and have **not** been downloaded/run yet.
+> - **STT (Whisper) — VERIFIED on the box.** Transcribed a German clip → language `de` and
+>   the exact text, pure Rust.
+> - **CosyVoice2 / CosyVoice3 — parity-verified** (`text + ref → 24 kHz`; CV2 full-chain
+>   7.7e-5, CV3 components ~1e-5–1e-3), each with a GPU runtime (RTF ≈ 1.67), CLI +
+>   OpenAI-compatible server, measured eval (CV2 SIM-o ≈ 0.74, CV3 ≈ 0.88), and
+>   emotion/instruct control.
+>
+> A plain `cargo build --features real` builds the real Candle stack (Fish + CosyVoice +
+> Whisper). Real, weight-backed runs need the GPU box. See [Build status](#build-status)
+> and [Roadmap](#roadmap).
 
 ---
 
 ## Highlights
 
-- 🦀 **Pure-Rust inference.** The whole render path — frontend → LM → prosody plan →
-  acoustic decoder → vocoder — is Rust. No Python runtime in production.
-- 🎙️ **Zero-shot cloning.** A reference clip → a speaker embedding → a cloned voice,
-  no per-speaker fine-tuning.
+- 🦀 **Pure-Rust, both directions.** Every inference path — TTS *and* STT — is Rust on
+  Candle. No Python runtime anywhere in production.
+- 🐟 **Fish `s2-pro` (5B) — verified.** The pure-Rust dual-AR port synthesizes correct,
+  intelligible 44.1 kHz speech (objectively, native Whisper WER ≈ 0), with zero-shot
+  cloning across ~11/13 languages tested. *(Non-commercial research license.)*
+- 🗣️ **Speech-to-text.** `syrinx-stt` is a pure-Rust Candle Whisper — verified on the box
+  (German clip → `de`, exact text). It also serves as the built-in **WER oracle** that
+  objectively grades the TTS (synth → transcribe → compare).
+- 😀 **Inline emotion tags.** `[happy]`, `[whispers]`, `(sighing)` … are **plain text**
+  the model reads natively — no special-token wiring, no separate checkpoint.
+- 🎙️ **Zero-shot cloning.** A reference clip → a cloned voice, no per-speaker fine-tuning
+  (Fish `s2-pro` and CosyVoice2/3).
+- 🎛️ **Voice library + manipulation.** Blend / interpolate / arithmetic over stored voices
+  (`crates/syrinx-serve/src/voice`).
 - ✏️ **Editable prosody.** A typed, serializable `RenderPlan` carries speech-rate and
   pitch (global + per-region). Speech-rate is faithful (≈ 1/rate); training-free **pitch
   is a weak lever** (the vocoder's mel envelope dominates — measured + documented).
@@ -73,44 +97,52 @@ low latency + local-only**, on a single RTX&nbsp;4090-class GPU, with a compact
 
 ## Architecture
 
-```
-text ─▶ [Frontend] ─▶ [AR Semantic LM] ─▶ [Prosody Plan] ─▶ [NAR Flow Decoder] ─▶ [Vocoder] ─▶ 48 kHz
-        (Rust,          (control,           (editable          (acoustic, chunk-      (HiFi-GAN/
-       deterministic)  paralinguistics)     dur + pitch)        aware, speaker-       Vocos)
-                                                                cond.)  ▲
-                                          [Speaker Encoder] ───────────┘
-                                          (embed · blend · morph · attributes)
-```
+![pipeline](docs/diagrams/pipeline.svg)
 
-**Two paradigms, each where it wins:** an **autoregressive** semantic LM owns control
-and paralinguistic tokens; a **non-autoregressive** flow-matching decoder owns the
-acoustic frames so first-byte latency is one chunk, not one utterance.
+Syrinx is two flows that share a codebase and close a loop:
 
-> The diagram is the original aspirational design; the **real shipped pipeline** is the
-> CosyVoice2 / CosyVoice3 ports documented under *Build status* below (24 kHz; CV2 uses a
-> conformer flow + HiFT, CV3 a 22-layer DiT flow + causal HiFT).
+**TTS — `text (+ voice) → audio`.** Two model families behind one `synth` command:
 
-**Realized 4-bit footprint (int4, opt-in):** **CV2 ≈ 388 MB** (the unused untied `lm_head`
-dropped) · **CV3 ≈ 488 MB** (its 22-layer DiT flow dominates). The early "~270 MB" budget
-under-counted the Qwen2-0.5B body; int4 is a size win, not a speed win (dequant-on-fetch).
+- **Fish dual-AR (primary, 44.1 kHz).** Tokenizer → a **slow** semantic AR transformer
+  (Qwen3-4B for `s2-pro`, Llama-style for `s1-mini`) predicts one semantic code per frame;
+  a small **fast** AR head expands it into the residual RVQ codes; an RVQ **codec**
+  (EVA-GAN / causal-DAC) decodes the `[10, T]` matrix to waveform. Emotion/style tags are
+  plain text on the way in.
+- **CosyVoice2 / CosyVoice3 (24 kHz).** Frontend → **AR Qwen2 LM** → **flow-matching mel**
+  decoder (CV2 conformer / CV3 22-layer DiT) → **HiFT vocoder**, with a CAM++ speaker
+  encoder providing the zero-shot clone conditioning.
+
+**STT — `audio → text`.** `syrinx-stt` runs **Whisper** (log-mel front end → encoder →
+decoder) in pure Rust, reusing `candle-transformers`. It is the mirror of the TTS stack
+and the **WER oracle** that grades it.
+
+**The round-trip.** TTS and STT connect: synthesize a line, transcribe it back, compare
+with the built-in `wer` — a native, Python-free intelligibility check on the real output.
+
+> The diagram above is the current shipped pipeline. Fish `s2-pro` is verified on GPU;
+> `s1-mini` is code-complete but unrun (HF-gated weights); the CosyVoice ports are
+> parity-verified. An **int4** footprint is available opt-in on the CosyVoice path (CV2
+> ≈ 388 MB / CV3 ≈ 488 MB) — a size win, not a speed win (dequant-on-fetch).
 
 ---
 
 ## Workspace layout
 
-A nine-crate Rust workspace; each crate owns one stage of the real pipeline.
+An eleven-crate Rust workspace; each crate owns one stage of the real pipeline.
 
 | Crate | Responsibility |
 |-------|----------------|
+| [`syrinx-fish`](crates/syrinx-fish) | Pure-Rust Fish Audio dual-AR TTS port — `s2-pro` (5B) + `s1-mini` (0.5B): slow/fast AR + RVQ codec, 44.1 kHz (Candle) |
+| [`syrinx-stt`](crates/syrinx-stt) | Pure-Rust Candle **Whisper** speech-to-text + the model-free `wer` oracle |
 | [`syrinx-frontend`](crates/syrinx-frontend) | Qwen2 BPE text tokenizer, wetext-style normalization (`tn`), kaldi fbank + prompt mel, `speech_tokenizer_v2/v3.onnx` |
 | [`syrinx-lm`](crates/syrinx-lm) | Real CV2/CV3 Qwen2-0.5B LM forward (Candle) + KV-cache autoregressive generation |
 | [`syrinx-speaker`](crates/syrinx-speaker) | Real CAM++ x-vector speaker encoder (Candle) |
 | [`syrinx-acoustic`](crates/syrinx-acoustic) | Real flow-matching mel decoder — CV2 conformer / CV3 22-layer DiT (Candle) |
 | [`syrinx-vocoder`](crates/syrinx-vocoder) | Real HiFT vocoder — CV2 + CV3 causal-f64 variant (Candle) |
 | [`syrinx-prosody`](crates/syrinx-prosody) | Editable prosody plan model + render-time rate/pitch transforms |
-| [`syrinx-serve`](crates/syrinx-serve) | End-to-end `Synthesizer` capstone, OpenAI-compatible `/v1/audio` server, watermarking |
+| [`syrinx-serve`](crates/syrinx-serve) | End-to-end `Synthesizer` capstone, OpenAI-compatible `/v1/audio` server, voice library + manipulation, watermarking |
 | [`syrinx-eval`](crates/syrinx-eval) | Measured SIM-o/WER/MOS/RTF/TTFB metrics over the real synthesizer |
-| [`syrinx-cli`](crates/syrinx-cli) | `syrinx synth\|serve\|stream` (CV2 + `--cv3`) |
+| [`syrinx-cli`](crates/syrinx-cli) | `syrinx synth\|serve\|stream\|stt` (Fish `--fish`, CosyVoice `--cv3`, Whisper `stt`) |
 
 ---
 
@@ -119,6 +151,35 @@ A nine-crate Rust workspace; each crate owns one stage of the real pipeline.
 Syrinx is built **test-first behind deterministic gates** (see
 [How this was built](#how-this-was-built)). A task is `done` only when its frozen tests
 pass — there are no stubbed greens.
+
+**🐟 Fish Audio dual-AR port — the primary TTS**
+
+Pure-Rust / Candle ports of Fish Audio's open dual-AR TTS stack (`crates/syrinx-fish`),
+non-commercial research license:
+
+- **`s2-pro` (5B) — VERIFIED on GPU.** Qwen3-4B slow AR + a ~400M fast AR head (single
+  shared embedding, codebook identity carried by RoPE + MCF fusion) + a 446M EVA-GAN /
+  causal-DAC RVQ codec at **44.1 kHz**. It produces **correct, intelligible speech**,
+  confirmed *objectively* by the native Whisper oracle (**WER ≈ 0**), with zero-shot voice
+  cloning and inline emotion/style tags, clean across ~11 of 13 languages tested.
+- **`s1-mini` (0.5B) — code-complete, not yet run.** Llama-style dual-AR + modded-DAC codec,
+  wired end-to-end and compiling; its weights are **HF-gated** (need an HF token to
+  download), so it has **not** been executed on hardware yet.
+
+> **Honest caveats.** The Fish models are **non-commercial** (Fish Audio Research License).
+> `s2-pro` is 5B — bf16 inference needs ~12 GB VRAM (multi-sample batching ≥16 GB). Its
+> German/Dutch **cross-lingual voice cloning** is limited by the reference clip's phoneme
+> coverage (the model synthesizes those phonemes fine when *not* cloning) — a ref-coverage
+> limitation being addressed with a larger custom reference, not a code bug.
+
+**🗣️ Speech-to-text (Whisper) — VERIFIED on the box**
+
+`syrinx-stt` is a pure-Rust **Candle Whisper** (`candle-transformers` `Whisper` +
+log-mel front end; the official SOT/language/transcribe decode loop with a temperature
+fallback and non-speech suppression). Verified on the box: a German clip transcribed to
+language `de` with the exact text, **pure Rust — no `faster-whisper`**. Models:
+`openai/whisper-{tiny,base,small,medium,large-v3}`. It doubles as the **native WER oracle**
+(the model-free `wer` helper is always available, even in a Candle-free build).
 
 **✅ Real CosyVoice2 model — DONE (a standalone, near-real-time Rust TTS)**
 
@@ -202,8 +263,43 @@ cargo test --workspace
 cargo run -p syrinx-cli -- --help
 ```
 
-**Real synthesis** — `text + reference clip → 24 kHz wav`. Pick the model with `--cv3`
-(add `--features cuda` + `--cuda` for the GPU path):
+**Fish synthesis (primary)** — `text (+ ref voice) → 44.1 kHz wav`. Add `--features cuda`
++ `--cuda` for the GPU path (`s2-pro` effectively needs it):
+
+```bash
+# Fish s2-pro (verified): zero-shot clone + inline emotion tags. --fish-dir holds the
+# checkpoint (model + config.json + codec + tokenizer); --ref-wav clones the voice.
+cargo run -p syrinx-cli --features cuda -- synth \
+  --fish s2-pro --fish-dir /models/fish-s2-pro --cuda \
+  --text "[happy] We finally shipped it!" \
+  --ref-wav voice.wav --out audio.wav
+
+# Fish s1-mini (code-complete, HF-gated weights — not yet run): no reference cloning path,
+# so --ref-wav is ignored for s1-mini.
+cargo run -p syrinx-cli --features real -- synth \
+  --fish s1-mini --fish-dir /models/fish-s1-mini \
+  --text "(sighing) Here we go again." --out audio.wav
+
+# Batch-render a corpus (loads the variant once, then loops): --batch <jsonl> --out-dir
+cargo run -p syrinx-cli --features cuda -- synth \
+  --fish s2-pro --fish-dir /models/fish-s2-pro --cuda --ref-wav voice.wav \
+  --batch samples/fish-samples.jsonl --out-dir out/s2-pro --batch-size 4
+```
+
+**Speech-to-text** — `audio → text` (pure-Rust Whisper; the TTS test oracle):
+
+```bash
+# Transcribe a WAV; --model-dir points at an openai/whisper-* checkpoint dir.
+cargo run -p syrinx-cli --features cuda -- stt \
+  --wav audio.wav --model-dir /models/whisper-large-v3 --cuda --lang de
+
+# Grade a TTS render: transcribe and print the word error rate vs the expected text.
+cargo run -p syrinx-cli --features cuda -- stt \
+  --wav audio.wav --model-dir /models/whisper-large-v3 --cuda \
+  --check-tts "We finally shipped it!"
+```
+
+**CosyVoice synthesis** — `text + reference clip → 24 kHz wav`. Pick CV3 with `--cv3`:
 
 ```bash
 # CosyVoice2 (default): weights via SYRINX_*_WEIGHTS env (or --model-dir)
@@ -216,16 +312,18 @@ cargo run -p syrinx-cli -- synth --cv3 \
   --text "收到好友从远方寄来的生日礼物。" --prompt-text "希望你以后能够做的比我还好呦。" \
   --ref-wav ref.wav --out out_cv3.wav
 
-# OpenAI-compatible server (either model): `serve` / `serve --cv3`
+# OpenAI-compatible server (either CosyVoice model): `serve` / `serve --cv3`
 cargo run -p syrinx-cli -- serve --cv3 --ref-wav ref.wav --port 8080
 curl -s localhost:8080/v1/audio/speech -H 'content-type: application/json' \
   -d '{"model":"syrinx-cv3","input":"hello","voice":"v","response_format":"wav"}' -o out.wav
 ```
 
-**Requirements:** a stable Rust toolchain. Synthesis needs the CosyVoice2-0.5B **or**
-CosyVoice3-0.5B weights + reference fixtures on disk (the parity tests are env-gated on
-them); the **`cuda`** speed path needs an NVIDIA GPU + the Candle-CUDA toolchain (~26×
-faster, near real-time).
+**Requirements:** a stable Rust toolchain. Weight-backed runs need the model on disk — the
+Fish `s2-pro`/`s1-mini` checkpoint, a Whisper checkpoint, or the CosyVoice2/3 weights (the
+parity/e2e tests are env-gated on them and skip cleanly without). The **`cuda`** path needs
+an NVIDIA GPU + the Candle-CUDA toolchain (`s2-pro` is 5B — ~12 GB VRAM in bf16). One-run
+verification on the model box: **`./scripts/verify.sh`** (see *Verifying the build* in
+`CLAUDE.md`), which exercises CV2 · CV3 · Fish `s1-mini` · Fish `s2-pro` · voice · emotion.
 
 ---
 
@@ -247,7 +345,13 @@ the harness will not mark a task done on belief.
 ## Roadmap
 
 **Done (real, verified):**
-- [x] Nine-crate workspace + CI (the real ports are the default build)
+- [x] Eleven-crate workspace + CI (the real ports are the default build)
+- [x] **Fish `s2-pro` (5B) dual-AR port — VERIFIED on GPU** — pure-Rust Qwen3-4B slow AR +
+  fast AR head + EVA-GAN/causal-DAC RVQ codec, 44.1 kHz; intelligible (native Whisper
+  WER ≈ 0), zero-shot cloning + inline emotion tags, ~11/13 languages. Non-commercial license.
+- [x] **Speech-to-text (`syrinx-stt`) — VERIFIED on the box** — pure-Rust Candle Whisper
+  (`whisper-{tiny…large-v3}`); German clip → `de`, exact text; doubles as the native WER oracle
+  (replaces the external `faster-whisper`). No Python.
 - [x] **Real CosyVoice2-0.5B port** — LM (+ KV-cache gen) · CAM++ speaker · flow-matching · HiFT · frontend, all Candle, all parity-verified
 - [x] **End-to-end `Synthesizer`** — `text + ref → audio`, full-chain parity 7.7e-5, no Python on the hot path
 - [x] **GPU runtime** (Candle-CUDA) — ~26×, RTF ≈ 1.67 (near real-time on a consumer GPU)
@@ -258,6 +362,14 @@ the harness will not mark a task done on belief.
 - [x] **int4 (Q4_0) LM quant** — ~2.5× (2449 → 986 MB, SIM-o 0.72 preserved); the f16 embedding tables are the remaining bulk
 - [x] **Output watermark** — spread-spectrum, imperceptible + detectable after light processing (see *Ethics*)
 - [x] **Real CosyVoice3-0.5B port — feature-complete** — LM (2.67e-5) · **new 22-layer DiT flow** (2.27e-3, fp32 floor) · causal f64 HiFT (4.9e-5) · v3 tokenizer (exact) · frontend (3.72e-5); live synth **SIM-o 0.88 / MOS 2.21**; CLI/server/eval/emotion/quality-source/RL-LM/int4 all wired (`--cv3`). ~70% CV2 reuse; see *Real CosyVoice3 model* above.
+
+**Forward (honest):**
+- [ ] **Fish `s1-mini` first run** — the 0.5B port is code-complete but its weights are
+  HF-gated; it needs an HF token + a download to run on hardware.
+- [ ] **Larger custom cross-lingual voice-clone reference** — `s2-pro` synthesizes
+  German/Dutch phonemes fine *non-cloned*, but cross-lingual *cloning* is bounded by the
+  reference clip's phoneme coverage; a larger custom reference is the fix (a data item, not a
+  code bug).
 
 **Not yet (honest):**
 - [x] **Sample-faithful streaming** — CV2's chunked-causal attention mask (same weights) makes the streamed mel frames **bit-stable** (`real_flow_stream_consistency`: 0.0 diff vs 0.53 for the old non-causal path), and the **streamed audio is intelligible — Whisper CER 0.0**, identical to batch. (Streamed audio is *not* sample-identical to the batch — CV2's streaming cross-fades by design; details in [`STREAMING.md`](crates/syrinx-acoustic/docs/STREAMING.md).) Sub-200 ms TTFB remains a design target (CPU TTFB is LM-bound).

@@ -1,10 +1,19 @@
 # Syrinx — Task-Based Build Plan
 
 > Codename **Syrinx** (the avian vocal organ — placeholder, swap freely).
-> A local, Rust-served neural TTS + zero-shot voice-cloning engine.
+> A local, pure-Rust **bidirectional** speech engine — TTS **and** STT — with zero-shot
+> voice cloning.
 
 **Status:** Planning · **Owner:** NovaDevelopment · **Last updated:** 2026-06-14
 **Target hardware:** single RTX 4090-class GPU · **Inference:** Rust · **Training/research:** Python
+
+> **Current state (see [`README.md`](README.md) for the authoritative snapshot).** This is
+> the original build plan; the shipped engine has since grown beyond it. Syrinx is now
+> **bidirectional and pure-Rust both ways**: TTS via a **Fish Audio dual-AR** port
+> (`s2-pro` 5B — verified on GPU; `s1-mini` 0.5B — code-complete, HF-gated, not yet run)
+> *and* the original **CosyVoice2/3** ports, plus **STT** via a pure-Rust Candle **Whisper**
+> (`syrinx-stt`, verified) that also serves as the native WER oracle. The sections below are
+> retained as historical design context.
 
 ---
 

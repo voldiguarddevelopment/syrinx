@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="700" viewBox="0 0 1280 700" font-family="Noto Sans, DejaVu Sans, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0a0d13"/>
+      <stop offset="1" stop-color="#11161f"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.30" cy="0.28" r="0.75">
+      <stop offset="0" stop-color="#5865F2" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#5865F2" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0.4">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.7" stop-color="#d8e0ec"/>
+      <stop offset="1" stop-color="#8fa3bf"/>
+    </linearGradient>
+    <linearGradient id="accentbar" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#57F287"/>
+      <stop offset="1" stop-color="#5865F2"/>
+    </linearGradient>
+    <marker id="arrowT" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#41d6c3"/>
+    </marker>
+    <marker id="arrowS" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#7d88f5"/>
+    </marker>
+    <marker id="arrowR" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#8fa3bf"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="700" fill="url(#bg)"/>
+  <rect width="1280" height="700" fill="url(#glow)"/>
+
+  <!-- header -->
+  <text x="60" y="70" font-weight="bold" font-size="46" fill="url(#title)" letter-spacing="-1">Syrinx pipeline</text>
+  <text x="62" y="104" font-size="21" fill="#aeb9c9">Bidirectional speech engine · pure-Rust / Candle · no Python in the inference path</text>
+
+  <!-- ============ TTS ROW  (text -> audio) ============ -->
+  <text x="60" y="176" font-size="20" font-weight="bold" fill="#57F287">TTS</text>
+  <text x="108" y="176" font-size="19" fill="#7c8aa0">text &#8594; audio</text>
+
+  <!-- input -->
+  <text x="118" y="214" font-size="20" fill="#c9d4e3" text-anchor="middle">text</text>
+  <text x="118" y="240" font-size="16" fill="#7c8aa0" text-anchor="middle">(+ [happy] tag)</text>
+
+  <!-- Tokenizer -->
+  <rect x="245" y="192" width="150" height="72" rx="12" fill="#161c27" stroke="#41d6c3" stroke-width="1.5"/>
+  <text x="320" y="235" font-size="20" fill="#e3ecf7" text-anchor="middle">Tokenizer</text>
+
+  <!-- LM -->
+  <rect x="455" y="192" width="270" height="72" rx="12" fill="#161c27" stroke="#41d6c3" stroke-width="1.5"/>
+  <text x="590" y="223" font-size="19" fill="#e3ecf7" text-anchor="middle">LM &#183; dual-AR (Fish)</text>
+  <text x="590" y="247" font-size="16" fill="#9db0c8" text-anchor="middle">/ Qwen2 (CosyVoice)</text>
+
+  <!-- Codec / Vocoder -->
+  <rect x="785" y="192" width="200" height="72" rx="12" fill="#161c27" stroke="#41d6c3" stroke-width="1.5"/>
+  <text x="885" y="235" font-size="19" fill="#e3ecf7" text-anchor="middle">Codec / Vocoder</text>
+
+  <!-- audio out -->
+  <text x="1130" y="234" font-size="21" fill="#c9d4e3" text-anchor="middle">&#128266; audio.wav</text>
+
+  <!-- TTS arrows -->
+  <line x1="188" y1="222" x2="240" y2="222" stroke="#41d6c3" stroke-width="2" marker-end="url(#arrowT)"/>
+  <line x1="397" y1="228" x2="450" y2="228" stroke="#41d6c3" stroke-width="2" marker-end="url(#arrowT)"/>
+  <line x1="727" y1="228" x2="780" y2="228" stroke="#41d6c3" stroke-width="2" marker-end="url(#arrowT)"/>
+  <line x1="987" y1="228" x2="1052" y2="228" stroke="#41d6c3" stroke-width="2" marker-end="url(#arrowT)"/>
+
+  <!-- TTS command labels -->
+  <text x="245" y="304" font-family="DejaVu Sans Mono, monospace" font-size="17" fill="#57F287">syrinx synth --fish s2-pro --ref-wav voice.wav --out audio.wav</text>
+  <text x="245" y="330" font-family="DejaVu Sans Mono, monospace" font-size="16" fill="#7c8aa0">syrinx synth --cv3 --ref-wav voice.wav        (CosyVoice path)</text>
+
+  <!-- ============ ROUND-TRIP CONNECTOR ============ -->
+  <line x1="1130" y1="246" x2="1130" y2="424" stroke="#8fa3bf" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrowR)"/>
+  <line x1="1160" y1="424" x2="1160" y2="246" stroke="#8fa3bf" stroke-width="2" stroke-dasharray="5 5" marker-end="url(#arrowR)"/>
+  <text x="1108" y="330" font-size="16" fill="#9db0c8" text-anchor="end">round-trip</text>
+  <text x="1108" y="352" font-size="16" fill="#9db0c8" text-anchor="end">WER oracle</text>
+  <text x="1108" y="374" font-size="15" fill="#6f7d92" text-anchor="end">TTS &#8646; STT</text>
+
+  <!-- ============ STT ROW  (audio -> text) ============ -->
+  <text x="60" y="456" font-size="20" font-weight="bold" fill="#7d88f5">STT</text>
+  <text x="108" y="456" font-size="19" fill="#7c8aa0">audio &#8594; text</text>
+
+  <!-- audio in -->
+  <text x="1130" y="502" font-size="21" fill="#c9d4e3" text-anchor="middle">&#128266; audio.wav</text>
+
+  <!-- Whisper -->
+  <rect x="600" y="466" width="310" height="72" rx="12" fill="#161c27" stroke="#5865F2" stroke-width="1.5"/>
+  <text x="755" y="497" font-size="19" fill="#e3ecf7" text-anchor="middle">Whisper</text>
+  <text x="755" y="521" font-size="16" fill="#9db0c8" text-anchor="middle">mel &#8594; encoder &#8594; decoder</text>
+
+  <!-- text out -->
+  <text x="300" y="508" font-size="21" fill="#c9d4e3" text-anchor="middle">&#8220;text&#8221;</text>
+
+  <!-- STT arrows (right to left) -->
+  <line x1="1052" y1="496" x2="915" y2="496" stroke="#7d88f5" stroke-width="2" marker-end="url(#arrowS)"/>
+  <line x1="598" y1="502" x2="360" y2="502" stroke="#7d88f5" stroke-width="2" marker-end="url(#arrowS)"/>
+
+  <!-- STT command label -->
+  <text x="600" y="580" font-family="DejaVu Sans Mono, monospace" font-size="17" fill="#7d88f5">syrinx stt --wav audio.wav</text>
+  <text x="600" y="606" font-family="DejaVu Sans Mono, monospace" font-size="16" fill="#7c8aa0">[--check-tts "expected"]  &#8594; native WER</text>
+
+  <!-- footer -->
+  <text x="60" y="668" font-size="18" fill="#5a6678">Fish s2-pro (5B, verified) · CosyVoice2/3 (parity-verified) · Whisper STT (verified)</text>
+  <text x="1220" y="668" font-size="18" fill="#5a6678" text-anchor="end">voldiguarddevelopment</text>
+
+  <!-- bottom accent bar -->
+  <rect x="0" y="694" width="1280" height="6" fill="url(#accentbar)"/>
+</svg>
