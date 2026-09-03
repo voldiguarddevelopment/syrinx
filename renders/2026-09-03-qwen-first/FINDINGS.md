@@ -84,6 +84,42 @@ no `gen-fish-ref.py` equivalent. This is the same gap `QWEN_PORT_STATUS.md` reco
 "no Python reference dump for Qwen, so talker/code-predictor parity cannot be gated at
 all yet" — and it now has a concrete symptom to chase rather than a hypothetical one.
 
-Until it is resolved, the honest status is: **Qwen renders correctly without an
-instruction, and the expressive path is not trustworthy.** The cue layer is doing its job;
-what it hands to the backend is where this breaks.
+## 4. RESOLVED — the cause was a dropped activation in `text_projection`
+
+Chased with the reference (`github.com/QwenLM/Qwen3-TTS` at `022e286`, read only — the
+existing `~/.venvs/qwen` already had torch 2.13 and the pinned transformers 4.57.3).
+
+**The reference does not repeat.** Same checkpoint, text, speaker and instructions:
+3.04 s plain, 3.12 s "Whisper", 3.20 s "Say this in a soft whisper", all transcribing
+cleanly. Against our 2.80 s -> 5.2 s / 4.88 s. So this was a port bug, not model
+behaviour.
+
+Everything structural then checked out and was eliminated in turn: the instruct template
+is byte-identical (`_build_instruct_text` is exactly `<|im_start|>user\n{instruct}<|im_end|>\n`),
+the instruct embeds are prepended in the same position with no codec addend, the token
+ids match exactly (`[151644, 872, 198, 1639, 27370, 151645, 198]`), the prompt geometry
+matches (21 -> 28 positions on both sides, trailing text `(1,1,2048)`), `suppress_tokens`
+is implemented, and the sampler defaults are already the published `generation_config`.
+
+Diffing the realized prompt embeddings step by step is what found it:
+
+    before: max abs diff 0.781   norms 1.3x-1.9x the reference's, EVERY step
+    after:  max abs diff 0.0     (f32, bit-exact)
+
+`Talker::embed_text` implemented `text_projection` as `linear_fc2(linear_fc1(x))`. The
+reference's `Qwen3TTSTalkerResizeMLP.forward` is `linear_fc2(act_fn(linear_fc1(x)))` with
+`hidden_act = silu`. **The activation was missing** — which collapses the projection to a
+composition of two linear maps, i.e. a plain linear map. The old doc comment asserted, in
+prose, that "the reference applies no activation between them". It does.
+
+Restoring `silu` fixes it. Frame counts for the same four cases go
+35 / 65 / 61 / 122 -> **34 / 38 / 41 / 34**, and all four now transcribe at **WER 0.000**,
+instructions included.
+
+Why nothing caught it: the error was large enough to corrupt behaviour but small enough
+to sound fine. Plain synthesis stayed perfectly intelligible (WER 0.000 throughout), so
+every self-consistent Rust test passed. Only the reference could settle it — which is
+exactly the gap that now has a gate: `scripts/gen-qwen-ref.py` dumps the reference's
+`inputs_embeds` in f32 and `tests/real_qwen_prompt_parity.rs` compares against it,
+per-step, with a dtype-aware tolerance (f32 measured 0.00000, bf16 0.0201, both far under
+the bug's 0.78). Verified to fail without the fix.

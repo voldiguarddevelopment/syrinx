@@ -58,8 +58,17 @@ impl Talker {
 
     /// Embed text ids: gather at `text_embed_dim`, then project down to the model width.
     ///
-    /// `text_projection` is `linear_fc2(linear_fc1(x))` — both with bias. The reference
-    /// applies no activation between them.
+    /// `text_projection` is a `Qwen3TTSTalkerResizeMLP`, whose forward is
+    /// `linear_fc2(act_fn(linear_fc1(x)))` — both linears biased, with the talker
+    /// config's `hidden_act` (**silu**) BETWEEN them.
+    ///
+    /// An earlier revision of this function omitted the activation and said in this very
+    /// comment that the reference applied none. It does. Dropping it turns the projection
+    /// into a composition of two linear maps — i.e. a plain linear map — which inflated
+    /// every projected text embedding (norms ran ~1.3-1.9x the reference's) and left the
+    /// talker prone to repeating the target text, most visibly whenever an `instruct`
+    /// block widened the prompt. Confirmed by diffing this tensor against the reference's
+    /// `inputs_embeds`, step by step, on the same token ids.
     pub fn embed_text(&self, ids: &[u32]) -> Result<Tensor> {
         let e = self.w.embedding("talker.model.text_embedding.weight", ids)?;
         let e = e.unsqueeze(0)?; // [1, t, text_embed_dim]
@@ -68,6 +77,7 @@ impl Talker {
             "talker.text_projection.linear_fc1.weight",
             Some("talker.text_projection.linear_fc1.bias"),
         )?;
+        let h = candle_nn::ops::silu(&h)?;
         self.w.linear(
             &h,
             "talker.text_projection.linear_fc2.weight",

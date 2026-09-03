@@ -49,13 +49,19 @@ GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment pros
 # weight-backed half is NOT here — see docs/backends/QWEN_PORT_STATUS.md.
 GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract"
 
-ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
+# Weight-backed Qwen tests. Kept OUT of GROUP_qwen deliberately: that group is model-free
+# and must never SKIP, while these self-skip without a checkpoint and the reference dump
+# from scripts/gen-qwen-ref.py.
+GROUP_qwen_ckpt="real_qwen_prompt_parity"
+
+ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qwen_ckpt"
 
 # ---- family -> groups --------------------------------------------------------
 # One model family per line, plus meta-families for the two cuts that matter most
 # in practice: what runs anywhere, and what needs the box.
 
 FAMILY_fish="fish_s1 fish_s2"
+FAMILY_qwen3="qwen qwen_ckpt"
 FAMILY_cosyvoice2="cv2 cv2e2e"
 FAMILY_cosyvoice3="cv3 cv3e2e"
 FAMILY_cosyvoice="cv2 cv2e2e cv3 cv3e2e"
@@ -65,10 +71,10 @@ FAMILY_whisper="stt"
 # a SKIP here is a bug in the runner or the test, not a partial box.
 FAMILY_free="modelfree cue qwen"
 # The complement: everything gated on weights or parity fixtures.
-FAMILY_weights="cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
+FAMILY_weights="cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qwen_ckpt"
 FAMILY_all="$ALL_GROUPS"
 
-ALL_FAMILIES="fish cosyvoice cosyvoice2 cosyvoice3 whisper free weights all"
+ALL_FAMILIES="fish qwen3 cosyvoice cosyvoice2 cosyvoice3 whisper free weights all"
 
 # ---- accessors ---------------------------------------------------------------
 
