@@ -29,6 +29,19 @@ so corner-cutting in one pass cannot poison the next.
 - **Fix documents before code:** reconcile plan.md, spec.md, list.md before building.
 - **Log all failures with raw tool output,** not paraphrases.
 - **IDs are immutable.** Splits add suffixes; nothing is renumbered or deleted.
+- **No bracket cue text and no speaker token may ever reach a backend as literal text.** No SSML tag either —
+  no cue markup of any kind — ever, in any dialect, however malformed. `\[` is the only
+  way to speak a literal bracket. This is enforced by property test
+  (`crates/syrinx-cue/tests/invariant_property.rs`), not by review: a failure there is a
+  **release blocker**, never a test to relax. The corollary is that every unescaped
+  `[...]` is cue syntax (ADR-0001 §9.1 / **D5**) — `array[0]` lowers to `array` unless
+  escaped, which is the accepted price of an invariant that is total instead of
+  best-effort.
+  **One named exception, and only one:** `syrinx_cue::legacy_emotion::parse_tagged`, the
+  deprecated CosyVoice-era parser, whose weaker semantics are pinned by the frozen
+  `tests/emotion_tags.rs` (ADR-0001 §11 / **D7**). It is quarantined and deprecated; no new
+  code may call it, and the exception dies with CosyVoice. Do not add a second exception —
+  narrow the rule only by ADR.
 
 ---
 
@@ -87,7 +100,8 @@ versioned interfaces (never reach into another crate's internals):
 
 | Crate | Responsibility |
 |-------|----------------|
-| `syrinx-frontend` | normalization, G2P, SSML, lexicon, heteronyms, context windowing |
+| `syrinx-frontend` | normalization, G2P, lexicon, heteronyms, context windowing |
+| `syrinx-cue` | **the sole owner of expressive-cue syntax**: bracket cues, SSML subset, the `CueDoc` IR, the label vocabulary, backend `ControlCaps`, and every lowering pass |
 | `syrinx-core` | tensor-ops glue, weight loading, quantization, device mgmt |
 | `syrinx-lm` | AR semantic LM forward pass + paralinguistic tokens |
 | `syrinx-speaker` | speaker encoder, embedding store, blend/morph, attributes |
@@ -99,9 +113,16 @@ versioned interfaces (never reach into another crate's internals):
 | `syrinx-eval` | MOS/SIM-o/WER/latency harness, frozen-eval-set runner |
 | `syrinx-cli` | local runner / dev harness |
 
-The deterministic frontend (`syrinx-frontend`), the prosody data model
-(`syrinx-prosody`), the eval-harness skeleton (`syrinx-eval`), and the server
-scaffold (`syrinx-serve`) are where the loop does its work. The model crates
+The deterministic frontend (`syrinx-frontend`), the cue layer (`syrinx-cue`), the
+prosody data model (`syrinx-prosody`), the eval-harness skeleton (`syrinx-eval`), and
+the server scaffold (`syrinx-serve`) are where the loop does its work.
+
+**SSML lives in `syrinx-cue`, not `syrinx-frontend`** (ADR-0001 §10 / **D6**, accepted
+2026-09-03). Both authoring syntaxes — bracket cues and the SSML subset — must produce the
+one `CueDoc` IR. A second producer of that IR would mean two places to enforce the hard
+invariant below and two scoping implementations to keep in agreement, so `syrinx-frontend`
+*consumes* `CueDoc` and never parses cue syntax itself. No backend crate may parse cue
+syntax either. The model crates
 (`syrinx-lm`, `syrinx-acoustic`, `syrinx-vocoder`, `syrinx-speaker`, `syrinx-core`
 weight loading) are human-and-GPU territory — their tasks are blocked.
 
@@ -153,6 +174,15 @@ passing test — never because you believe it is. A blocked task is "done" only 
 human removes its blocker and it earns a real gate. When in doubt: re-read from disk,
 do the smallest honest thing, write the result down, and let the next pass check you.
 
+## Model direction — Fish only (CosyVoice is deprecated)
+
+**Fish Audio (`syrinx-fish`) is the TTS path.** The CosyVoice2 / CosyVoice3 ports are
+**deprecated**: the code stays in-tree and their parity results stand, but they get no new
+work, and the on-box `scripts/test-all.env` deliberately leaves the `cv2`/`cv2e2e`/`cv3`/
+`cv3e2e` groups UNSET so those groups report **SKIP**, never FAIL. Do not fill them in, and
+do not "fix" a CosyVoice SKIP by pointing it at weights — the SKIP is the intended state.
+`syrinx-stt` (Whisper) stays active: it is the native WER oracle used to score Fish renders.
+
 ## Verifying the build (on the model box)
 
 Verification is hardware-bound: the `real`-feature binaries need a GPU box with the
@@ -170,6 +200,15 @@ Fish s2-pro · voice · emotion) → a `PASS / SKIP / MISSING / FAIL` board. Exi
 something FAILED; SKIP = that group's weights/fixtures aren't configured, MISSING = the
 test file isn't built yet.
 
+**GPU prerequisite (Blackwell / RTX 50-series boxes):** run
+`./scripts/setup-cuda-blackwell.sh` ONCE before any `--features cuda` build. candle 0.8.4
+pins cudarc 0.13.9, which refuses any CUDA newer than 12.8, while Blackwell (`sm_120`)
+requires at least 12.8 — so the distro's CUDA 13.x cannot build this workspace, and no
+candle bump fixes it (cudarc 0.17.8 still stops at 13.0). The script installs a local CUDA
+12.8 + gcc 14 under `$HOME` (no root) and applies a 6-declaration host-header fix for
+glibc >= 2.41. `scripts/test-all.env` then exports `CUDA_ROOT` / `NVCC_CCBIN` /
+`CUDA_COMPUTE_CAP=120`.
+
 Two steps `verify.sh` cannot do for you (it prints exactly when each is needed):
 - **Fill `scripts/test-all.env`** (copy from `.env.example`) with this box's weight +
   fixture paths. Unset groups SKIP — they never FAIL on a partial box.
@@ -181,6 +220,18 @@ Narrower entry points (all read the same `test-all.env`):
 - `./scripts/test-all.sh [--group G | --compile-only | --download-fish]` — the suite alone.
 - `./scripts/run-fish.sh <s1-mini|s2-pro> "<text>" <ref.wav> [out]` — one synth; `--parity <variant>` runs that model's Fish tests.
 - `./scripts/synth-samples.sh <variant> [--scale small|reply|chapter] [--lang L]` — batch-render the 610-sample corpus.
+
+**Run heavy jobs isolated — `./scripts/run-isolated.sh <cmd>`.** The `real`-feature tests
+are memory-hungry on CPU: `real_fish_s2_e2e` needs **~19 GB**, because the s2-pro weights are
+BF16 on disk (9.1 GB) and the CPU parity path upcasts to F32 by design
+(`s2/mod.rs`: *"CPU must stay f32 (parity); CUDA defaults to bf16 (fit)"*). Anything launched
+from an editor's integrated terminal inherits that editor's systemd scope, and a scope's
+default `OOMPolicy=stop` means one OOM-killed child tears down the whole scope — on
+2026-09-03 this killed the VSCodium session mid-verify. The wrapper puts the job in its own
+scope (`OOMPolicy=continue`), and `MEMMAX=24G scripts/run-isolated.sh …` caps it so it dies
+at a bound you chose instead of starving the box. **Never run two `real`-feature suites
+concurrently.** Do not "fix" this by disabling the OOM killer: with a 19 GB job the kernel
+would thrash instead of killing, which is worse.
 
 Full-coded ≠ verified: nothing is real until the box says so. Every offline-unconfirmable
 numeric is marked `// PARITY:`; the Fish s2-pro EVA-GAN codec is the least-certain piece

@@ -43,8 +43,12 @@ GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e"
 # STT (pure-Rust Whisper): audio->text + the native TTS oracle. Self-skips off-box.
 #   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
 GROUP_stt="real_stt"
-ALL_GROUPS="modelfree cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
-[ "$QUICK" = 1 ] && ALL_GROUPS="modelfree"
+
+# Expressive control (the cue layer: syrinx-cue + its wiring). Model-free and
+# deterministic — these run everywhere and must never SKIP.
+GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate"
+ALL_GROUPS="modelfree cue cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
+[ "$QUICK" = 1 ] && ALL_GROUPS="modelfree cue"
 group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
 
 # ── 0. preflight ─────────────────────────────────────────────────────────────
@@ -111,7 +115,11 @@ run_one() {
   local t="$1"
   [ -f "$ROOT/tests/$t.rs" ] || { printf '  %-40s %s\n' "$t" "$(c '2' 'MISSING')"; MISS=$((MISS+1)); return; }
   if cargo test --features real --release --test "$t" -- --nocapture >"$LOG" 2>&1; then
-    if grep -qiE 'skip|skipping' "$LOG"; then printf '  %-40s %s\n' "$t" "$(c '33' SKIP)"; SKIP=$((SKIP+1))
+    # Case-SENSITIVE, trailing space required: the two real self-skip conventions are
+    # `SKIP <name>: ...` and `skipping <name>: ...`. A case-insensitive bare `skip` also
+    # matched a passing test's *name* (emotion_tags' concat_crossfade_skips_...), so a
+    # green model-free test was reported as SKIP on every board.
+    if grep -qE 'SKIP |skipping ' "$LOG"; then printf '  %-40s %s\n' "$t" "$(c '33' SKIP)"; SKIP=$((SKIP+1))
     else printf '  %-40s %s\n' "$t" "$(c '32' PASS)"; PASS=$((PASS+1)); fi
   else printf '  %-40s %s\n' "$t" "$(c '31' FAIL)"; FAIL=$((FAIL+1)); FAILED="$FAILED $t"; fi
 }

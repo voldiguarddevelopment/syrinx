@@ -49,7 +49,11 @@ GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e"
 #   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
 GROUP_stt="real_stt"
 
-ALL_GROUPS="modelfree cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
+# Expressive control (the cue layer: syrinx-cue + its wiring). Model-free and
+# deterministic — these run everywhere and must never SKIP.
+GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate"
+
+ALL_GROUPS="modelfree cue cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
 
 group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
 
@@ -91,7 +95,12 @@ run_one() {
   local rc=$?
   if [ $rc -ne 0 ]; then
     printf '  %-40s \033[31mFAIL\033[0m\n' "$t"; ((FAIL++)); FAILED_TESTS+=("$t")
-  elif grep -qiE 'skip|skipping' "$LOG"; then
+  elif grep -qE 'SKIP |skipping ' "$LOG"; then
+    # Case-SENSITIVE, and the trailing space matters: the two real self-skip
+    # conventions are `SKIP <name>: ...` and `skipping <name>: ...`. The old
+    # case-insensitive bare `skip` also matched a passing test's *name* —
+    # `concat_crossfade_skips_empty_segments_and_handles_none` in emotion_tags —
+    # so a green model-free test was reported as SKIP on every board.
     printf '  %-40s \033[33mSKIP\033[0m\n' "$t"; ((SKIP++))
   else
     printf '  %-40s \033[32mPASS\033[0m\n' "$t"; ((PASS++))

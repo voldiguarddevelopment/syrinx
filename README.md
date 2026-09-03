@@ -30,9 +30,11 @@ no Python in the inference path:
 - **TTS (`text + voice → audio`)** — two model families. The primary path is a pure-Rust
   port of **Fish Audio's dual-AR TTS** (`s2-pro` 5B / `s1-mini` 0.5B): a semantic AR
   transformer + a fast AR head over an RVQ codec at **44.1 kHz**, with zero-shot voice
-  cloning and inline, model-native **emotion/style tags** (`[happy]`, `[whispers]`). The
-  original stack — pure-Rust ports of **CosyVoice2-0.5B / CosyVoice3-0.5B** (AR Qwen2 LM →
-  flow-matching mel → HiFT vocoder, 24 kHz) — remains present and parity-verified.
+  cloning and inline, model-native **emotion/style tags** (`[happy]`, `[whispers]`).
+  **Fish is the only TTS path under active development.** The original stack — pure-Rust
+  ports of **CosyVoice2-0.5B / CosyVoice3-0.5B** (AR Qwen2 LM → flow-matching mel → HiFT
+  vocoder, 24 kHz) — is **DEPRECATED**: the code stays in-tree and its parity results
+  stand, but it is no longer developed, tested on-box, or accepting new work.
 - **STT (`audio → text`)** — **`syrinx-stt`**, a pure-Rust **Candle Whisper**. It makes
   Syrinx bidirectional and doubles as the **native WER oracle**: synthesize, transcribe,
   compare — which is how the TTS is objectively verified, with no external `faster-whisper`.
@@ -49,14 +51,15 @@ local-only**, on a single consumer GPU.
 >   end-to-end, but its weights are HF-gated and have **not** been downloaded/run yet.
 > - **STT (Whisper) — VERIFIED on the box.** Transcribed a German clip → language `de` and
 >   the exact text, pure Rust.
-> - **CosyVoice2 / CosyVoice3 — parity-verified** (`text + ref → 24 kHz`; CV2 full-chain
+> - **CosyVoice2 / CosyVoice3 — DEPRECATED (frozen, still parity-verified).** Superseded by
+>   the Fish port; kept for reference, not maintained. (`text + ref → 24 kHz`; CV2 full-chain
 >   7.7e-5, CV3 components ~1e-5–1e-3), each with a GPU runtime (RTF ≈ 1.67), CLI +
 >   OpenAI-compatible server, measured eval (CV2 SIM-o ≈ 0.74, CV3 ≈ 0.88), and
 >   emotion/instruct control.
 >
-> A plain `cargo build --features real` builds the real Candle stack (Fish + CosyVoice +
-> Whisper). Real, weight-backed runs need the GPU box. See [Build status](#build-status)
-> and [Roadmap](#roadmap).
+> A plain `cargo build --features real` builds the real Candle stack (Fish + Whisper, plus
+> the frozen CosyVoice code). Real, weight-backed runs need the GPU box. See
+> [Build status](#build-status) and [Roadmap](#roadmap).
 
 ---
 
@@ -181,7 +184,12 @@ language `de` with the exact text, **pure Rust — no `faster-whisper`**. Models
 `openai/whisper-{tiny,base,small,medium,large-v3}`. It doubles as the **native WER oracle**
 (the model-free `wer` helper is always available, even in a Candle-free build).
 
-**✅ Real CosyVoice2 model — DONE (a standalone, near-real-time Rust TTS)**
+**🗄️ Real CosyVoice2 model — DEPRECATED (frozen; was a standalone, near-real-time Rust TTS)**
+
+> **Deprecated.** Fish Audio is the TTS going forward. The CV2 code remains in-tree and the
+> parity numbers below were really measured and still stand, but the path is frozen: it is not
+> exercised by the on-box test config, gets no new features, and its `real_cv2_*` groups are
+> left unset (SKIP) in `scripts/test-all.env`.
 
 The real **CosyVoice2-0.5B** model is reimplemented in pure-Rust
 **[Candle](https://github.com/huggingface/candle)** and verified numerically against the
@@ -203,7 +211,10 @@ The parity fixtures (real weights + Python reference dumps) live on the model bo
 tests are **env-gated and skip cleanly in CI** — the build stays green without the weights,
 while the real path runs for real where the weights exist.
 
-**✅ Real CosyVoice3 model — DONE (a second pure-Rust CosyVoice, feature-complete)**
+**🗄️ Real CosyVoice3 model — DEPRECATED (frozen; a second pure-Rust CosyVoice, feature-complete)**
+
+> **Deprecated.** Same status as CV2 — in-tree, parity results stand, no further work, and
+> SKIPped by the on-box test config.
 
 The newer **CosyVoice3-0.5B** (`Fun-CosyVoice3-0.5B-2512`) is now *also* a full pure-Rust
 Candle port, built the same parity-driven way and reusing ~70 % of the CV2 code (CAM++
@@ -344,6 +355,10 @@ the harness will not mark a task done on belief.
 
 ## Roadmap
 
+> **Direction:** **Fish Audio is the only TTS path under active development.** The
+> CosyVoice2/CosyVoice3 ports below are **deprecated** — frozen in-tree with their parity
+> results intact, but no longer developed or tested on-box.
+
 **Done (real, verified):**
 - [x] Eleven-crate workspace + CI (the real ports are the default build)
 - [x] **Fish `s2-pro` (5B) dual-AR port — VERIFIED on GPU** — pure-Rust Qwen3-4B slow AR +
@@ -352,7 +367,7 @@ the harness will not mark a task done on belief.
 - [x] **Speech-to-text (`syrinx-stt`) — VERIFIED on the box** — pure-Rust Candle Whisper
   (`whisper-{tiny…large-v3}`); German clip → `de`, exact text; doubles as the native WER oracle
   (replaces the external `faster-whisper`). No Python.
-- [x] **Real CosyVoice2-0.5B port** — LM (+ KV-cache gen) · CAM++ speaker · flow-matching · HiFT · frontend, all Candle, all parity-verified
+- [x] *(deprecated)* **Real CosyVoice2-0.5B port** — LM (+ KV-cache gen) · CAM++ speaker · flow-matching · HiFT · frontend, all Candle, all parity-verified
 - [x] **End-to-end `Synthesizer`** — `text + ref → audio`, full-chain parity 7.7e-5, no Python on the hot path
 - [x] **GPU runtime** (Candle-CUDA) — ~26×, RTF ≈ 1.67 (near real-time on a consumer GPU)
 - [x] **CLI + server** — `syrinx synth|serve|stream`; OpenAI-compatible `POST /v1/audio/speech` returns real audio
@@ -361,7 +376,7 @@ the harness will not mark a task done on belief.
 - [x] **Measured eval — 5/5, no stub constants** — SIM-o clone fidelity (≈0.74), **WER** (Whisper CER ≈0%), **MOS-proxy** (UTMOS), RTF, TTFB. WER/MOS run via eval-side helper models (Whisper / UTMOS); the inference path stays pure-Rust
 - [x] **int4 (Q4_0) LM quant** — ~2.5× (2449 → 986 MB, SIM-o 0.72 preserved); the f16 embedding tables are the remaining bulk
 - [x] **Output watermark** — spread-spectrum, imperceptible + detectable after light processing (see *Ethics*)
-- [x] **Real CosyVoice3-0.5B port — feature-complete** — LM (2.67e-5) · **new 22-layer DiT flow** (2.27e-3, fp32 floor) · causal f64 HiFT (4.9e-5) · v3 tokenizer (exact) · frontend (3.72e-5); live synth **SIM-o 0.88 / MOS 2.21**; CLI/server/eval/emotion/quality-source/RL-LM/int4 all wired (`--cv3`). ~70% CV2 reuse; see *Real CosyVoice3 model* above.
+- [x] *(deprecated)* **Real CosyVoice3-0.5B port — feature-complete** — LM (2.67e-5) · **new 22-layer DiT flow** (2.27e-3, fp32 floor) · causal f64 HiFT (4.9e-5) · v3 tokenizer (exact) · frontend (3.72e-5); live synth **SIM-o 0.88 / MOS 2.21**; CLI/server/eval/emotion/quality-source/RL-LM/int4 all wired (`--cv3`). ~70% CV2 reuse; see *Real CosyVoice3 model* above.
 
 **Forward (honest):**
 - [ ] **Fish `s1-mini` first run** — the 0.5B port is code-complete but its weights are
