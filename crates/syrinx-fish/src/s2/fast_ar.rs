@@ -122,7 +122,10 @@ impl FastAr {
     ) -> Result<Vec<u32>> {
         let n_cb = self.cfg.codec.num_codebooks;
         let fast_dim = self.cfg.fast.transformer.dim;
-        let mut cache = KvCache::new(self.cfg.fast.transformer.n_layer);
+        // The fast AR's final length is known exactly: one cached position for the slow
+        // hidden prefix plus one per residual draw == `num_codebooks`. Preallocate to it
+        // so the per-frame cache is allocated once and never re-copied.
+        let mut cache = KvCache::with_capacity(self.cfg.fast.transformer.n_layer, n_cb);
 
         // Position 0: prime the cache with the slow hidden (the conditioning prefix; its
         // logits are discarded — codebook-0 is the deterministic `first_code`).
@@ -179,7 +182,8 @@ impl FastAr {
         debug_assert_eq!(active.len(), n);
         debug_assert_eq!(samplers.len(), n);
 
-        let mut cache = KvCache::new(self.cfg.fast.transformer.n_layer); // batch dim = N
+        // batch dim = N; exact depth == num_codebooks (see `expand`).
+        let mut cache = KvCache::with_capacity(self.cfg.fast.transformer.n_layer, n_cb);
 
         // Position 0: prime the cache with each sample's slow hidden (logits discarded —
         // codebook-0 is the deterministic `first_codes[i]`).

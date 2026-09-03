@@ -1,0 +1,15 @@
+# Rendered audio is large and regenerable — the repo-root .gitignore already drops
+# *.wav globally; this is here so the intent is visible at the folder that produces it.
+*.wav
+*.flac
+*.mp3
+
+# Per-run scratch (batch splits, driver logs) — the corpus + manifest + report are
+# the durable artifacts; the plumbing that produced them is not.
+*.log
+part*.jsonl
+rest.jsonl
+deferred.jsonl
+
+# A run's pid file is live-run scratch, not a durable artifact.
+render.pid

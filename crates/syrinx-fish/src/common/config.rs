@@ -287,6 +287,53 @@ impl FishConfig {
         };
 
         apply_transformer_json(&mut cfg.slow, text);
+
+        // s1's `dual_ar` config.json is FLAT: the fast head is described by `fast_*`
+        // keys alongside the slow ones, not by a nested `audio_decoder_config` the way
+        // `fish_qwen3_omni` does it. Without this the fast head silently keeps the
+        // variant defaults while the slow stack takes the real values — a mismatch that
+        // only shows up as a tensor-shape error deep in the load.
+        if model_type == "dual_ar" {
+            let fast = &mut cfg.fast.transformer;
+            let uu = |k: &str| v.get(k).and_then(|x| x.as_u64()).map(|n| n as usize);
+            if let Some(x) = uu("fast_dim") {
+                fast.dim = x;
+            }
+            if let Some(x) = uu("n_fast_layer") {
+                fast.n_layer = x;
+            }
+            if let Some(x) = uu("fast_n_head") {
+                fast.n_head = x;
+            }
+            if let Some(x) = uu("fast_n_local_heads") {
+                fast.n_local_heads = x;
+            }
+            if let Some(x) = uu("fast_head_dim") {
+                fast.head_dim = x;
+            }
+            if let Some(x) = uu("fast_intermediate_size") {
+                fast.intermediate_size = x;
+            }
+            if let Some(x) = v.get("fast_attention_qk_norm").and_then(|x| x.as_bool()) {
+                fast.attention_qk_norm = x;
+            }
+            if let Some(x) = v.get("fast_attention_qkv_bias").and_then(|x| x.as_bool()) {
+                fast.attention_qkv_bias = x;
+            }
+            if let Some(x) = v.get("fast_attention_o_bias").and_then(|x| x.as_bool()) {
+                fast.attention_o_bias = x;
+            }
+            // The fast head predicts into one codebook, so its vocabulary IS the
+            // residual codebook size.
+            if let Some(x) = uu("codebook_size") {
+                cfg.codec.residual_size = x;
+                fast.vocab_size = x;
+            }
+            if let Some(x) = uu("num_codebooks") {
+                cfg.codec.num_codebooks = x;
+            }
+        }
+
         if let Some(a) = audio {
             // The fast head's shape comes from `audio_decoder_config` in s2.
             apply_transformer_json(&mut cfg.fast.transformer, a);

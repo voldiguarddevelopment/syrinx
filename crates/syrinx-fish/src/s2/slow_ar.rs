@@ -101,15 +101,31 @@ impl SlowAr {
     fn embed(&self, inp: &Tensor) -> Result<Tensor> {
         let rows = inp.dim(0)?; // 1 + num_codebooks
         let t = inp.dim(1)?;
-        let n_cb = self.cfg.codec.num_codebooks;
-        // The LM's per-codebook table stride (== the residual RVQ codebook size, 4096).
-        let cb_size = self.cfg.codec.residual_size;
-        debug_assert_eq!(rows, 1 + n_cb, "prompt must be [1 + num_codebooks, T]");
-
         let host: Vec<u32> = inp
             .to_dtype(candle_core::DType::U32)?
             .flatten_all()?
             .to_vec1()?;
+        self.embed_ids(&host, rows, t)
+    }
+
+    /// The MCF input embedding over **host-side** ids — `ids` is the row-major
+    /// `[rows, t]` id matrix (`rows == 1 + num_codebooks`), i.e. exactly the contents
+    /// [`SlowAr::embed`] would have read back off the device.
+    ///
+    /// The generation loop already holds its frame ids on the host, so going through a
+    /// `Tensor` there meant a host→device upload immediately followed by a
+    /// device→host `to_vec1`, and that read-back **synchronises the CUDA stream once per
+    /// decode step** (once per sample per step on the batched path) for data the caller
+    /// already had. Taking the slice directly removes the round-trip; every embedding
+    /// lookup and every arithmetic op below is unchanged, so the result is bit-identical.
+    fn embed_ids(&self, ids: &[u32], rows: usize, t: usize) -> Result<Tensor> {
+        let n_cb = self.cfg.codec.num_codebooks;
+        // The LM's per-codebook table stride (== the residual RVQ codebook size, 4096).
+        let cb_size = self.cfg.codec.residual_size;
+        debug_assert_eq!(rows, 1 + n_cb, "prompt must be [1 + num_codebooks, T]");
+        debug_assert_eq!(ids.len(), rows * t, "id matrix must be [rows, t] row-major");
+
+        let host = ids;
         let row = |r: usize| -> Vec<u32> { (0..t).map(|c| host[r * t + c]).collect() };
 
         let tok_ids = row(0);
@@ -263,8 +279,9 @@ impl SlowAr {
             "slow_step pos must equal the current cache length"
         );
         let n = frame.len();
-        let inp = Tensor::from_vec(frame.to_vec(), (n, 1), &self.w.dev)?;
-        let embeds = self.embed(&inp)?;
+        // `frame` IS the `[1 + num_codebooks, 1]` id matrix, row-major, already on the
+        // host — embed it directly instead of round-tripping it through the device.
+        let embeds = self.embed_ids(frame, n, 1)?;
         // Single new token over the full cache: causal visibility is total ⇒ no mask.
         let h = self.run_layers(&embeds, pos, false)?;
         self.head(&h)
@@ -462,15 +479,23 @@ impl SlowAr {
         let n = frames.len();
         debug_assert_eq!(n, self.pad_lens.len(), "batch size changed mid-utterance");
 
-        // Embed each one-column frame with the single-sample MCF embed, then stack → [N,1,dim].
+        // Embed all N one-column frames in ONE MCF pass by treating the batch axis as the
+        // embed's `t` axis: build the row-major `[1 + num_codebooks, N]` id matrix, embed
+        // it to `[1, N, dim]`, and reshape (a free view) to `[N, 1, dim]`. Every gather and
+        // every elementwise op is per-column, so this is value-identical to embedding the
+        // frames one at a time and `cat`-ing them — it just replaces N × (11 index_selects
+        // + the mask/scale kernels + a device round-trip) with one of each.
         let n_full = 1 + self.cfg.codec.num_codebooks;
-        let mut rows: Vec<Tensor> = Vec::with_capacity(n);
-        for f in frames {
+        let mut ids = vec![0u32; n_full * n];
+        for (i, f) in frames.iter().enumerate() {
             debug_assert_eq!(f.len(), n_full, "frame must be [1 + num_codebooks]");
-            let inp = Tensor::from_vec(f.clone(), (n_full, 1), &self.w.dev)?;
-            rows.push(self.embed(&inp)?); // [1, 1, dim]
+            for (r, &id) in f.iter().enumerate() {
+                ids[r * n + i] = id;
+            }
         }
-        let embeds = Tensor::cat(&rows, 0)?; // [N, 1, dim]
+        let embeds = self
+            .embed_ids(&ids, n_full, n)?
+            .reshape((n, 1, self.cfg.slow.dim))?; // [N, 1, dim]
 
         // The new token's RoPE position for sample i is `pos - pad_i`.
         let pos_ids: Vec<u32> = self

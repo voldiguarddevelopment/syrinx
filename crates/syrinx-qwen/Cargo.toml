@@ -1,0 +1,32 @@
+[package]
+name = "syrinx-qwen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Pure-Rust / Candle port of Alibaba's Qwen3-TTS family (12 Hz tokenizer + 0.6B/1.7B
+# talker). PERMISSIVE: the upstream weights ship under Apache-2.0, unlike the Fish
+# checkpoints this workspace also supports — see lib.rs.
+
+[features]
+# Mirrors the `syrinx-fish` convention: the Candle port is the primary surface and is
+# ON BY DEFAULT; `config` is pure Rust and compiles with `--no-default-features`.
+default = ["real"]
+real = [
+    "dep:candle-core",
+    "dep:candle-nn",
+    "dep:tokenizers",
+    "dep:safetensors",
+    "dep:hound",
+]
+cuda = ["real", "candle-core/cuda", "candle-nn/cuda"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+tokenizers = { version = "0.22", optional = true, default-features = false, features = ["onig"] }
+safetensors = { version = "0.4", optional = true }
+hound = { version = "3", optional = true }

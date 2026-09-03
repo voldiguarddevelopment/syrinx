@@ -25,6 +25,12 @@ pub const IM_START_TOKEN: &str = "<|im_start|>";
 pub const IM_END_TOKEN: &str = "<|im_end|>";
 /// `<|voice|>` — the voice-modality marker prepended to the assistant turn.
 pub const VOICE_TOKEN: &str = "<|voice|>";
+/// `<|interleave|>` — the modality marker that OPENS a Fish s1 sequence. The
+/// reference builds every TTS request as `ContentSequence(modality="interleave")`.
+pub const INTERLEAVE_TOKEN: &str = "<|interleave|>";
+/// `<|speaker:0|>` — speaker marker prefixing each content part.
+pub const SPEAKER0_TOKEN: &str = "<|speaker:0|>";
+
 /// The number of contiguous `<|semantic:i|>` ids in the Fish vocabulary.
 pub const N_SEMANTIC: usize = 4096;
 

@@ -161,9 +161,18 @@ fn lanczos(x: f64, a: f64) -> f64 {
 /// 16-bit signed PCM mono at 24 kHz is the universally-playable choice and the
 /// rate the synthesizer emits. Samples are clamped to `[-1, 1]` before scaling.
 pub fn encode_wav_24k(samples: &[f32]) -> Result<Vec<u8>, SynthError> {
+    encode_wav(samples, SR_24K)
+}
+
+/// Encode a mono `f32` waveform to in-memory 16-bit PCM WAV bytes at `sample_rate`.
+///
+/// The rate-generic core of [`encode_wav_24k`]. CosyVoice emits 24 kHz; the Fish
+/// codec emits 44.1 kHz, and the served body must declare the rate it actually is
+/// or every client resamples it wrongly. Samples are clamped to `[-1, 1]`.
+pub fn encode_wav(samples: &[f32], sample_rate: u32) -> Result<Vec<u8>, SynthError> {
     let spec = hound::WavSpec {
         channels: 1,
-        sample_rate: SR_24K,
+        sample_rate,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };

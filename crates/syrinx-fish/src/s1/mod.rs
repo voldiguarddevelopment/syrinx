@@ -37,13 +37,12 @@ pub use backend::S1Mini;
 mod backend {
     use std::path::Path;
 
-    use candle_core::{Device, Result, Tensor};
+    use candle_core::{DType, Device, Result, Tensor};
 
-    use super::codec::ModdedDac;
     use super::fast_ar::FastAr;
-    use super::load::{load_codec, load_lm};
+    use super::load::load_lm;
     use super::slow_ar::SlowAr;
-    use super::tokenizer::{FishTokenizer, IM_END_TOKEN, IM_START_TOKEN, VOICE_TOKEN};
+    use super::tokenizer::{FishTokenizer, IM_END_TOKEN, IM_START_TOKEN, INTERLEAVE_TOKEN, SPEAKER0_TOKEN, VOICE_TOKEN};
     use crate::common::codec::RvqCodec;
     use crate::common::config::{CodecConfig, FishConfig};
     use crate::common::dualar::{drive, DriveParams, DualArBackend, SlowStep};
@@ -56,7 +55,19 @@ mod backend {
         tokenizer: FishTokenizer,
         slow: SlowAr,
         fast: FastAr,
-        codec: ModdedDac,
+        codec: crate::s2::codec::EvaGanDac,
+        /// Path to `codec.pth`, so `encode_reference` can materialise the encode-side
+        /// stack on demand and drop it again.
+        codec_path: std::path::PathBuf,
+        /// Compute dtype for the CODEC: f32 on CPU (parity), bf16 on CUDA.
+        ///
+        /// This is not cosmetic. candle builds every conv1d through an `im2col` buffer
+        /// of `L * C_in * k` elements, and the codec's ENCODE stack runs at the full
+        /// waveform length. For a 35 s reference at 44.1 kHz with C=192, k=7 that is
+        /// 4.2 GB in bf16 and **8.4 GB in f32** — a single allocation large enough to
+        /// fail on a 12 GB card with 8 GB free. s2 has always picked this by device;
+        /// s1 hardcoded f32 and OOMed on long references.
+        codec_dt: DType,
         dev: Device,
     }
 
@@ -88,21 +99,42 @@ mod backend {
             cfg.stop_token_id = tokenizer.im_end_id;
 
             let lm_w = load_lm(
-                dir.join("model.safetensors")
-                    .to_str()
-                    .ok_or_else(|| candle_core::Error::Msg("non-utf8 model path".into()))?,
+                {
+                    // Fish ships `model.pth`; fall back to a converted safetensors.
+                    let pth = dir.join("model.pth");
+                    let st = dir.join("model.safetensors");
+                    let p = if pth.exists() { pth } else { st };
+                    p.to_str()
+                        .ok_or_else(|| candle_core::Error::Msg("non-utf8 model path".into()))?
+                        .to_string()
+                }
+                .as_str(),
                 dev.clone(),
             )?;
             let slow = SlowAr::new(lm_w, cfg.clone())?;
             let fast = FastAr::new(cfg.clone(), &dev)?;
 
-            let codec_w = load_codec(
-                dir.join("codec.safetensors")
+            // `codec.pth` in the s1-mini release is BYTE-IDENTICAL to s2-pro's
+            // (same md5), so the codec is the same EVA-GAN/DAC stack. Drive it with the
+            // s2 implementation — which is parity-checked and carries the chunked
+            // decode — instead of the s1 `ModdedDac`, which was written against an
+            // assumed "modded-DAC" that this checkpoint is not. The codec geometry
+            // comes from s2's config for the same reason: identical weights.
+            let codec_cfg = crate::common::config::FishConfig::s2_pro().codec;
+            cfg.codec.semantic_size = codec_cfg.semantic_size;
+            cfg.codec.codebook_dim = codec_cfg.codebook_dim;
+            cfg.codec.sample_rate = codec_cfg.sample_rate;
+            let codec_path = dir.join("codec.pth");
+            let codec_dt = if dev.is_cuda() { DType::BF16 } else { DType::F32 };
+            let codec_w = crate::s2::load::load_codec(
+                codec_path
                     .to_str()
                     .ok_or_else(|| candle_core::Error::Msg("non-utf8 codec path".into()))?,
                 dev.clone(),
+                codec_dt,
+                crate::s2::load::CodecParts::Decode,
             )?;
-            let codec = ModdedDac::new(codec_w, cfg.codec.clone());
+            let codec = crate::s2::codec::EvaGanDac::new(codec_w, codec_cfg);
 
             Ok(Self {
                 cfg,
@@ -110,6 +142,8 @@ mod backend {
                 slow,
                 fast,
                 codec,
+                codec_path,
+                codec_dt,
                 dev,
             })
         }
@@ -124,34 +158,154 @@ mod backend {
         /// modality marker opening the assistant turn). `conversation.py` was not in
         /// the reference bundle, so confirm the precise spacing/newlines on-box.
         pub fn build_prompt(&self, text: &str) -> Result<Tensor> {
-            let voice = VOICE_TOKEN;
-            let im_s = IM_START_TOKEN;
-            let im_e = IM_END_TOKEN;
-            // System + user turns closed with <|im_end|>; the assistant turn opens with
-            // the voice modality marker and is left open for generation.
-            let prompt = format!(
-                "{im_s}system\nconvert the provided text to speech{im_e}\
-                 {im_s}user\n{text}{im_e}\
-                 {im_s}assistant\n{voice}"
-            );
-            let ids = self
-                .tokenizer
-                .encode(&prompt)
-                .map_err(|e| candle_core::Error::Msg(format!("encode prompt: {e}")))?;
+            let ids = self.encode_prompt_ids(text)?;
             let t = ids.len();
             let n_cb = self.cfg.codec.num_codebooks;
             let mut flat = vec![0u32; (1 + n_cb) * t];
-            flat[..t].copy_from_slice(&ids); // row 0
+            flat[..t].copy_from_slice(&ids); // row 0 = text ids; code rows stay 0
             Tensor::from_vec(flat, (1 + n_cb, t), &self.dev)
+        }
+
+        /// The chat-format token ids for a plain (un-cloned) request.
+        ///
+        /// PARITY: taken from the reference `generate_long` +
+        /// `ContentSequence(modality="interleave")` in `fish_speech`, which builds
+        ///
+        /// ```text
+        /// <|interleave|><|speaker:0|>{text}
+        /// ```
+        ///
+        /// and leaves the sequence OPEN (`add_end=False`) so generation continues from
+        /// the last text token. There is no system/user/assistant role turn and no
+        /// `<|voice|>` marker on this path — an earlier reconstruction assumed a
+        /// ChatML-style template, which made the model emit its stop token after three
+        /// frames instead of speaking.
+        fn encode_prompt_ids(&self, text: &str) -> Result<Vec<u32>> {
+            let prompt = format!("{INTERLEAVE_TOKEN}{SPEAKER0_TOKEN}{text}");
+            self.tokenizer
+                .encode(&prompt)
+                .map_err(|e| candle_core::Error::Msg(format!("encode prompt: {e}")))
         }
 
         /// Synthesize `text` → mono 44.1 kHz waveform: build the prompt, [`drive`] the
         /// dual-AR loop to a `[10, T]` code matrix, then [`RvqCodec::decode`] it.
         pub fn synthesize(&mut self, text: &str, params: &DriveParams) -> Result<Vec<f32>> {
             let prompt = self.build_prompt(text)?;
+            if std::env::var("SYRINX_FISH_DUMP").is_ok() {
+                let ids: Vec<u32> = prompt.narrow(0, 0, 1)?.flatten_all()?.to_dtype(candle_core::DType::U32)?.to_vec1()?;
+                eprintln!("s1 DUMP prompt [{}x{}] row0 ids: {:?}",
+                    prompt.dim(0)?, prompt.dim(1)?, &ids[..ids.len().min(24)]);
+            }
             let codes = drive(self, &prompt, params)?; // [num_codebooks, T]
+            if std::env::var("SYRINX_FISH_DUMP").is_ok() {
+                let (nc, t) = (codes.dim(0)?, codes.dim(1)?);
+                let flat: Vec<u32> = codes.to_dtype(candle_core::DType::U32)?.flatten_all()?.to_vec1()?;
+                let row0: Vec<u32> = (0..t.min(16)).map(|c| flat[c]).collect();
+                let mx = flat.iter().copied().max().unwrap_or(0);
+                let mn = flat.iter().copied().min().unwrap_or(0);
+                let distinct = flat.iter().collect::<std::collections::HashSet<_>>().len();
+                eprintln!("s1 DUMP codes [{nc}x{t}] min={mn} max={mx} distinct={distinct} row0[..16]={row0:?}");
+            }
             let wav = self.codec.decode(&codes)?;
-            wav.to_vec1::<f32>()
+            wav.to_dtype(DType::F32)?.to_vec1::<f32>()
+        }
+
+
+        /// Build the cloning prompt `[1 + num_codebooks, T]` from a reference
+        /// transcript + its codec codes, followed by the target `text`.
+        ///
+        /// PARITY: reproduces the reference `generate_long` when `use_prompt` is set —
+        /// `ContentSequence(modality="interleave")` with
+        ///
+        /// ```text
+        /// <|interleave|>  <|speaker:0|>{ref_text} {ref_codes}  <|im_end|>  <|speaker:0|>{text}
+        /// ```
+        ///
+        /// i.e. the reference turn is `[TextPart(ref_text), VQPart(ref_codes)]` closed
+        /// with `add_end=True`, then the target turn is `[TextPart(text)]` left OPEN
+        /// (`add_end=False`) so generation continues from it.
+        ///
+        /// Row 0 at a reference-audio column carries the `<|semantic:i|>` token id for
+        /// codebook 0 (`semantic_id_to_token_id[code]` in the reference); rows `1..=n_cb`
+        /// carry the raw RVQ codes for that frame.
+        pub fn build_prompt_with_reference(
+            &self,
+            ref_text: &str,
+            ref_codes: &Tensor,
+            text: &str,
+        ) -> Result<Tensor> {
+            let n_cb = self.cfg.codec.num_codebooks;
+
+            // Head: modality marker + the reference turn's TEXT part.
+            let head = format!("{INTERLEAVE_TOKEN}{SPEAKER0_TOKEN}{ref_text}");
+            let head_ids = self
+                .tokenizer
+                .encode(&head)
+                .map_err(|e| candle_core::Error::Msg(format!("encode ref head: {e}")))?;
+
+            // Tail: close the reference turn, then the OPEN target turn.
+            let tail = format!("{IM_END_TOKEN}{SPEAKER0_TOKEN}{text}");
+            let tail_ids = self
+                .tokenizer
+                .encode(&tail)
+                .map_err(|e| candle_core::Error::Msg(format!("encode ref tail: {e}")))?;
+
+            let ref_codes = if ref_codes.rank() == 3 {
+                ref_codes.squeeze(0)?
+            } else {
+                ref_codes.clone()
+            };
+            if ref_codes.dim(0)? != n_cb {
+                return Err(candle_core::Error::Msg(format!(
+                    "ref_codes must be [{n_cb}, T], got {:?}",
+                    ref_codes.dims()
+                )));
+            }
+            let t_ref = ref_codes.dim(1)?;
+            let host: Vec<u32> = ref_codes
+                .to_dtype(candle_core::DType::U32)?
+                .flatten_all()?
+                .to_vec1()?;
+            let row = |r: usize| -> Vec<u32> { (0..t_ref).map(|c| host[r * t_ref + c]).collect() };
+
+            let total = head_ids.len() + t_ref + tail_ids.len();
+            let mut flat = vec![0u32; (1 + n_cb) * total];
+            let put = |flat: &mut [u32], r: usize, c: usize, val: u32| {
+                flat[r * total + c] = val;
+            };
+
+            for (c, &id) in head_ids.iter().enumerate() {
+                put(&mut flat, 0, c, id);
+            }
+            let begin = self.cfg.semantic_begin_id;
+            let sem0 = row(0);
+            for (c, &s0) in sem0.iter().enumerate() {
+                let col = head_ids.len() + c;
+                put(&mut flat, 0, col, begin + s0);
+                for r in 0..n_cb {
+                    put(&mut flat, r + 1, col, row(r)[c]);
+                }
+            }
+            for (i, &id) in tail_ids.iter().enumerate() {
+                let col = head_ids.len() + t_ref + i;
+                put(&mut flat, 0, col, id);
+            }
+
+            Tensor::from_vec(flat, (1 + n_cb, total), &self.dev)
+        }
+
+        /// Synthesize `text` in the cloned voice described by `ref_text`/`ref_codes`.
+        pub fn synthesize_cloned(
+            &mut self,
+            ref_text: &str,
+            ref_codes: &Tensor,
+            text: &str,
+            params: &DriveParams,
+        ) -> Result<Vec<f32>> {
+            let prompt = self.build_prompt_with_reference(ref_text, ref_codes, text)?;
+            let codes = drive(self, &prompt, params)?;
+            let wav = self.codec.decode(&codes)?;
+            wav.to_dtype(DType::F32)?.to_vec1::<f32>()
         }
 
         /// Decode a precomputed `[num_codebooks, T]` code matrix to a waveform (the
@@ -162,7 +316,19 @@ mod backend {
 
         /// Encode a reference waveform to `[num_codebooks, T]` cloning codes.
         pub fn encode_reference(&self, wav: &Tensor) -> Result<Tensor> {
-            self.codec.encode(wav)
+            // Only the DECODE side of the codec is resident (see `load`). The encode
+            // stack is read here, used once, and dropped — cloning encodes the
+            // reference exactly once per run, so this buys back its footprint for the
+            // whole of generation. Mirrors `S2Pro::encode_reference`.
+            let w = crate::s2::load::load_codec(
+                self.codec_path
+                    .to_str()
+                    .ok_or_else(|| candle_core::Error::Msg("non-utf8 codec path".into()))?,
+                self.dev.clone(),
+                self.codec_dt,
+                crate::s2::load::CodecParts::Encode,
+            )?;
+            crate::s2::codec::EvaGanDac::new(w, self.cfg.codec.clone()).encode(wav)
         }
     }
 

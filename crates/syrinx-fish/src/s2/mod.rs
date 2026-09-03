@@ -20,11 +20,11 @@
 // The backend body is Candle-backed and so lives behind the crate's `real` feature
 // (mirroring `common::dualar`/`codec` and the s1 backend); `config`/`sampling` stay pure.
 #[cfg(feature = "real")]
-mod codec;
+pub(crate) mod codec;
 #[cfg(feature = "real")]
 mod fast_ar;
 #[cfg(feature = "real")]
-mod load;
+pub(crate) mod load;
 #[cfg(feature = "real")]
 mod nn;
 #[cfg(feature = "real")]
@@ -43,7 +43,7 @@ mod backend {
 
     use super::codec::EvaGanDac;
     use super::fast_ar::FastAr;
-    use super::load::{load_codec, load_lm};
+    use super::load::{load_codec, load_lm, CodecParts};
     use super::slow_ar::SlowAr;
     use super::tokenizer::{
         Qwen3Tokenizer, IM_END_TOKEN, IM_START_TOKEN, SPEAKER0_TOKEN, VOICE_TOKEN,
@@ -96,8 +96,16 @@ mod backend {
         tokenizer: Qwen3Tokenizer,
         slow: SlowAr,
         fast: FastAr,
+        /// The **decode-side** codec (`decoder.*`, `quantizer.upsample.*`,
+        /// `quantizer.post_module.*` + the shared RVQ). The encode-side stack is NOT
+        /// resident — see [`S2Pro::encode_reference`].
         codec: EvaGanDac,
         dev: Device,
+        /// Path to `codec.pth`, kept so [`S2Pro::encode_reference`] can materialise the
+        /// encode-side stack on demand and drop it again.
+        codec_path: std::path::PathBuf,
+        /// The compute dtype the whole model was loaded in (f32 on CPU, bf16 on CUDA).
+        dt: DType,
     }
 
     impl S2Pro {
@@ -114,9 +122,41 @@ mod backend {
             Self::load_with_dtype(dir, dev, dt)
         }
 
+        /// Load int4-quantized: the big attention/SwiGLU projections of the dual-AR are
+        /// stored as `Q4_0` and multiplied with candle's **fused quantized kernels**
+        /// (`QMatMul`), not dequantized on fetch.
+        ///
+        /// The forward runs in **f32** because candle's quantized CUDA matmul requires
+        /// f32 activations. That is not the parity f32 path — the weights are lossy — it
+        /// simply is the dtype the kernels accept. The token-embedding table stays dense
+        /// (it is gathered, not multiplied) and is the largest remaining tensor.
+        ///
+        /// Trades accuracy for VRAM: the point is fitting a 12 GB card that is already
+        /// hosting other models.
+        pub fn load_quantized(dir: impl AsRef<Path>, dev: Device) -> Result<Self> {
+            // Load bf16, NOT f32: the dense bag is read in full before it can be
+            // quantized, and this model is 9.1 GB in bf16 (18.2 GB in f32, which does not
+            // fit any card here). Quantization then runs in place, dropping each dense
+            // projection as its int4 copy is built, so resident memory falls monotonically
+            // from 9.1 GB rather than peaking above it.
+            Self::load_inner(dir, dev, DType::BF16, true)
+        }
+
         /// Like [`S2Pro::load`] but with an explicit compute dtype `dt`. CPU callers
         /// should pass `DType::F32` to preserve parity; CUDA callers `DType::BF16` to fit.
         pub fn load_with_dtype(dir: impl AsRef<Path>, dev: Device, dt: DType) -> Result<Self> {
+            Self::load_inner(dir, dev, dt, false)
+        }
+
+        /// The shared load body. `quantize` moves the big projections into the int4
+        /// `QMatMul` store after the dense bag is read (see [`super::load::quantize_lm`]);
+        /// with `quantize == false` this is byte-for-byte the previous dense loader.
+        fn load_inner(
+            dir: impl AsRef<Path>,
+            dev: Device,
+            dt: DType,
+            quantize: bool,
+        ) -> Result<Self> {
             let dir = dir.as_ref();
 
             let tok_path = dir.join("tokenizer.json");
@@ -140,19 +180,55 @@ mod backend {
             cfg.semantic_end_id = tokenizer.semantic_end_id;
             cfg.stop_token_id = tokenizer.im_end_id;
 
-            let lm_w = load_lm(dir, dev.clone(), dt)?;
+            let mut lm_w = load_lm(dir, dev.clone(), dt)?;
             // Reconcile the fast-AR geometry + residual codebook width against the REAL
             // `audio_decoder.*` tensors before wiring the heads (see `reconcile_fast_cfg`).
+            // This must happen BEFORE quantizing: it inspects the dense projection shapes.
             reconcile_fast_cfg(&mut cfg, &lm_w)?;
+            if quantize {
+                super::load::quantize_lm(&mut lm_w)?;
+                // candle's quantized matmul kernels take f32 activations, so the forward
+                // runs in f32 from here. Promote what is left dense (norms, biases) — all
+                // tiny — but leave the embedding tables bf16; `Weights::embedding` casts
+                // the gathered rows instead, which is ~800 MB cheaper.
+                lm_w.dt = DType::F32;
+                // Promote only SMALL dense tensors to f32. The elementwise ops (norm
+                // scales, biases) need a matching dtype and are a few KB each; the large
+                // ones — embedding tables and any projection that failed the Q4_0 block
+                // check — are left bf16 and handled by the dtype-tolerant matmuls in
+                // `Weights::linear`/`linear_w`, which cast the small activation instead.
+                // Promoting those would cost ~0.6 GB to save nothing.
+                const PROMOTE_MAX_ELEMS: usize = 1 << 20; // 1 M elements (2 MB in bf16)
+                let names: Vec<String> = lm_w.map.keys().cloned().collect();
+                for n in names {
+                    if let Some(t) = lm_w.map.get(&n) {
+                        if t.dtype() != DType::F32 && t.elem_count() <= PROMOTE_MAX_ELEMS {
+                            let f = t.to_dtype(DType::F32)?;
+                            lm_w.map.insert(n, f);
+                        }
+                    }
+                }
+            }
+            // After quantization the transformer runs f32 (candle's quantized kernels
+            // take f32 activations), so the fast-AR head must be built in the same dtype
+            // as the slow AR it consumes hidden states from — otherwise the first
+            // elementwise op across the boundary is an f32 x bf16 mismatch.
+            let compute_dt = lm_w.dt;
             let slow = SlowAr::new(lm_w, cfg.clone())?;
-            let fast = FastAr::new(cfg.clone(), &dev, dt)?;
+            let fast = FastAr::new(cfg.clone(), &dev, compute_dt)?;
 
+            // Only the DECODE side of the codec is loaded here. The encode side
+            // (`encoder.*` / `downsample` / `pre_module`, 417 MB in bf16) is read only by
+            // `encode_reference`, once per run, and is materialised there instead of
+            // sitting resident for the whole of generation.
+            let codec_path = dir.join("codec.pth");
             let codec_w = load_codec(
-                dir.join("codec.pth")
+                codec_path
                     .to_str()
                     .ok_or_else(|| candle_core::Error::Msg("non-utf8 codec path".into()))?,
                 dev.clone(),
                 dt,
+                CodecParts::Decode,
             )?;
             let codec = EvaGanDac::new(codec_w, cfg.codec.clone());
 
@@ -163,6 +239,8 @@ mod backend {
                 fast,
                 codec,
                 dev,
+                codec_path,
+                dt,
             })
         }
 
@@ -316,8 +394,25 @@ mod backend {
         }
 
         /// Encode a reference waveform to `[num_codebooks, T]` cloning codes.
+        ///
+        /// The encode-side codec stack (`encoder.*`, `quantizer.downsample.*`,
+        /// `quantizer.pre_module.*` + the shared RVQ — 417 MB in bf16) is loaded HERE,
+        /// used, and dropped on return. Cloning encodes the reference exactly once per
+        /// run, so paying a second read of `codec.pth` buys back 417 MB of resident
+        /// footprint for the whole of generation — on a 12 GB card that is roughly 40% of
+        /// the working headroom left over after the 9.12 GB bf16 LM. Peak is unchanged
+        /// (the encode bag is live at exactly the moment it used to be), and the weights
+        /// and the math are bit-for-bit what they were.
         pub fn encode_reference(&self, wav: &Tensor) -> Result<Tensor> {
-            self.codec.encode(wav)
+            let w = load_codec(
+                self.codec_path
+                    .to_str()
+                    .ok_or_else(|| candle_core::Error::Msg("non-utf8 codec path".into()))?,
+                self.dev.clone(),
+                self.dt,
+                CodecParts::Encode,
+            )?;
+            EvaGanDac::new(w, self.cfg.codec.clone()).encode(wav)
         }
     }
 
@@ -399,7 +494,9 @@ mod backend {
         }
 
         fn encode(&self, wav: &Tensor) -> Result<Tensor> {
-            self.codec.encode(wav)
+            // Routes through the inherent method so the encode-side stack stays
+            // load-on-demand (see `S2Pro::encode_reference`).
+            self.encode_reference(wav)
         }
     }
 }

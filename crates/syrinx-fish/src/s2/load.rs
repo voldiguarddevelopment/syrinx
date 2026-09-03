@@ -9,7 +9,10 @@
 //!     `nn`/`slow_ar`/`fast_ar` expect, fuses split `wq/wk/wv` → `wqkv`, and casts to f32.
 //!   * the codec ships as a torch pickle `codec.pth`. [`load_codec`] reads it via
 //!     `candle_core::pickle` (no on-box conversion required), strips a leading
-//!     `generator.` prefix if present, folds weight-norm, and casts to f32.
+//!     `generator.` prefix if present, folds weight-norm, and casts to the compute
+//!     dtype. It takes a [`CodecParts`] selector so the encode-side stack (needed only
+//!     once, to turn a reference clip into prompt codes) need not stay resident for the
+//!     whole of generation.
 //!
 //! The remap is keyed to the REAL `s2-pro` layout (dumped on-box, 358 tensors): the slow
 //! AR under `text_model.model.*` (qkv pre-fused, tied head) and the fast AR under
@@ -48,16 +51,80 @@ pub fn load_lm(dir: &Path, dev: Device, dt: DType) -> Result<Weights> {
     }
     fuse_qkv(&mut map)?;
     fold_weight_norm(&mut map)?;
-    Ok(Weights { map, dev, dt })
+    Ok(Weights { map, dev, dt, qmap: HashMap::new() })
 }
 
-/// Load the `codec.pth` EVA-GAN/DAC checkpoint into a [`Weights`] bag in `dt`.
+/// Which half of the codec to materialise.
 ///
-/// Weight-norm is **folded in f32** (folding in bf16 loses precision on the `‖v‖`
-/// reduction), and only after folding is the whole bag cast to `dt`. The codec is small
-/// (~446M), so the transient f32 footprint is negligible. For `dt == F32` the final cast
-/// is skipped entirely, leaving the CPU parity path byte-unchanged.
-pub fn load_codec(path: &str, dev: Device, dt: DType) -> Result<Weights> {
+/// The `codec.pth` state dict splits cleanly along the direction of travel, and the two
+/// halves are close to the same size (bf16: encode-side 417 MB, decode-side 369 MB):
+///
+///   * **encode-side** — `encoder.*`, `quantizer.downsample.*`, `quantizer.pre_module.*`.
+///     Read only by the codec's `encode`, i.e. exactly once per run, to turn a reference
+///     clip into cloning codes.
+///   * **decode-side** — `decoder.*`, `quantizer.upsample.*`, `quantizer.post_module.*`.
+///     Read only by the codec's `decode`.
+///   * **shared** — the factorized RVQ (`quantizer.quantizer.*`,
+///     `quantizer.semantic_quantizer.*`, 0.6 MB in bf16): `in_proj` + codebook on the
+///     encode side, codebook + `out_proj` on the decode side. Kept in BOTH bags.
+///
+/// Anything unrecognised falls into both bags, so an unexpected key can never go missing.
+///
+/// Keeping the encode side out of the resident set for the whole of generation is worth
+/// ~417 MB on a 12 GB card — roughly 40% of the working headroom left over after the
+/// 9.12 GB bf16 LM.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CodecParts {
+    /// Decode + shared only (drops `encoder.*` / `downsample` / `pre_module`).
+    Decode,
+    /// Encode + shared only (drops `decoder.*` / `upsample` / `post_module`).
+    Encode,
+}
+
+/// Top-level prefixes read **only** by the codec's `encode` path.
+const ENCODE_ONLY: [&str; 3] = ["encoder.", "quantizer.downsample.", "quantizer.pre_module."];
+/// Top-level prefixes read **only** by the codec's `decode` path.
+const DECODE_ONLY: [&str; 3] = ["decoder.", "quantizer.upsample.", "quantizer.post_module."];
+
+impl CodecParts {
+    /// Whether a (prefix-stripped) state-dict key belongs in this bag.
+    fn wants(self, key: &str) -> bool {
+        match self {
+            CodecParts::Decode => !ENCODE_ONLY.iter().any(|p| key.starts_with(p)),
+            CodecParts::Encode => !DECODE_ONLY.iter().any(|p| key.starts_with(p)),
+        }
+    }
+}
+
+/// Whether a state-dict key is a weight-norm *component* (`g`/`v`) that
+/// [`fold_weight_norm`] will consume. Those must be materialised in f32 — folding in
+/// bf16 loses precision on the ‖v‖ reduction. Everything else can be cast straight to
+/// the compute dtype at read time.
+fn is_weight_norm_part(key: &str) -> bool {
+    key.ends_with(".weight_g")
+        || key.ends_with(".weight_v")
+        || key.ends_with(".parametrizations.weight.original0")
+        || key.ends_with(".parametrizations.weight.original1")
+}
+
+/// Load the `codec.pth` EVA-GAN/DAC checkpoint into a [`Weights`] bag in `dt`, keeping
+/// only the tensors `parts` asks for.
+///
+/// Weight-norm is **folded in f32** (folding in bf16 loses precision on the ‖v‖
+/// reduction), so only the `g`/`v` components are materialised in f32; every other tensor
+/// is cast straight to `dt` as it is read. That is byte-identical to the previous
+/// "everything to f32, fold, then cast the whole bag" order — `f32 → f32 → bf16` and
+/// `f32 → bf16` are the same single rounding, and the checkpoint's handful of bf16
+/// buffers round-trip through f32 exactly — but it drops the load-time transient from
+/// 1572 MB to ~939 MB for the full bag (and less again for one half). For `dt == F32`
+/// every cast is an identity, leaving the CPU parity path byte-unchanged.
+///
+/// NOTE: candle's pickle reader has no `Bool` dtype, so it *skips* (with a
+/// `skipping: ...` line on stderr) this checkpoint's three `causal_mask` bool buffers —
+/// 302 MB on disk, of which `encoder.block.4.block.5.causal_mask` alone is a
+/// [16384, 16384] 268 MB triangle. They never reach the device, and `codec::transformer`
+/// recomputes the mask with `causal_mask_at`, so nothing is lost.
+pub fn load_codec(path: &str, dev: Device, dt: DType, parts: CodecParts) -> Result<Weights> {
     // `candle_core::pickle::read_all` reads a torch `.pth` directly (CPU tensors).
     let tensors = candle_core::pickle::read_all(path)?;
     let has_generator = tensors.iter().any(|(k, _)| k.contains("generator."));
@@ -71,18 +138,30 @@ pub fn load_codec(path: &str, dev: Device, dt: DType) -> Result<Weights> {
         } else {
             k
         };
-        // Move to the target device + normalise to f32 for the (f32) weight-norm fold.
-        let v = v.to_device(&dev)?.to_dtype(DType::F32)?;
+        // Drop the half this bag does not need BEFORE the tensor touches the device.
+        if !parts.wants(&key) {
+            continue;
+        }
+        // Weight-norm components stay f32 for the (f32) fold; everything else goes
+        // straight to the compute dtype.
+        let target = if is_weight_norm_part(&key) {
+            DType::F32
+        } else {
+            dt
+        };
+        let v = v.to_device(&dev)?.to_dtype(target)?;
         map.insert(key, v);
     }
     fold_weight_norm(&mut map)?;
-    // PARITY: fold first (f32), then cast to the compute dtype. Skipped for f32 (CPU).
-    if dt != DType::F32 {
-        for v in map.values_mut() {
+    // PARITY: fold first (f32), then cast the folded weights to the compute dtype. The
+    // rest of the bag is already in `dt`, so the `!= dt` guard makes this a no-op for
+    // them — and for the whole bag when `dt == F32` (the CPU parity path).
+    for v in map.values_mut() {
+        if v.dtype() != dt {
             *v = v.to_dtype(dt)?;
         }
     }
-    Ok(Weights { map, dev, dt })
+    Ok(Weights { map, dev, dt, qmap: HashMap::new() })
 }
 
 /// Resolve the LM shard files: prefer the `model.safetensors.index.json` weight map,
@@ -348,4 +427,103 @@ fn fold_one(g: &Tensor, v: &Tensor) -> Result<Tensor> {
     let scale = g2.broadcast_div(&norm)?;
     let w2 = v2.broadcast_mul(&scale)?;
     w2.reshape(dims)
+}
+
+/// Smallest weight (in elements) worth quantizing. Below this the Q4_0 per-block
+/// scale overhead dominates and the tensor is left dense.
+const QUANT_MIN_ELEMS: usize = 4096;
+
+/// Quantize the big 2-D projections of an already-loaded LM bag to int4 `Q4_0`,
+/// moving them from the dense `map` into the `qmap` as `QMatMul`.
+///
+/// What is quantized: every 2-D `[out, in]` weight whose `in` is a multiple of the
+/// 32-element Q4_0 block and which has at least [`QUANT_MIN_ELEMS`] elements — i.e.
+/// the attention `wq/wk/wv/wo` and the SwiGLU `w1/w2/w3` of all 36 slow + 4 fast
+/// layers. That is where essentially all of the 9.1 GB lives.
+///
+/// What is deliberately left dense:
+/// * **the token-embedding table** — it is read by `index_select` (a row gather),
+///   not by a matmul, and candle's `QTensor` cannot be gathered from. It stays
+///   dense and is the single largest remaining tensor.
+/// * **norm weights and biases** — 1-D, tiny, and numerically sensitive.
+///
+/// Quantization is per-tensor and lossy; the caller owns deciding that the accuracy
+/// cost is acceptable. Nothing here changes the dense path.
+pub fn quantize_lm(w: &mut Weights) -> Result<()> {
+    // Kernel choice for the quantized matmuls (CUDA only). candle's default is the
+    // `*_via_q8_1` family, which re-quantizes the activation into a scratch buffer on
+    // every call; measured here, that scratch costs ~1.3 GB of resident VRAM over the
+    // dense path. `SYRINX_FISH_DMMV=1` switches to the fused `dequantize_mul_mat_vec`
+    // kernel, which reads the int4 blocks straight into the dot product with no
+    // activation buffer — trading some speed for memory. Both are numerically valid;
+    // which one wins depends on whether the box is VRAM- or latency-bound.
+    #[cfg(feature = "cuda")]
+    if std::env::var("SYRINX_FISH_DMMV").is_ok() {
+        candle_core::quantized::cuda::set_force_dmmv(true);
+        eprintln!("syrinx-fish s2: SYRINX_FISH_DMMV=1 -> fused dmmv kernel (lower VRAM)");
+    }
+
+    use candle_core::quantized::{GgmlDType, QMatMul, QTensor};
+    let names: Vec<String> = w
+        .map
+        .keys()
+        .filter(|k| k.ends_with(".weight"))
+        .cloned()
+        .collect();
+    let mut n_q = 0usize;
+    let mut bytes_before = 0usize;
+    let mut q_bytes_total = 0usize;
+    for name in names {
+        // The embedding table is gathered from, not multiplied by: leave it dense.
+        if name.contains("embed") || name.contains("tok_embeddings") {
+            continue;
+        }
+        let t = match w.map.get(&name) {
+            Some(t) => t.clone(),
+            None => continue,
+        };
+        let dims = t.dims().to_vec();
+        if dims.len() != 2 || t.elem_count() < QUANT_MIN_ELEMS {
+            continue;
+        }
+        if dims[1] % GgmlDType::Q4_0.block_size() != 0 {
+            continue;
+        }
+        // QTensor::quantize wants f32 input regardless of the stored dtype.
+        let f32t = t.to_dtype(DType::F32)?;
+        let qt = QTensor::quantize(&f32t, GgmlDType::Q4_0)?;
+        q_bytes_total += qt.storage_size_in_bytes();
+        w.qmap.insert(name.clone(), QMatMul::from_qtensor(qt)?);
+        w.map.remove(&name);
+        bytes_before += t.elem_count() * t.dtype().size_in_bytes();
+        n_q += 1;
+    }
+    // Actual resident bytes, not an estimate: sum the int4 block storage and whatever
+    // stayed dense. Printed so a VRAM budget can be checked against reality instead of
+    // arithmetic (SYRINX_FISH_MEM_REPORT=1).
+    if std::env::var("SYRINX_FISH_MEM_REPORT").is_ok() {
+        let q_bytes: usize = q_bytes_total;
+        let mut dense: Vec<(String, usize)> = w
+            .map
+            .iter()
+            .map(|(k, t)| (k.clone(), t.elem_count() * t.dtype().size_in_bytes()))
+            .collect();
+        dense.sort_by_key(|(_, b)| std::cmp::Reverse(*b));
+        let d_bytes: usize = dense.iter().map(|(_, b)| *b).sum();
+        eprintln!(
+            "syrinx-fish s2 MEM: int4 {:.0} MB + dense {:.0} MB = {:.0} MB resident (LM only)",
+            q_bytes as f64 / 1e6,
+            d_bytes as f64 / 1e6,
+            (q_bytes + d_bytes) as f64 / 1e6
+        );
+        for (k, b) in dense.iter().take(8) {
+            eprintln!("  dense {:>8.1} MB  {k}", *b as f64 / 1e6);
+        }
+    }
+    eprintln!(
+        "syrinx-fish s2: quantized {n_q} projections to Q4_0 ({:.2} GB dense -> ~{:.2} GB int4)",
+        bytes_before as f64 / 1e9,
+        bytes_before as f64 / 1e9 * 4.5 / 16.0
+    );
+    Ok(())
 }

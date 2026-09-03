@@ -28,7 +28,17 @@ use super::nn::Weights;
 /// reference `Attention.load_hook` (fuse `wq`/`wk`/`wv` → `wqkv`) is applied, and
 /// weight-norm pairs (none expected on the LM) are folded if present.
 pub fn load_lm(path: &str, dev: Device) -> Result<Weights> {
-    let raw = safetensors::load(path, &dev)?;
+    // Fish ships the s1 LM as a torch pickle (`model.pth`), not safetensors — the same
+    // reader the codec already uses. Accept either, so a converted `.safetensors` still
+    // works if one is produced later.
+    let raw: Vec<(String, Tensor)> = if path.ends_with(".safetensors") {
+        safetensors::load(path, &dev)?.into_iter().collect()
+    } else {
+        candle_core::pickle::read_all(path)?
+            .into_iter()
+            .map(|(k, v)| -> Result<(String, Tensor)> { Ok((k, v.to_device(&dev)?)) })
+            .collect::<Result<Vec<_>>>()?
+    };
     let mut map: HashMap<String, Tensor> = HashMap::with_capacity(raw.len());
     for (k, v) in raw {
         if k.contains("audio_") {
