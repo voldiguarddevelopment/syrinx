@@ -283,6 +283,30 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
         println!("text:    {:?}", lowered.text);
         println!("cues:    {}", doc.cues.len());
         print!("{}", lowered.report.explain());
+
+        // An utterance-scoped backend has NO inline channel: its only way to carry a cue
+        // is the per-request instruction that `pass_hoist` builds, one pass after
+        // `lower_full`. Printing the lowering report alone therefore hid the entire
+        // control path for such a backend — every Qwen checkpoint reported its cue as
+        // "recognised but has no native spelling here", which reads as "lost" when the
+        // instruction was simply produced later. Show the real requests.
+        if caps.granularity == syrinx_cue::Granularity::Utterance {
+            let mut hoist_report = syrinx_cue::LoweringReport::default();
+            let segs = syrinx_cue::pass_hoist(
+                &lowered,
+                &caps,
+                &syrinx_cue::SplitOptions::default(),
+                &mut hoist_report,
+            );
+            println!("\nrequests: {} (utterance-scoped backend)", segs.len());
+            for (i, seg) in segs.iter().enumerate() {
+                match &seg.instruct {
+                    Some(ins) => println!("  [{i}] instruct {ins:?}\n      text     {:?}", seg.text),
+                    None => println!("  [{i}] (no instruction)\n      text     {:?}", seg.text),
+                }
+            }
+            print!("{}", hoist_report.explain());
+        }
         Ok(())
     }
 

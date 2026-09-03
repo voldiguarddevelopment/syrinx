@@ -219,3 +219,26 @@ peak memory during the wave stage (`SYRINX_QWEN_CODEC_CHUNK_FRAMES` bounds it).
    already carries the five Qwen `[[backend]]` entries, so the cue layer knows about it;
    nothing else does. (`scripts/render-qwen.py` drives the **Python** reference, not this
    crate.)
+
+
+## First end-to-end renders — 2026-09-03
+
+The port synthesizes. `renders/2026-09-03-qwen-first/FINDINGS.md` has the full table;
+the short version:
+
+- **Plain synthesis works on both sizes**, WER 0.000 against the native Whisper oracle
+  (0.6B-CustomVoice and 1.7B-CustomVoice, `Come closer, I have something to tell you.`).
+  ~1.3 s talker load, ~4 s for a short utterance on the 1.7B at bf16 on one RTX 5070.
+- **The per-checkpoint capability rows are confirmed against the running model.** The
+  0.6B-CustomVoice plain and cued renders are bit-identical (md5
+  `24f7866572c0082b3c2ba123d0feffcf`), so its `instruct = accepted` row — accepts the
+  instruction and silently discards it — is proven rather than asserted.
+- **DEFECT: any instruct makes the 1.7B talker repeat the target text**, two to five
+  times, scaling with frame count. The plain path is clean, so it is specific to the
+  instruct block. Sampler defaults (already the published generation_config), prompt-side
+  text duplication (+7 steps, exactly the instruct block) and ASR hallucination are all
+  ruled out in FINDINGS.md §3. The open question is whether `assemble_text_mode` places
+  the instruct turn where the reference does — which is precisely what the missing Qwen
+  reference dump would answer.
+- `-Base` still cannot render at all: the clone path has no driver, so there is nothing
+  to build the x-vector from a WAV.

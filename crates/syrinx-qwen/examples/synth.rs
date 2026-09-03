@@ -2,10 +2,28 @@
 //! predictor -> RVQ -> codec decoder -> 24 kHz WAV.
 //!
 //! Usage: synth <talker-dir> <tokenizer-dir> <out.wav> "<text>" [speaker] [language]
+//!          [--instruct "<instruction>"] [--voice-design]
+//!
+//! `--instruct` carries the utterance-scoped instruction. For an inline-less backend
+//! (every Qwen checkpoint) that string is the ONLY expressive channel there is, and it is
+//! what `syrinx cue --backend qwen3-…` emits for a cued line. `--voice-design` switches to
+//! the VoiceDesign prompt builder, where the instruction describes the VOICE rather than
+//! the delivery, and no speaker preset applies.
 use candle_core::{DType, Device};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let a: Vec<String> = std::env::args().skip(1).collect();
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    let mut a: Vec<String> = Vec::new();
+    let mut instruct: Option<String> = None;
+    let mut voice_design = false;
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--instruct" => { instruct = Some(argv[i + 1].clone()); i += 2; }
+            "--voice-design" => { voice_design = true; i += 1; }
+            _ => { a.push(argv[i].clone()); i += 1; }
+        }
+    }
     let (talker_dir, tok_dir, out, text) = (&a[0], &a[1], &a[2], &a[3]);
     let speaker = a.get(4).map(|s| s.as_str()).unwrap_or("serena");
     let language = a.get(5).map(|s| s.as_str()).unwrap_or("english");
@@ -28,9 +46,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut m = syrinx_qwen::model::Qwen3Tts::load(talker_dir, dev.clone())?;
     eprintln!("talker loaded {:.1}s", t.elapsed().as_secs_f32());
 
-    let plan = syrinx_qwen::prompt::build_custom_voice(
-        &tok, &pcfg, text, speaker, None, language, true,
-    )?;
+    // Report whether this checkpoint actually acts on an instruction, so a silently
+    // discarded one is visible at the console instead of being mistaken for a null result.
+    if let Some(ins) = instruct.as_deref() {
+        eprintln!(
+            "instruct: {ins:?}  (this checkpoint {})",
+            if pcfg.honors_instruct() { "HONORS it" } else { "ACCEPTS BUT DISCARDS it" }
+        );
+    }
+    let plan = if voice_design {
+        let ins = instruct.as_deref().ok_or("--voice-design requires --instruct")?;
+        syrinx_qwen::prompt::build_voice_design(&tok, &pcfg, text, ins, language, true)?
+    } else {
+        syrinx_qwen::prompt::build_custom_voice(
+            &tok, &pcfg, text, speaker, instruct.as_deref(), language, true,
+        )?
+    };
     eprintln!("prompt: {} steps", plan.len());
 
     let prompt = m.realize_plan(&plan, None, &[])?;
