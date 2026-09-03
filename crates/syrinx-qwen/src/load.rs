@@ -8,7 +8,9 @@
 //! a check that is cheap, runs off the safetensors header alone, and turns that whole
 //! class of bug into a clear error naming the offending tensor.
 
+#[cfg(feature = "real")]
 use std::collections::BTreeMap;
+#[cfg(feature = "real")]
 use std::path::Path;
 
 use crate::config::{Qwen3TtsConfig, TransformerConfig};
