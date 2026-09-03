@@ -545,3 +545,44 @@ claude_md_invariant_gate, cue_token_alignment, prosody_cue_overrides, expressive
 cue_activation_gate) to both scripts, registered in `ALL_GROUPS` and included in `--quick`,
 since all six are model-free and must never SKIP. Group result: **6/6 PASS**.
 
+
+### A25 — 2026-09-03 — **C4.2 measurement built; the certification run is STARTED-NOT-FINISHED**
+A23 recorded that C4.2's thresholds were uncertified because nothing could produce a real
+`Measurement` — the only caller was the frozen gate test, with synthetic values. That gap is
+now closed in code, but **the certification run itself has not completed and no activation
+number is claimed.**
+
+**Landed (committed, green):**
+- `syrinx_eval::acoustic` — an 11-dimension acoustic summary plus an EXACT two-sample
+  permutation test. Defines `activated` as "moved beyond this model's own run-to-run
+  variation", measured from `n` renders per condition at distinct `DriveParams::seed`s.
+  Both naive readings are useless and were rejected: one-vs-one comparison and fixed-seed
+  bit-comparison each answer `true` unconditionally, so either would report ~100 %
+  activation for a backend that ignores cues entirely. `n >= 4` is enforced —
+  `C(8,4)/2 = 35` labelings put the smallest attainable p at 1/35, and a smaller `n`
+  cannot reject at all, which would look exactly like a real 0 %.
+- `tests/cue_activation_measure.rs` — 17 model-free tests, including a **calibration**
+  assertion (20 same-condition comparisons must not exceed the alpha-implied
+  false-positive rate). Without it the metric is a rubber stamp that no GPU time exposes.
+- `tests/real_cue_activation.rs` — the run. Opt-in on `SYRINX_CUE_ACTIVATION_OUT`, in no
+  group. Asserts structural soundness and writes the JSON; does **not** assert the C4.2
+  thresholds unless `SYRINX_CUE_ACTIVATION_ENFORCE=1`, because thresholds that have never
+  met reality can only rubber-stamp the model or red the board for an unagreed reason.
+
+**To resume (≈2.5 h, owns the GPU; run nothing else heavy alongside — see the run note below):**
+
+    source scripts/test-all.env
+    SYRINX_CUE_ACTIVATION_OUT=.opt-reports/cue-activation.json \
+      MEMMAX=28G scripts/run-isolated.sh cargo test --features "real cuda" --release \
+      --test real_cue_activation -- --nocapture
+
+**Run note, learned the hard way:** any other `cargo` invocation blocks on the same
+target-dir lock and stalls the run before it starts. Either leave cargo alone for the
+duration or give the run its own `CARGO_TARGET_DIR`.
+
+**The only data so far — a 2-case pilot, which certifies NOTHING:**
+`en-emotion-happy-leading` p=0.371 and `en-emotion-sad-mid` p=0.086, both **not activated**,
+WER 0.000 in both conditions. Two cases cannot distinguish "s2-pro barely moves on bracket
+cues" from noise. It is recorded only so the full run has something to be compared against,
+and it is the reason the thresholds are not yet an assertion. **No claim is made about real
+activation rates until the full 54-case run completes.**
