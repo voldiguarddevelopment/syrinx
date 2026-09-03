@@ -161,8 +161,15 @@ would spend the entire error budget on the device and leave nothing to catch a f
 - `decoder_config` advertises `codebook_size: 2048` beside `semantic_codebook_size: 4096`,
   which is the exact ambiguity behind the Fish codec's out-of-range bug. It does **not**
   apply here, and that was settled against the checkpoint rather than the config: every
-  decoder table — `rvq_first` and all 15 `rvq_rest` layers — is `[2048, 256]`. The 4096
-  belongs to the encoder path.
+  decoder table — `rvq_first` and all 15 `rvq_rest` layers — is `[2048, 256]`. ~~The 4096
+  belongs to the encoder path.~~
+  **Correction (same day, while anchoring the encoder):** it does not belong to the
+  encoder either. The encode-side tables are 2048 too — all 32 of
+  `encoder.quantizer.{semantic,acoustic}_residual_vector_quantizer.layers.*.codebook.embed_sum`
+  are `[2048, 256]`. Counting every codebook tensor in the checkpoint: 32 encoder and 16
+  decoder tables, **all 2048 rows, and nothing anywhere with 4096**. The field is dead
+  config. The conclusion above (2047 is the true edge) is unaffected; only the
+  attribution was wrong.
 - The reference's `decode` clamps `min=0` and **nothing above**, so an out-of-range code
   is a CUDA device-side assert, not a clamp. Feeding 4095 in group 0 kills it. The
   contract is "codes must already be in range".

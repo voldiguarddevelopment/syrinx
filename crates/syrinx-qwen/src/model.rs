@@ -80,6 +80,17 @@ pub struct DriveParams {
     pub talker: SamplingParams,
     /// Warpers for groups `1..num_code_groups` (the reference's `subtalker_*`).
     pub code_predictor: SamplingParams,
+    /// The reference's `do_sample = False` / `subtalker_dosample = False`, on BOTH heads.
+    ///
+    /// Every draw becomes a first-index argmax and the warper fields above are ignored —
+    /// HF installs no warper at all when `do_sample` is false, so the run stops depending
+    /// on `seed`. The repetition penalty, the min-new-tokens EOS guard and
+    /// `suppress_tokens` still apply, because HF installs those above that switch.
+    ///
+    /// Off by default (the checkpoints ship `do_sample: true`). It exists because a
+    /// sampled loop cannot be compared to the reference at all, while a greedy one is a
+    /// pure function of the weights on both sides — see `tests/real_qwen_greedy_parity.rs`.
+    pub greedy: bool,
 }
 
 impl Default for DriveParams {
@@ -91,6 +102,7 @@ impl Default for DriveParams {
             min_new_frames: 2,
             talker: SamplingParams::talker(),
             code_predictor: SamplingParams::code_predictor(),
+            greedy: false,
         }
     }
 }
@@ -265,7 +277,7 @@ impl Qwen3Tts {
     /// code predictor for it.
     pub fn generate(&mut self, prompt: &TalkerPrompt, params: &DriveParams) -> Result<Generated> {
         self.talker.reset();
-        let mut sampler = Sampler::new(params.seed);
+        let mut sampler = if params.greedy { Sampler::greedy() } else { Sampler::new(params.seed) };
         let eos = self.cfg.codec_eos_token_id;
         let trailing_len = prompt.trailing_text_hidden.dim(1)?;
 
@@ -794,6 +806,7 @@ mod tests {
             min_new_frames: 4,
             talker: SamplingParams { temperature: 1.0, top_p: 0.95, top_k: 8, repetition_penalty: 1.05 },
             code_predictor: SamplingParams { temperature: 1.0, top_p: 0.95, top_k: 8, repetition_penalty: 1.0 },
+            ..Default::default()
         };
         let g = m.generate(&prompt(hidden, 3, 2), &p).unwrap();
         assert_eq!(g.frames, GOLDEN_FRAMES.iter().map(|f| f.to_vec()).collect::<Vec<_>>());
@@ -815,6 +828,7 @@ mod tests {
                 min_new_frames: 6,
                 talker: SamplingParams { temperature: 1.0, top_p: 1.0, top_k: 0, repetition_penalty: 1.0 },
                 code_predictor: SamplingParams { temperature: 1.0, top_p: 1.0, top_k: 0, repetition_penalty: 1.0 },
+                ..Default::default()
             };
             m.generate(&prompt(hidden, 3, 2), &p).unwrap()
         };

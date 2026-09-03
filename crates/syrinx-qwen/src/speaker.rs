@@ -82,10 +82,26 @@
 //!
 //! ## Verification status
 //!
-//! **Verified** (CPU, no GPU): `tests::real_checkpoint_parity` reproduces the reference
-//! `Qwen3TTSSpeakerEncoder` to < 1e-4 per component on the *real published weights* of
-//! both `0.6B-Base` and `1.7B-Base`, front end included, and the manifest matches all 76
-//! checkpoint tensors exactly (torch's own `strict=True` state-dict load accepts it).
+//! **Anchored to the reference on a real clip** (2026-09-03, CPU/f32): the repo-root
+//! `tests/real_qwen_speaker_parity.rs` compares this module against tensors dumped from
+//! the reference's OWN modules by `scripts/gen-qwen-ref-speaker.py`, on the real call path
+//! (`create_voice_clone_prompt` -> `extract_speaker_embedding` -> `Qwen3TTSSpeakerEncoder`)
+//! over `voice_en_10s.wav` and the published `1.7B-Base` weights. Three anchors, so a
+//! mismatch localizes to the front end or the encoder:
+//!
+//! | anchor | max abs diff |
+//! |---|---|
+//! | mel `[937, 128]` from the reference's own resampled clip | **0.00025** |
+//! | x-vector from the reference's own mel | **0.0000010** |
+//! | x-vector end to end (`embed`) | **0.0000010** |
+//!
+//! The port reproduces a 2048-wide reference x-vector to **1e-6 per component** (L2 norm
+//! 17.028715 on both sides). Nothing in this module was found wrong — unlike
+//! `text_projection`, whose dropped `silu` is why the anchor exists at all.
+//!
+//! `tests::real_checkpoint_parity` below is the older, weaker check: hand-copied numbers
+//! for a synthetic waveform on both `-Base` sizes. It stays because it is the only thing
+//! covering the **0.6B** (1024-wide) checkpoint — the fixture is 1.7B.
 //!
 //! **Not verified**: nothing here has been run on a CUDA device, and nothing has been
 //! run in bf16 — the reference executes the encoder in the talker's dtype, so a bf16 GPU
@@ -104,6 +120,12 @@ const ASP_EPS: f64 = 1e-12;
 const LOG_MEL_CLIP: f64 = 1e-5;
 /// The `+ 1e-9` inside `sqrt` when `mel_spectrogram` takes the STFT magnitude.
 const STFT_MAG_EPS: f64 = 1e-9;
+/// Half-width of [`resample`]'s Lanczos kernel, in periods of its cutoff. See that
+/// function's docs — the value is a measurement, not a convention.
+const LOBES: f64 = 64.0;
+/// Fraction of Nyquist [`resample`] passes flat, leaving the kernel's skirt room to reach
+/// the stopband before the image starts. Also a measurement.
+const PASSBAND: f64 = 0.96;
 
 // ---------------------------------------------------------------------------
 // configuration
@@ -352,6 +374,116 @@ pub fn log_mel_spectrogram(samples: &[f32], mc: &MelConfig, dev: &Device) -> Res
     let basis = Tensor::from_vec(mel_filterbank(mc), (mc.num_mels, n_bins), dev)?;
     let mel = basis.matmul(&mag)?.clamp(LOG_MEL_CLIP, f64::INFINITY)?.log()?;
     mel.t()?.contiguous()?.unsqueeze(0) // [1, frames, num_mels]
+}
+
+// ---------------------------------------------------------------------------
+// rate conversion (the clone driver's front step)
+// ---------------------------------------------------------------------------
+
+/// Band-limited mono resample, `in_sr -> out_sr` (Lanczos-windowed sinc). Identity when
+/// the rates match.
+///
+/// [`SpeakerEncoder::embed`] refuses anything but 24 kHz and every reference clip in
+/// practice arrives at some other rate, so the clone driver needs this step; the
+/// reference spends `librosa.resample` (soxr `HQ`) here.
+///
+/// **This is not bit-comparable to soxr, and it is deliberately outside the numeric
+/// parity gate.** `scripts/gen-qwen-ref-speaker.py` captures the *resampled* 24 kHz clip
+/// the reference fed its encoder, and `tests/real_qwen_speaker_parity.rs` anchors the mel
+/// and the x-vector against that — so a resampler difference can never be mistaken for a
+/// porting fault. What this function *is* gated on is the driver path: that test
+/// resamples the fixture's original-rate clip with this code and requires the resulting
+/// x-vector to stay within a measured cosine bound of the reference's.
+///
+/// ## Why `LOBES` is 64 and `PASSBAND` is 0.96 — both are measurements
+///
+/// This started as a copy of `syrinx_serve::wavio::resample` (16 lobes, cutoff exactly
+/// the output Nyquist, i.e. `PASSBAND = 1.0`), and on the 16 kHz -> 24 kHz reference clip
+/// that produced an x-vector at **cosine 0.996886** of the reference's — visibly worse
+/// than the rest of this port, and for a real reason rather than a tolerance one. An FFT
+/// of the difference against the reference's own soxr output localizes all of it to the
+/// transition band: below 7 kHz the two agree to a relative energy of 3.5e-6, while
+/// **above 8 kHz — the input Nyquist, where the reference has 1.5e-8 total energy —
+/// Lanczos-16 at cutoff 1.0 leaks 2.8e+2**. That leak is our own imaging artefact, and
+/// the mel front end feeds it straight to the encoder: `fmax` is 12 kHz, so the top ~30
+/// of the 128 bands see near-silence for the reference (pinned at the `1e-5` log floor)
+/// and a fabricated signal for us, which `log` then magnifies.
+///
+/// Suppressing the image is what a lower passband and more lobes buy. Measured on the
+/// same clip, end to end through the real encoder (cosine against the reference
+/// x-vector; the full sweep is in the test's log):
+///
+/// | lobes | passband | cosine | relative L2 |
+/// |---|---|---|---|
+/// | 16 | 1.00 | 0.996886 | 0.0841 |
+/// | 32 | 0.96 | 0.999771 | 0.0229 |
+/// | 64 | 0.95 | 0.999802 | 0.0199 |
+/// | **64** | **0.96** | **0.999977** | **0.0070** |
+/// | 128 | 0.96 | 0.999982 | 0.0062 |
+/// | 128 | 0.94 | 0.997751 | 0.0673 |
+///
+/// 64/0.96 is the knee: doubling the kernel again buys 6e-6 of cosine for twice the work,
+/// and moving the passband either way is worse — 0.98 leaves imaging in, 0.94 starts
+/// eating real 7.5 kHz speech. (soxr `HQ`'s own passband is 0.913 of Nyquist with a much
+/// steeper skirt than a windowed sinc can manage, which is why matching its *number*
+/// rather than its *effect* scores badly here.) 135 taps over a 10 s clip is ~32 M
+/// multiply-adds — irrelevant next to one encoder pass.
+///
+/// The two sibling copies in `syrinx-serve` and `syrinx-stt` still carry the 16/1.0
+/// settings. Nothing here changes them: they are other crates' files, feeding a vocoder
+/// and a 16 kHz Whisper front end rather than this encoder, and the measurement above is
+/// only evidence about *this* path.
+pub fn resample(input: &[f32], in_sr: u32, out_sr: u32) -> Vec<f32> {
+    if input.is_empty() || in_sr == 0 || out_sr == 0 {
+        return Vec::new();
+    }
+    if in_sr == out_sr {
+        return input.to_vec();
+    }
+    let ratio = out_sr as f64 / in_sr as f64;
+    let out_len = ((input.len() as f64) * ratio).round().max(1.0) as usize;
+    // Cutoff in input-sample coordinates: the output Nyquist when down-sampling (so the
+    // kernel doubles as the anti-alias filter), the input Nyquist when up-sampling,
+    // shaded by PASSBAND either way so the kernel's skirt lands below it.
+    let cutoff = ratio.min(1.0) * PASSBAND;
+    let radius = (LOBES / cutoff).ceil() as i64;
+    let n = input.len() as i64;
+
+    let mut out = Vec::with_capacity(out_len);
+    for i in 0..out_len {
+        let center = i as f64 / ratio;
+        let i0 = center.floor() as i64;
+        let (mut acc, mut wsum) = (0f64, 0f64);
+        for k in (i0 - radius)..=(i0 + radius) {
+            if k < 0 || k >= n {
+                continue;
+            }
+            let x = (center - k as f64) * cutoff;
+            let w = lanczos(x, LOBES);
+            acc += input[k as usize] as f64 * w;
+            wsum += w;
+        }
+        out.push(if wsum.abs() > 1e-12 { (acc / wsum) as f32 } else { 0.0 });
+    }
+    out
+}
+
+/// `sinc(x) * sinc(x / a)` inside `|x| < a`, zero outside — the Lanczos kernel.
+fn lanczos(x: f64, a: f64) -> f64 {
+    if x.abs() >= a {
+        return 0.0;
+    }
+    sinc(x) * sinc(x / a)
+}
+
+/// `sin(pi x) / (pi x)`, with the removable singularity at 0.
+fn sinc(x: f64) -> f64 {
+    if x.abs() < 1e-12 {
+        1.0
+    } else {
+        let px = std::f64::consts::PI * x;
+        px.sin() / px
+    }
 }
 
 // ---------------------------------------------------------------------------

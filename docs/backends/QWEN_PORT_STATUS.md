@@ -69,7 +69,7 @@ the weights and `GROUP_qwen` is defined as never-SKIP.
 | what | where | gate | status on this box |
 |------|-------|------|--------------------|
 | Text tokenizer: golden ids vs `AutoTokenizer` | `src/tokenizer.rs:408`, `:416`, `:431`, `:445`, `:471`, `:486` | `SYRINX_QWEN_DIR`, else `~/models/Qwen3-TTS-12Hz-*` | **passing** (`cargo test -p syrinx-qwen`) — 6 golden id sequences, round trips, the two pre-tokenizer regexes |
-| Speaker encoder vs the reference on real weights | `src/speaker.rs:934` (`real_checkpoint_parity`) | `SYRINX_QWEN_BASE_DIR` | SKIPs (env unset). The module header claims < 1e-4 on both `-Base` checkpoints from an earlier manual run |
+| Speaker encoder vs the reference on real weights | `src/speaker.rs` (`real_checkpoint_parity`, in-crate) | `SYRINX_QWEN_BASE_DIR` | superseded on the board by `tests/real_qwen_speaker_parity.rs` (see the parity table below); kept because it is the only check covering the **0.6B** (1024-wide) checkpoint |
 | Mimi encoder vs HuggingFace `MimiModel` | `src/codec/encoder.rs:1239` (`matches_the_python_reference`) | `SYRINX_QWEN_TOKENIZER_DIR` + `SYRINX_QWEN_ENCODER_REF` | SKIPs (env unset). The module header records an earlier manual run: 16×5 and 16×32 codes identical, latent max-abs 1.2e-4 / 2.5e-4 |
 | Whole-checkpoint load + shape verify | `src/load.rs:137` (`verify_checkpoint`), `examples/verify.rs` | needs `model.safetensors` (1.8–3.9 GB) | never run in CI; `tests/qwen_tensor_manifest.rs` now proves the *manifest* it checks against is right |
 | Weight materialisation | `src/load.rs:182` (`load_tensors`), `examples/loadcheck.rs` | needs the weights | never automated |
@@ -87,7 +87,7 @@ this pass would put unverified rows on the board.
 | End-to-end synthesis (`examples/synth.rs`) | never executed | talker (1.8/3.9 GB) + tokenizer (682 MB) checkpoints; CPU/f32 will work but is slow, CUDA/bf16 is the intended path |
 | Numerical parity of the **talker + code predictor** against `Qwen3TTSModel` | there is no Python reference dump for this crate at all — nothing like `scripts/gen-fish-ref.py` exists for Qwen | a reference-dump script + `~/.venvs/qwen`; then a `real_qwen_*_parity.rs` |
 | Audio quality / intelligibility of the port's output | perceptual + WER; blocked-on-human per `CLAUDE.md` | rendered audio + the `syrinx-stt` WER oracle |
-| The **voice-clone path** end to end (`-Base`) | no example or CLI drives it. `realize_plan` (`src/model.rs:393`) takes the x-vector and the reference frames as *arguments*; nothing in-tree builds them from a WAV | a WAV reader → `speaker::SpeakerEncoder::embed` → `codec::encoder::MimiEncoder::encode` → `prompt::build_voice_clone(CloneRef::InContext)`. CPU-feasible; currently a missing integration, not a missing algorithm |
+| ~~The **voice-clone path** end to end (`-Base`)~~ | **CLOSED 2026-09-03.** `crates/syrinx-qwen/examples/clone.rs` drives it: WAV → `speaker::resample` → `SpeakerEncoder::embed` → (`MimiEncoder::encode` for ICL) → `build_voice_clone` → `realize_plan` → generate → codec → WAV. Both reference modes render at WER 0.000 on CPU (renders under `renders/2026-09-03-qwen-base-clone/`) | — |
 | Any CUDA execution | nothing in this crate has ever run on a GPU | a Blackwell-prepared box (`scripts/setup-cuda-blackwell.sh`) |
 | Any bf16 execution | `Qwen3Tts::load` (`src/model.rs:164`) picks bf16 on CUDA; only the f32 CPU path has been exercised | GPU |
 | Memory figures in the doc comments (283 MB encode chunk, ~700 MB wave chunk, 3.8 GiB one-shot) | derived from candle's `im2col` sizing, never measured | a run with RSS instrumentation |
@@ -198,16 +198,21 @@ peak memory during the wave stage (`SYRINX_QWEN_CODEC_CHUNK_FRAMES` bounds it).
 
 ## 5. Open gaps, in priority order
 
-1. **No repo-root, env-gated group for the weight-backed tests.** The tokenizer goldens
-   already pass on this box and are invisible to `verify.sh`. Wants `tests/real_qwen_*.rs`
-   plus a SKIP-allowed `GROUP_qwen_ckpt` and `SYRINX_QWEN_*` in `test-all.env.example`.
+1. ~~**No repo-root, env-gated group for the weight-backed tests.**~~ **CLOSED
+   2026-09-03.** `GROUP_qwen_ckpt` exists in `scripts/test-groups.sh` with five
+   `tests/real_qwen_*.rs` members (prompt, stack, encode, speaker, greedy) and the
+   `SYRINX_QWEN_*` paths in `test-all.env`. It self-skips off-box; the `qwen3` family
+   selector runs it together with the model-free `GROUP_qwen`.
 2. **No member-crate unit tests reach the board, for any crate.** 105 passing Qwen tests
    (and every other crate's) are outside `verify.sh` because `run_one` calls
    `cargo test --test <name>`. A `cargo test --workspace --lib` row would close it.
-3. **No Python reference dump for Qwen.** `scripts/gen-fish-ref.py` has no Qwen sibling,
-   so there is no talker/code-predictor parity fixture and no way to gate one.
-4. **The voice-clone path has no driver.** See §2.3; this is integration work, not
-   research, and it is CPU-feasible.
+3. ~~**No Python reference dump for Qwen.**~~ **CLOSED 2026-09-03.** Four generators now
+   exist — `gen-qwen-ref.py` (prompt, talker, predictor, codec decode) plus
+   `gen-qwen-ref-encoder.py`, `gen-qwen-ref-speaker.py` and `gen-qwen-ref-greedy.py`.
+   All capture the reference's own tensors and refuse to run if `qwen_tts` cannot be
+   imported. This was the gap that let the `text_projection` `silu` bug ship.
+4. ~~**The voice-clone path has no driver.**~~ **CLOSED 2026-09-03** by
+   `examples/clone.rs` plus `tests/real_qwen_speaker_parity.rs`. See §2.3.
 5. **`suppressed_ids`, `PromptConfig`, `MimiEncoderConfig::from_json` and
    `DecoderConfig::from_json` are all pure functions of a config file but sit behind the
    `real` feature gate** (`src/lib.rs:37-53`), because their modules import Candle. Moving
@@ -240,8 +245,12 @@ the short version:
   ruled out in FINDINGS.md §3. The open question is whether `assemble_text_mode` places
   the instruct turn where the reference does — which is precisely what the missing Qwen
   reference dump would answer.
-- `-Base` still cannot render at all: the clone path has no driver, so there is nothing
-  to build the x-vector from a WAV.
+- ~~`-Base` still cannot render at all~~ — **closed 2026-09-03**: `examples/clone.rs`
+  builds the x-vector from a WAV, and both reference clone modes render at WER 0.000
+  through the Whisper oracle (`renders/2026-09-03-qwen-base-clone/`, CPU/f32, seed 0):
+  x-vector-only 32 frames / 2.56 s from a 10-step prompt; in-context 37 frames / 2.96 s
+  from a 135-step prompt carrying 125 reference frames, with the reference's own
+  decode-`cat(ref_code, generated)`-then-cut-`125/162` behaviour reproduced.
 
 ## Parity status — 2026-09-03 (after the reference landed)
 
@@ -255,13 +264,97 @@ reference's own modules; `tests/real_qwen_prompt_parity.rs` and
 | prompt | `prompt.{plain,instruct}.inputs_embeds` | 0.00000 |
 | talker | `talker.prefill_logits` | 0.00003 |
 | code predictor | `predictor.logits` (fed the reference's own input) | 0.00003 |
-| codec | `codec.wav`, `codec_edge.wav` | 0.000022 / 0.000005 |
+| codec (decode) | `codec.wav`, `codec_edge.wav` | 0.000022 / 0.000005 |
+| codec (encode) | `{full,ragged}.{wav,latent,codes}` from `scripts/gen-qwen-ref-encoder.py`, checked by `tests/real_qwen_encode_parity.rs` | **codes bit-exact** (2000 + 512, zero differences); latent 3.206e-4 / 2.351e-4 against max abs 37.492 |
+| speaker encoder (`-Base` x-vector) | `mel`, `xvector` from `scripts/gen-qwen-ref-speaker.py`, checked by `tests/real_qwen_speaker_parity.rs` | mel 0.00025; **x-vector 0.0000010** per component (2048 wide, L2 norm 17.028715 on both sides), from the reference's own mel and end to end alike |
 
 Fixtures are generated on **CPU/float32** deliberately: the reference decoding identical
 codes on CUDA vs CPU disagrees with itself by 0.031 on a [-1,1] waveform, which would
 consume the whole error budget. See renders/2026-09-03-qwen-first/FINDINGS.md §5.
 
-Still not gated: end-to-end generated audio (sampling makes it incomparable), the
-`-Base` clone path (no driver builds an x-vector from a WAV), and the encoder side of the
-codec. The talker/predictor anchors cover one step each — a multi-step drift would need a
-greedy-decode anchor, which the port has no greedy mode for yet.
+The **encode** anchor is exact rather than tolerance-bounded, because a code is an index:
+`tests/real_qwen_encode_parity.rs` asserts equality on all 16 x 125 and 16 x 32 codes, for
+the one-shot cascade and for every chunk length (1, 2, 7, 64, 128 steps) including the
+shipped default that `encode()` actually takes. It stores and replays the reference's own
+post-resample `input_values`, so librosa's resampler is not smuggled into the measurement,
+and it pins CPU rather than honouring `SYRINX_QWEN_DEVICE` — a device-level drift that
+flips one `argmin` would turn an exact gate into a false alarm.
+
+One correction to `renders/2026-09-03-qwen-first/FINDINGS.md` §5, which said the config's
+`semantic_codebook_size: 4096` "belongs to the encoder path": it does not. Read from the
+checkpoint header, the ENCODE-side tables are 2048 too —
+`encoder.quantizer.{semantic,acoustic}_residual_vector_quantizer.layers.*.codebook.embed_sum`
+are all `[2048, 256]`, matching the 2048 the decode side already showed. The 4096 matches
+no table in the checkpoint; it is a dead field in `decoder_config`. The conclusion §5 drew
+from it still stands (2047 is the true edge everywhere) — only the attribution was wrong.
+
+### The generation loop, gated by greedy decoding
+
+The anchors above cover **one step each**, which left the autoregressive loop itself
+ungated: the talker's KV cache and position advance across frames, the code predictor's
+per-frame reset and RoPE walk, the talker->predictor handoff, the 16-embedding feedback
+sum, the trailing-text schedule, the `min_new_tokens` EOS guard and `suppress_tokens` were
+exercised once or not at all, so a drift first appearing at frame 5 was invisible.
+
+Greedy decoding closes it, and it is the only thing that can: sampling draws from two
+different PRNGs, while `do_sample=False` on both heads makes the run a deterministic
+function of `(weights, prompt)` on both sides. `scripts/gen-qwen-ref-greedy.py` dumps the
+reference's greedy code matrix and `tests/real_qwen_greedy_parity.rs` compares it as
+**integers, with no tolerance to loosen**. Both sides CPU/f32.
+
+| case | prompt | trailing rows | frames | result |
+|---|---|---|---|---|
+| `plain` | 21 | 1 | 41 | 41/41 frames, 656/656 codes identical, EOS at the same frame |
+| `instruct` | 28 | 1 | 44 | 44/44 frames, 704/704 codes identical, EOS at the same frame |
+| `streaming` | 10 | 10 | 44 | 44/44 frames, 704/704 codes identical, EOS at the same frame |
+
+2064 of 2064 codes agree exactly, `stopped_on_eos` agrees in all three, and no bug was
+found. The realized prompts measure 1e-6 max abs against the reference's; the `streaming`
+prompt is new coverage, since no other test builds a multi-row `trailing_text_hidden`.
+
+Three details that keep this a real gate rather than a re-run of the sampler:
+
+- **What greedy does NOT switch off.** `_get_logits_processor` installs the temperature /
+  top-k / top-p warpers only under `if generation_config.do_sample:`; the repetition
+  penalty, the min-new-tokens EOS guard and `suppress_tokens` sit above that line. So a
+  greedy talker still runs `repetition_penalty = 1.05` while the code predictor runs `1.0`
+  (from `code_predictor_config`, not from a flag) — the whole processor list stays in the
+  path, asymmetry included.
+- **Greedy is not `top_k = 1`.** `top_k = 1` keeps every tied maximum and lets the PRNG
+  choose between them; `torch.argmax` always takes the first. `DriveParams::greedy` selects
+  `syrinx_qwen::sampling::Sampler::greedy`, a real first-index argmax that applies no
+  warper and consumes no randomness.
+- **`streaming` earns its place.** In non-streaming mode the reference sets
+  `trailing_text_hidden = tts_pad_embed` — one row, equal to the pad — so a loop with an
+  off-by-one in the per-frame schedule emits byte-identical codes. Only
+  `non_streaming_mode=False` (10 rows consumed over 44 frames) can see it.
+
+Because the gate came out green on the first run, its teeth were measured rather than
+assumed, with two negative controls on the `streaming` case (run once, then deleted):
+
+| injected defect | caught at |
+|---|---|
+| control (no defect) | — identical for all frames, so the comparison is well-formed |
+| trailing schedule shifted one row (`trailing_text_hidden[step + 1]`) | frame 1, group 5 (got 964, reference 1498) |
+| talker `repetition_penalty` dropped to 1.0 | frame 13, group 0 (got 1667, reference 1107) |
+
+The second is the reason the fixture runs the **whole utterance** and not a handful of
+frames: group-0 code 342 first repeats at frame 7, and the penalty does not flip an argmax
+until frame 13. Truncated to 12 frames the same gate sees nothing at all.
+
+Still not gated: end-to-end generated **audio** under the shipped sampling settings. Greedy
+is the substitute for it, and it deliberately leaves the three warpers and the multinomial
+out of the path — `tests/qwen_sampling_contract.rs` gates those against HF's semantics
+model-free, but nothing compares a *sampled* run to the reference, and nothing can.
+
+The `-Base` clone path is now covered on both halves — the reference codes by
+`real_qwen_encode_parity`, the x-vector by `real_qwen_speaker_parity` — and driven end to
+end by `examples/clone.rs`. One deliberate hole remains inside it: **resampling**. The
+reference reaches its encoder through `librosa.resample` (soxr `HQ`) and this workspace has
+no soxr, so the fixture stores the reference's *post-resample* clip and every numeric anchor
+starts from it. The driver's own `speaker::resample` is gated separately, and by effect
+rather than by value: its x-vector must stay at cosine >= 0.9995 of the reference's
+(measured 0.999977). That assertion has already earned its place — it caught the first
+version of the resampler (Lanczos-16 at cutoff 1.0, copied from `syrinx_serve::wavio`) at
+cosine 0.996886, which turned out to be real image leakage above the input Nyquist landing
+in the top mel bands.

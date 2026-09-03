@@ -34,6 +34,30 @@
 //!   always keeping the single largest (`min_tokens_to_keep = 1`, since the reference runs
 //!   `num_beams == 1`). That is not the same cut as "keep the shortest descending prefix
 //!   whose mass reaches `top_p`" when probabilities tie at the edge.
+//!
+//! ## Greedy decoding (`do_sample = False`)
+//!
+//! [`Sampler::greedy`] is the reference's `do_sample=False` / `subtalker_dosample=False`
+//! path, and it exists because it is the ONLY way to compare a generation LOOP against the
+//! reference: sampling draws from two different PRNGs and can never be bit-comparable,
+//! while an argmax chain is a deterministic function of `(weights, prompt)` on both sides.
+//! `tests/real_qwen_greedy_parity.rs` is what uses it.
+//!
+//! It is not "top_k = 1 with a low temperature", and the difference is exactly where HF
+//! puts the switch. `_get_logits_processor` installs the three warpers **only** under
+//! `if generation_config.do_sample:`, then `_sample` takes `torch.argmax(next_token_scores)`
+//! instead of `torch.multinomial`. So under greedy the temperature, top-k and top-p knobs
+//! are not merely no-ops that happen to preserve the arg-maximum — they are never applied
+//! at all, and the draw is a first-index argmax rather than a uniform pick among tied
+//! maxima. `top_k = 1` agrees with that on every vector whose maximum is unique and
+//! disagrees on every vector where it is not, which is precisely the kind of "almost
+//! always right" a parity fixture must not be built on.
+//!
+//! Everything ABOVE that `if` still runs, and the loop still has to apply it: HF installs
+//! [`apply_repetition_penalty`], the min-new-tokens EOS guard and [`block_ids`] for
+//! `suppress_tokens` regardless of `do_sample`. On the published checkpoints that means a
+//! greedy talker still runs `repetition_penalty = 1.05` while the code predictor runs
+//! `1.0` — an asymmetry the reference gets from `code_predictor_config`, not from a flag.
 
 /// Deterministic SplitMix64 PRNG — pins the otherwise-stochastic multinomial draws so a
 /// generation run is bit-reproducible from a seed. `next_f64` yields a uniform in `[0, 1)`.
@@ -150,6 +174,27 @@ pub fn block_ids(logits: &mut [f32], ids: &[u32]) {
     }
 }
 
+/// `torch.argmax`: the index of the maximum, and on a tie the **first** such index.
+///
+/// This is HF's `do_sample=False` token selection (`_sample`:
+/// `next_tokens = torch.argmax(next_token_scores, dim=-1)`), applied to the scores AFTER
+/// the processor list — so a caller still owes the repetition penalty, the EOS guard and
+/// `suppress_tokens`, exactly as it does before [`Sampler::sample`].
+///
+/// The tie rule is the whole reason this is not `top_k = 1`: an all-masked vector, or one
+/// with two equal maxima, has a single defined answer here and a PRNG-dependent one there.
+/// An empty slice yields `0`, matching [`Sampler::multinomial`]'s degenerate case.
+pub fn argmax(logits: &[f32]) -> u32 {
+    let mut best = 0usize;
+    for (i, &l) in logits.iter().enumerate() {
+        // Strictly greater, so the FIRST of a run of equal maxima wins.
+        if l > logits[best] {
+            best = i;
+        }
+    }
+    best as u32
+}
+
 /// `TemperatureLogitsWarper`: `scores / temperature`. HF installs it only when
 /// `temperature != 1.0`; dividing by 1.0 is the identity, so the guard is cosmetic here.
 pub fn apply_temperature(logits: &mut [f32], temperature: f32) {
@@ -236,14 +281,34 @@ fn softmax(logits: &[f32]) -> Vec<f32> {
 /// triple reproduces bit-for-bit.
 pub struct Sampler {
     rng: SplitMix64,
+    /// The reference's `do_sample`, inverted: when set, [`Sampler::sample`] is
+    /// [`argmax`] and no warper and no random number is involved.
+    greedy: bool,
 }
 
 impl Sampler {
-    /// New sampler from a seed.
+    /// New sampler from a seed. `do_sample = True`.
     pub fn new(seed: u64) -> Self {
         Self {
             rng: SplitMix64::new(seed),
+            greedy: false,
         }
+    }
+
+    /// The reference's `do_sample = False`: every draw is [`argmax`].
+    ///
+    /// Takes no seed because it consumes no randomness — which is the point. Used by the
+    /// greedy parity gate, where both sides must be a pure function of the weights.
+    pub fn greedy() -> Self {
+        Self {
+            rng: SplitMix64::new(0),
+            greedy: true,
+        }
+    }
+
+    /// Whether this sampler is in the reference's `do_sample = False` mode.
+    pub fn is_greedy(&self) -> bool {
+        self.greedy
     }
 
     /// Apply the three warpers in HF's order (temperature → top-k → top-p) to `logits`
@@ -252,7 +317,14 @@ impl Sampler {
     /// `logits` is mutated so the caller can inspect the realised support in a test; the
     /// repetition penalty, the EOS min-length guard and `suppress_tokens` are the caller's
     /// job, because they run BEFORE the warpers and only the caller knows the history.
+    ///
+    /// A [`Sampler::greedy`] sampler ignores `p` entirely and returns [`argmax`], leaving
+    /// `logits` untouched: HF installs no warper at all when `do_sample = False`, so
+    /// applying them "harmlessly" would be a different function of the same input.
     pub fn sample(&mut self, logits: &mut [f32], p: &SamplingParams) -> u32 {
+        if self.greedy {
+            return argmax(logits);
+        }
         apply_temperature(logits, p.temperature);
         top_k_filter(logits, p.top_k);
         top_p_filter(logits, p.top_p);
@@ -505,6 +577,81 @@ mod tests {
             block_ids(&mut w, &[3, 4]);
             assert!(s.sample(&mut w, &p) < 3);
         }
+    }
+
+    /// `torch.argmax`: the maximum, and the FIRST of a tie.
+    #[test]
+    fn argmax_takes_the_first_maximum() {
+        assert_eq!(argmax(&ramp()), 4);
+        assert_eq!(argmax(&[4.0, 3.0, 2.0]), 0, "the maximum can be the first slot");
+        assert_eq!(argmax(&[-9.0, -1.0, -5.0]), 1, "all-negative still has a maximum");
+        // Ties: the first wins, on both sides of the boundary between "first" and "later".
+        assert_eq!(argmax(&[1.0, 7.0, 7.0, 3.0]), 1);
+        assert_eq!(argmax(&[7.0, 7.0]), 0);
+        assert_eq!(argmax(&[0.0; 5]), 0, "a completely flat vector is index 0");
+        // Degenerate inputs behave like the multinomial's: no panic, no index past the end.
+        assert_eq!(argmax(&[f32::NEG_INFINITY; 4]), 0);
+        assert_eq!(argmax(&[]), 0);
+        assert_eq!(argmax(&[5.0]), 0);
+        // A masked slot is never chosen over a finite one, whichever side it is on.
+        assert_eq!(argmax(&[f32::NEG_INFINITY, -100.0]), 1);
+        assert_eq!(argmax(&[-100.0, f32::NEG_INFINITY]), 0);
+    }
+
+    /// A greedy sampler is the reference's `do_sample = False`: argmax, no warper applied,
+    /// no random number consumed.
+    #[test]
+    fn a_greedy_sampler_is_argmax_and_leaves_the_logits_alone() {
+        let mut s = Sampler::greedy();
+        assert!(s.is_greedy());
+        assert!(!Sampler::new(0).is_greedy(), "the seeded constructor must still sample");
+
+        // The shipped talker knobs would admit ids 0..4 under sampling; greedy takes the top.
+        let p = SamplingParams::talker();
+        let mut l = ramp();
+        assert_eq!(s.sample(&mut l, &p), 4);
+        assert_eq!(l, ramp(), "no warper may touch the scores when do_sample is false");
+
+        // No RNG is consumed, so the draw is a pure function of the input — repeat it.
+        for _ in 0..8 {
+            let mut l = ramp();
+            assert_eq!(s.sample(&mut l, &p), 4);
+        }
+        // …and the knobs are genuinely ignored, not merely order-preserving here: a
+        // temperature that would flatten and a k that would widen change nothing.
+        let wide = SamplingParams { temperature: 50.0, top_p: 0.1, top_k: 0, repetition_penalty: 1.0 };
+        let mut l = ramp();
+        assert_eq!(s.sample(&mut l, &wide), 4);
+        assert_eq!(l, ramp());
+    }
+
+    /// Why greedy is not `top_k = 1`: on a tied maximum the two disagree. `top_k = 1` keeps
+    /// every tied id and lets the PRNG choose; argmax always takes the first.
+    #[test]
+    fn greedy_and_top_k_one_part_ways_on_a_tie() {
+        let tied = vec![2.0f32, 9.0, 9.0];
+        assert_eq!(argmax(&tied), 1);
+
+        let k1 = SamplingParams { temperature: 1.0, top_p: 1.0, top_k: 1, repetition_penalty: 1.0 };
+        let mut filtered = tied.clone();
+        top_k_filter(&mut filtered, 1);
+        assert_eq!(survivors_of(&filtered), 2, "k = 1 keeps BOTH tied maxima");
+        // And the sampler really does reach the second one, so the disagreement is real
+        // rather than theoretical.
+        let drawn = draw_many(4, &tied, &k1, 200);
+        assert!(drawn.contains(&2), "top_k = 1 can draw the later of two tied maxima");
+        assert!(drawn.iter().all(|&i| i != 0), "…but never the loser");
+
+        // Greedy never does.
+        let mut g = Sampler::greedy();
+        for _ in 0..200 {
+            let mut l = tied.clone();
+            assert_eq!(g.sample(&mut l, &k1), 1);
+        }
+    }
+
+    fn survivors_of(v: &[f32]) -> usize {
+        v.iter().filter(|x| x.is_finite()).count()
     }
 
     /// An all-masked vector must not panic or index out of bounds.
