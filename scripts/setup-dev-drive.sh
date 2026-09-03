@@ -4,8 +4,9 @@
 #
 # This box has two identical 1 TB Kingston SNV3S1000G. nvme0n1 holds /boot, /
 # and /home; nvme1n1 has no partition table, no filesystem and no mount. This
-# script turns the second one into /data and moves the heavy, regenerable things
-# there: cargo target dirs, model weights, renders, and (optionally) swap.
+# script turns the second one into /data and moves the heavy things there: the
+# whole source tree (so every target/ and renders/ under it lands on /data as a
+# side effect), the model weights, and a real swapfile.
 #
 #   scripts/setup-dev-drive.sh --check              inspect only (default, SAFE)
 #   sudo scripts/setup-dev-drive.sh --format /dev/nvme1n1
@@ -99,13 +100,18 @@ UUID="$(blkid -s UUID -o value "$PART")"
 if ! grep -q "$UUID" /etc/fstab; then
   # noatime: build trees are read constantly; atime writes are pure overhead.
   # nofail: a missing data disk must never block boot.
-  echo "UUID=$UUID  $MNT  ext4  defaults,noatime,nofail  0 2" >> /etc/fstab
+  # x-gvfs-show / x-gvfs-name: without them a new top-level mount is invisible in
+  # the desktop's Places sidebar, which reads like "the disk did not mount".
+  echo "UUID=$UUID  $MNT  ext4  defaults,noatime,nofail,x-gvfs-show,x-gvfs-name=devdata  0 2" >> /etc/fstab
 fi
 systemctl daemon-reload
 mount "$MNT"
 OWNER="${SUDO_USER:-floofy}"
 chown "$OWNER:$OWNER" "$MNT"
-mkdir -p "$MNT"/{cargo-target,models,renders,swap}
+# ONLY the two directories that are actually used: models/ (the ~/models symlink
+# target) and swap/ (the swapfile). Nothing else is created here — see the
+# cargo-target / renders note at the end of the next-steps block.
+mkdir -p "$MNT"/{models,swap}
 chown -R "$OWNER:$OWNER" "$MNT"
 
 # TRIM via the timer, not the `discard` mount option (lower latency in-line).
@@ -135,9 +141,21 @@ Next, point the heavy things at it:
   # stat cache rewritten by any `git status`, not repository data.
   rm -rf ~/models.old && ln -s $MNT/models ~/models
 
-  # The symlink matters: ~50 references to ~/models/... survive in scripts, run
-  # scripts under renders/, caps.toml provenance and CONTROL_SURVEY.md, and the
-  # frozen tests/control_survey_gate.rs asserts on the '~/models/' spelling.
+  # Both symlinks are load-bearing, not cosmetic. Counted 2026-09-03:
+  #   15 '~/models/...' references across 10 files (caps.toml + vocab.rs provenance,
+  #      the syrinx-qwen tokenizer/decoder, CONTROL_SURVEY.md, the convert/render/
+  #      gen-qwen scripts, tests/golden/qwen/README.md), and the frozen
+  #      tests/control_survey_gate.rs asserts on the literal '~/models/' spelling.
+  #   14 absolute '/home/floofy/{development,models}/...' paths in the archived
+  #      renders/2026-08-29-*/run*.sh reproduction scripts (12) and .opt-reports/ (2),
+  #      plus 19 more in that render's gpu*.log run records. All are historical
+  #      provenance — they must keep resolving, so do not rewrite them either.
+  #   1 outside the repo: ~/.config/pipewire/pipewire.conf.d/nova.conf is a symlink
+  #      into ~/development/NovafoxV2/config/pipewire/.
+  # (scripts/test-all.env's /home/floofy/{refs,cuda-12.8,gcc14} paths are NOT in this
+  #  list — those things really do live on /home and were never migrated.)
+  # All of those keep resolving only because ~/development and ~/models exist.
+  # Do NOT "clean them up" to /data/... — the frozen test pins the ~ spelling.
 
   # a real swapfile here (your current 4 GB is zram = compressed RAM, which
   # cannot absorb the 19 GB real_fish_s2_e2e run)
@@ -145,10 +163,17 @@ Next, point the heavy things at it:
   mkswap $MNT/swap/swapfile && swapon $MNT/swap/swapfile
   echo '$MNT/swap/swapfile none swap defaults,pri=10 0 0' >> /etc/fstab
 
-  # CARGO_TARGET_DIR is deliberately NOT set: once the source tree lives on $MNT
-  # its target/ is already there, and a shared target dir across projects just
-  # adds cargo lock contention. $MNT/cargo-target stays empty unless a tree that
-  # is NOT on $MNT needs it.
+  # NOT created, on purpose — do not add them back:
+  #   $MNT/cargo-target — CARGO_TARGET_DIR is deliberately unset. Once the source
+  #     tree lives on $MNT its target/ is already on this disk (27 GB of the
+  #     syrinx-build tree is target/), and a shared target dir across projects
+  #     only adds cargo lock contention. An empty dir here is a false promise.
+  #   $MNT/renders     — renders are versioned in-tree at <repo>/renders/ (718 MB),
+  #     which is already on $MNT for the same reason. A second renders root would
+  #     just split the corpus across two places.
+  # Earlier revisions of this script created both; they sat empty and were removed
+  # on 2026-09-03. If a tree that is NOT on $MNT ever needs a build dir, create it
+  # then, next to the thing that uses it, and wire it up in the same commit.
 EOF
 
 # NOTE (2026-09-03): a Flatpak file manager cannot see a new top-level directory
@@ -157,10 +182,24 @@ EOF
 #   flatpak override --user --filesystem=/data org.kde.dolphin
 # then fully restart the app. Check `pgrep -af bwrap` before blaming fstab.
 
-# NOTE (2026-09-03): migration executed on this box. /data = nvme1n1p1 (ext4,
-# noatime,nofail), ~/development -> /data/development, ~/models -> /data/models,
-# 32 GB swapfile at /data/swap/swapfile (pri=10, above zram's pri=100 so zram is
-# still preferred for small pressure). Both originals were verified byte-identical
-# with xxh128sum (173 model files; 162,853 source files excluding target/) before
-# deletion — 114 GB reclaimed on /home. scripts/test-all.env now points at
-# /data/models; the ~/models symlink keeps every other ~/models/... reference valid.
+# NOTE (2026-09-03): migration executed on this box. /data = nvme1n1p1, UUID
+# 1e0a8d94-030b-4f8a-881e-549ca5055023, ext4, mounted with
+# defaults,noatime,nofail,x-gvfs-show,x-gvfs-name=devdata. ~/development ->
+# /data/development, ~/models -> /data/models, 32 GB swapfile at
+# /data/swap/swapfile (pri=10 — BELOW zram's pri=100, i.e. lower priority, so the
+# kernel still fills the fast 4 GB zram first and only spills to NVMe under real
+# pressure such as the 19 GB real_fish_s2_e2e run). Both originals were verified
+# byte-identical with xxh128sum (173 model files; 162,853 source files excluding
+# target/) before deletion — 114 GB reclaimed on /home. scripts/test-all.env now
+# points at /data/models; the ~/models symlink keeps every other ~/models/...
+# reference valid.
+#
+# NOTE (2026-09-03, follow-up audit): /data/cargo-target and /data/renders — both
+# created by an earlier revision of this script — were empty, referenced by
+# nothing in the repo or in any shell/editor/systemd config, and were removed.
+# The `mkdir` above now creates only models/ and swap/. /data therefore holds
+# exactly: development/  models/  swap/  lost+found/.
+#
+# The full layout, the reasoning, and the re-runnable verification commands are
+# written up in docs/DEV_BOX_STORAGE.md — update that file too if you change any
+# of this.
