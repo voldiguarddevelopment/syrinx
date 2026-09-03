@@ -212,9 +212,17 @@ glibc >= 2.41. `scripts/test-all.env` then exports `CUDA_ROOT` / `NVCC_CCBIN` /
 Two steps `verify.sh` cannot do for you (it prints exactly when each is needed):
 - **Fill `scripts/test-all.env`** (copy from `.env.example`) with this box's weight +
   fixture paths. Unset groups SKIP — they never FAIL on a partial box.
-- **The one `# TODO(on-box)` in `scripts/gen-fish-ref.py`** — the Python model-load that
-  dumps the Fish parity reference. Unfilled → the Fish *parity* tests SKIP; the Fish
-  *e2e smoke* tests and all CV2/CV3 parity still run.
+- **Run `scripts/gen-fish-ref.py` once** to dump the Fish parity reference. Its model-load
+  is wired (it calls the reference fish-speech's own `DAC.from_indices` /
+  `DualARTransformer.forward_generate` — never a reimplementation), but it needs the
+  reference package, which is NOT vendored: `~/refs/fish-speech`
+  (github.com/fishaudio/fish-speech, verified at `befe400`) plus its own env —
+  `cd ~/refs/fish-speech && uv venv --python 3.12 .venv && uv sync --extra cpu` (torch
+  2.8.0 has no cp314 wheels and `descript-audiotools` pins `protobuf<3.20`, which only
+  uv's override resolves). `verify.sh` prints the exact command but never runs it: the
+  s2-pro slow-AR anchor is a ~19 GB CPU/f32 job, so run it under `run-isolated.sh`,
+  alone. `--codec-only` gets the cheap ~2 GB codec anchor first. No dump → the Fish
+  *parity* tests SKIP; the Fish *e2e smoke* tests and all CV2/CV3 parity still run.
 
 Narrower entry points (all read the same `test-all.env`):
 - `./scripts/test-all.sh [--group G | --compile-only | --download-fish]` — the suite alone.
