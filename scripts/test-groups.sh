@@ -52,7 +52,7 @@ GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract"
 # Weight-backed Qwen tests. Kept OUT of GROUP_qwen deliberately: that group is model-free
 # and must never SKIP, while these self-skip without a checkpoint and the reference dump
 # from scripts/gen-qwen-ref.py.
-GROUP_qwen_ckpt="real_qwen_prompt_parity"
+GROUP_qwen_ckpt="real_qwen_prompt_parity real_qwen_stack_parity"
 
 ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qwen_ckpt"
 

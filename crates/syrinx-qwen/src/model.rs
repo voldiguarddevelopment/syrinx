@@ -226,6 +226,12 @@ impl Qwen3Tts {
         &self.predictor
     }
 
+    /// Mutable access to the code predictor, for callers that need to drive it directly
+    /// (its `forward` advances a cache). Mirrors [`Self::talker_mut`].
+    pub fn code_predictor_mut(&mut self) -> &mut CodePredictor {
+        &mut self.predictor
+    }
+
     /// The ids masked to `-inf` on every talker draw (the reference `suppress_tokens`).
     pub fn suppressed_ids(&self) -> &[u32] {
         &self.suppress

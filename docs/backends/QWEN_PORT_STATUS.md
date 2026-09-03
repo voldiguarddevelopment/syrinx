@@ -242,3 +242,26 @@ the short version:
   reference dump would answer.
 - `-Base` still cannot render at all: the clone path has no driver, so there is nothing
   to build the x-vector from a WAV.
+
+## Parity status — 2026-09-03 (after the reference landed)
+
+The port is now anchored to the reference at **every stage of the chain**, which it was
+not when the `silu` bug shipped. `scripts/gen-qwen-ref.py` dumps the anchors from the
+reference's own modules; `tests/real_qwen_prompt_parity.rs` and
+`tests/real_qwen_stack_parity.rs` check them, in `GROUP_qwen_ckpt` / the `qwen3` family.
+
+| stage | anchor | measured |
+|---|---|---|
+| prompt | `prompt.{plain,instruct}.inputs_embeds` | 0.00000 |
+| talker | `talker.prefill_logits` | 0.00003 |
+| code predictor | `predictor.logits` (fed the reference's own input) | 0.00003 |
+| codec | `codec.wav`, `codec_edge.wav` | 0.000022 / 0.000005 |
+
+Fixtures are generated on **CPU/float32** deliberately: the reference decoding identical
+codes on CUDA vs CPU disagrees with itself by 0.031 on a [-1,1] waveform, which would
+consume the whole error budget. See renders/2026-09-03-qwen-first/FINDINGS.md §5.
+
+Still not gated: end-to-end generated audio (sampling makes it incomparable), the
+`-Base` clone path (no driver builds an x-vector from a WAV), and the encoder side of the
+codec. The talker/predictor anchors cover one step each — a multi-step drift would need a
+greedy-decode anchor, which the port has no greedy mode for yet.
