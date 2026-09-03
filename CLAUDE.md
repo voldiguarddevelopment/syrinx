@@ -225,7 +225,18 @@ Two steps `verify.sh` cannot do for you (it prints exactly when each is needed):
   *parity* tests SKIP; the Fish *e2e smoke* tests and all CV2/CV3 parity still run.
 
 Narrower entry points (all read the same `test-all.env`):
-- `./scripts/test-all.sh [--group G | --compile-only | --download-fish]` — the suite alone.
+- `./scripts/test-all.sh [selectors] [--exclude S] [--dry-run]` — the suite alone. A
+  **selector** is a group, a **family**, or a bare test name, resolved in that order:
+  `test-all.sh fish` runs one model family, `test-all.sh cue qwen` combines selectors,
+  `test-all.sh real_fish_s2_e2e` runs a single test, `test-all.sh free` runs everything
+  model-free. `--group/--family/--test` force the kind; `--list` shows both tables;
+  `--dry-run` prints the selection without running it. `verify.sh` takes the same
+  selectors. **An unknown selector is a hard error** — it used to run nothing and still
+  print "all configured groups green" with exit 0, which is the one outcome this project
+  cannot tolerate. Groups and families are defined once, in `scripts/test-groups.sh`,
+  and shared by both runners so they cannot drift.
+  Use `--test real_cue_activation` for the C4.2 certification run: it is deliberately in
+  no group, so it never fires on a routine board.
 - `./scripts/run-fish.sh <s1-mini|s2-pro> "<text>" <ref.wav> [out]` — one synth; `--parity <variant>` runs that model's Fish tests.
 - `./scripts/synth-samples.sh <variant> [--scale small|reply|chapter] [--lang L]` — batch-render the 610-sample corpus.
 

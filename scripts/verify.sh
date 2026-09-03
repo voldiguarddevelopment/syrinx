@@ -6,7 +6,10 @@
 #
 #   ./scripts/verify.sh                 full verify (uses scripts/test-all.env)
 #   ./scripts/verify.sh --download      also download the Fish weights from HF first
-#   ./scripts/verify.sh --group cv3     verify one group only (see the GROUPS list)
+#   ./scripts/verify.sh fish            verify one model family (or group, or test name)
+#   ./scripts/verify.sh --group cv3     force the selector to be read as a group
+#   ./scripts/verify.sh --exclude cv2   subtract a selector
+#   ./scripts/verify.sh --list          groups + families
 #   ./scripts/verify.sh --quick         build + model-free tests + compile-check, no heavy runs
 #   ./scripts/verify.sh --help
 #
@@ -20,44 +23,57 @@ set -uo pipefail
 cd "$(dirname "$0")/.." || { echo "cannot cd to repo root"; exit 2; }
 ROOT="$(pwd)"
 
-DOWNLOAD=0 QUICK=0 ONLY=""
+DOWNLOAD=0 QUICK=0
+SYRINX_ROOT="$ROOT"
+# shellcheck source=scripts/test-groups.sh
+source "$ROOT/scripts/test-groups.sh"
+
+# Selection shares its vocabulary (and its resolver) with scripts/test-all.sh.
+SELECTED="" EXCLUDED="" BAD=0
 while [ $# -gt 0 ]; do case "$1" in
   --download) DOWNLOAD=1 ;;
   --quick)    QUICK=1 ;;
-  --group)    ONLY="${2:?--group needs a name}"; shift ;;
-  -h|--help)  sed -n '2,17p' "$0"; exit 0 ;;
-  *) echo "unknown arg: $1 (try --help)"; exit 2 ;;
+  --list)     echo "groups:"; list_groups; echo "families:"; list_families; exit 0 ;;
+  --group|--family|--test)
+    kind="$1"; name="${2:?$1 needs a name}"; shift
+    case "$kind" in
+      --group)  is_group  "$name" || { echo "not a group: '$name'" >&2; BAD=1; }; ;;
+      --family) is_family "$name" || { echo "not a family: '$name'" >&2; BAD=1; }; ;;
+      --test)   is_test   "$name" || { echo "not a test: no tests/$name.rs" >&2; BAD=1; }; ;;
+    esac
+    got="$(resolve_selector "$name")" && SELECTED="$SELECTED $got" || BAD=1 ;;
+  --exclude)
+    name="${2:?--exclude needs a name}"; shift
+    got="$(resolve_selector "$name")" && EXCLUDED="$EXCLUDED $got" || BAD=1 ;;
+  -h|--help)  sed -n '2,20p' "$0"; exit 0 ;;
+  -*) echo "unknown arg: $1 (try --help)"; exit 2 ;;
+  *)  got="$(resolve_selector "$1")" && SELECTED="$SELECTED $got" || BAD=1 ;;
 esac; shift; done
+[ "$BAD" -eq 0 ] || { echo "refusing to verify: fix the selectors above" >&2; exit 2; }
 
 c() { printf '\033[%sm%s\033[0m' "$1" "$2"; }
 step() { printf '\n%s\n' "$(c '1;36' "══ $1 ══")"; }
 
-# ── group → test files (kept in sync with scripts/test-all.sh) ───────────────
-GROUP_modelfree="voice_lib emotion_tags watermark audio_server health_endpoint server_hardening real_cv3_quality_source real_cv3_multinomial"
-GROUP_cv2="real_lm_parity real_lm_gen_parity real_lm_kvcache real_lm_quant real_feat_parity real_tokenizer_parity real_textnorm_parity real_speech_token_parity real_flow_parity real_flow_stream_consistency real_vocoder_parity real_speaker_parity real_token2wav_parity real_quant_footprint"
-GROUP_cv2e2e="real_synth_e2e real_eval_metrics real_eval_multilingual real_lm_hammer"
-GROUP_cv3="real_cv3_lm_parity real_cv3_flow_parity real_cv3_flow_stream_consistency real_cv3_hift_parity real_cv3_stok_parity real_cv3_ras real_cv3_quant_parity real_cv3_quant_footprint"
-GROUP_cv3e2e="real_cv3_e2e_parity real_cv3_eval_metrics real_cv3_voice real_cv3_emotion"
-GROUP_fish_s1="real_fish_s1_parity real_fish_s1_e2e"
-GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e real_fish_s2_codec_clamp"
-# STT (pure-Rust Whisper): audio->text + the native TTS oracle. Self-skips off-box.
-#   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
-GROUP_stt="real_stt"
+# Groups and families come from scripts/test-groups.sh (sourced above) — one
+# definition shared with scripts/test-all.sh, so the two runners cannot drift.
+# --quick keeps only what needs no weights: those must never SKIP.
+[ "$QUICK" = 1 ] && { SELECTED=""; for g in $(family_groups free); do SELECTED="$SELECTED $(group_tests "$g")"; done; }
 
-# Expressive control (the cue layer: syrinx-cue + its wiring). Model-free and
-# deterministic — these run everywhere and must never SKIP.
-GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate cue_activation_measure"
-
-# Qwen3-TTS port (syrinx-qwen). Model-FREE half only: the geometry contract, the loader's
-# tensor manifest against the published safetensors HEADERS (checked in under
-# tests/golden/qwen/, no weight data), and the pure-Rust sampling stack. No weights, no
-# Candle, no GPU — these run everywhere and must never SKIP. The weight-backed half
-# (tokenizer goldens, verify_checkpoint, codec/speaker parity, end-to-end synth) is NOT
-# here: see docs/backends/QWEN_PORT_STATUS.md for what it needs and how to run it.
-GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract"
-ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
-[ "$QUICK" = 1 ] && ALL_GROUPS="modelfree cue qwen"
-group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
+# No selector means the whole board.
+if [ -z "${SELECTED// /}" ]; then
+  for g in $ALL_GROUPS; do SELECTED="$SELECTED $(group_tests "$g")"; done
+fi
+SELECTED="$(dedupe "$SELECTED")"
+if [ -n "${EXCLUDED// /}" ]; then
+  keep=""
+  for t in $SELECTED; do
+    skip=0; for x in $EXCLUDED; do [ "$t" = "$x" ] && { skip=1; break; }; done
+    [ "$skip" -eq 0 ] && keep="$keep $t"
+  done
+  SELECTED="$keep"
+fi
+# Never verify nothing and call it a pass.
+[ -n "${SELECTED// /}" ] || { echo "selection is empty — nothing would be verified" >&2; exit 2; }
 
 # ── 0. preflight ─────────────────────────────────────────────────────────────
 step "0/6  preflight"
@@ -150,11 +166,22 @@ run_one() {
     else printf '  %-40s %s\n' "$t" "$(c '32' PASS)"; PASS=$((PASS+1)); fi
   else printf '  %-40s %s\n' "$t" "$(c '31' FAIL)"; FAIL=$((FAIL+1)); FAILED="$FAILED $t"; fi
 }
+shown=" "
 for g in $ALL_GROUPS; do
-  [ -n "$ONLY" ] && [ "$g" != "$ONLY" ] && continue
+  members=""
+  for t in $(group_tests "$g"); do
+    case " $SELECTED " in *" $t "*) members="$members $t" ;; esac
+  done
+  [ -z "${members// /}" ] && continue
   printf '\n  %s\n' "$(c '1;34' "── $g ──")"
-  for t in $(group_tests "$g"); do run_one "$t"; done
+  for t in $members; do run_one "$t"; shown="$shown$t "; done
 done
+loose=""
+for t in $SELECTED; do case "$shown" in *" $t "*) ;; *) loose="$loose $t" ;; esac; done
+if [ -n "${loose// /}" ]; then
+  printf '\n  %s\n' "$(c '1;34' "── (ungrouped) ──")"
+  for t in $loose; do run_one "$t"; done
+fi
 
 # ── 6. summary ───────────────────────────────────────────────────────────────
 step "6/6  summary"

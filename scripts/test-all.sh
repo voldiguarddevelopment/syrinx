@@ -9,11 +9,19 @@
 # so a partial box still gives a clean report. Fill paths in scripts/test-all.env
 # (copy from scripts/test-all.env.example) first.
 #
-#   ./scripts/test-all.sh                 # run every group, print a summary
-#   ./scripts/test-all.sh --group cv3     # one group (see --list)
-#   ./scripts/test-all.sh --list          # list groups + their tests
-#   ./scripts/test-all.sh --compile-only  # build + compile tests, run nothing (off-box)
-#   ./scripts/test-all.sh --download-fish # hf download the Fish weights (s1-mini gated: hf auth login)
+#   ./scripts/test-all.sh                    # everything
+#   ./scripts/test-all.sh fish               # one model family
+#   ./scripts/test-all.sh cue qwen           # several selectors at once
+#   ./scripts/test-all.sh real_fish_s2_e2e   # a single test by name
+#   ./scripts/test-all.sh free --exclude cv2 # meta-family, minus something
+#   ./scripts/test-all.sh --dry-run fish     # show what would run, run nothing
+#   ./scripts/test-all.sh --list             # groups; --list-families for families
+#   ./scripts/test-all.sh --compile-only     # build + compile tests, run nothing (off-box)
+#   ./scripts/test-all.sh --download-fish    # hf download the Fish weights (s1-mini gated)
+#
+# A selector is a GROUP, a FAMILY, or a bare test name — resolved in that order,
+# and the three namespaces never overlap. --group/--family/--test force one kind.
+# An unknown selector is a hard error: it must never quietly run nothing.
 #
 # Exit code: 0 if nothing FAILED (passes + skips are fine), 1 if any group FAILED.
 # =============================================================================
@@ -33,44 +41,19 @@ fi
 
 CARGO_FLAGS="--features real --release"
 
-# ---- group -> test files ----------------------------------------------------
-# (model-free runs everywhere; the rest self-skip without their env vars)
-GROUP_modelfree="voice_lib emotion_tags watermark audio_server health_endpoint server_hardening real_cv3_quality_source real_cv3_multinomial"
-GROUP_cv2="real_lm_parity real_lm_gen_parity real_lm_kvcache real_lm_quant real_feat_parity real_tokenizer_parity real_textnorm_parity real_speech_token_parity real_flow_parity real_flow_stream_consistency real_vocoder_parity real_speaker_parity real_token2wav_parity real_quant_footprint"
-GROUP_cv2e2e="real_synth_e2e real_eval_metrics real_eval_multilingual real_lm_hammer"
-GROUP_cv3="real_cv3_lm_parity real_cv3_flow_parity real_cv3_flow_stream_consistency real_cv3_hift_parity real_cv3_stok_parity real_cv3_ras real_cv3_quant_parity real_cv3_quant_footprint"
-GROUP_cv3e2e="real_cv3_e2e_parity real_cv3_eval_metrics real_cv3_voice real_cv3_emotion"
-# Fish groups — test files are added by the syrinx-fish integration wave; the runner
-# tolerates absent files (reports SKIP) so this script is stable as the port lands.
-GROUP_fish_s1="real_fish_s1_parity real_fish_s1_e2e"
-GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e real_fish_s2_codec_clamp"
-# STT (pure-Rust Whisper) — the audio->text reverse path + the native TTS oracle.
-# Env-gated on a Whisper model dir + a test clip; self-skips off-box. Download:
-#   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
-GROUP_stt="real_stt"
-
-# Expressive control (the cue layer: syrinx-cue + its wiring). Model-free and
-# deterministic — these run everywhere and must never SKIP.
-GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate cue_activation_measure"
-
-# Qwen3-TTS port (syrinx-qwen). Model-FREE half only: the geometry contract, the loader's
-# tensor manifest against the published safetensors HEADERS (checked in under
-# tests/golden/qwen/, no weight data), and the pure-Rust sampling stack. No weights, no
-# Candle, no GPU — these run everywhere and must never SKIP. The weight-backed half
-# (tokenizer goldens, verify_checkpoint, codec/speaker parity, end-to-end synth) is NOT
-# here: see docs/backends/QWEN_PORT_STATUS.md for what it needs and how to run it.
-GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract"
-
-ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
-
-group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
+# ---- groups / families -------------------------------------------------------
+SYRINX_ROOT="$ROOT"
+# shellcheck source=scripts/test-groups.sh
+source "$ROOT/scripts/test-groups.sh"
 
 # ---- modes -----------------------------------------------------------------
 if [[ "${1:-}" == "--list" ]]; then
-  for g in $ALL_GROUPS; do printf '  %-10s %s\n' "$g" "$(group_tests "$g")"; done
+  echo "groups:";   list_groups
+  echo "families:"; list_families
   exit 0
 fi
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then sed -n '2,22p' "$0"; exit 0; fi
+if [[ "${1:-}" == "--list-families" ]]; then list_families; exit 0; fi
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then sed -n '2,32p' "$0"; exit 0; fi
 if [[ "${1:-}" == "--download-fish" ]]; then
   HF=""; command -v hf >/dev/null && HF=hf || { command -v huggingface-cli >/dev/null && HF=huggingface-cli; }
   [ -n "$HF" ] || { echo "need the hf CLI: pip install -U huggingface_hub"; exit 2; }
@@ -86,8 +69,60 @@ if [[ "${1:-}" == "--compile-only" ]]; then
   exit $?
 fi
 
-SELECT=""
-if [[ "${1:-}" == "--group" ]]; then SELECT="${2:?--group needs a name}"; fi
+# ---- selection ---------------------------------------------------------------
+# Selectors accumulate; --exclude subtracts. Anything unresolvable stops the run.
+SELECTED=""; EXCLUDED=""; DRY=0; BAD=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY=1; shift ;;
+    --group|--family|--test)
+      kind="$1"; name="${2:?$1 needs a name}"; shift 2
+      case "$kind" in
+        --group)  is_group  "$name" || { echo "not a group: '$name' (groups: $ALL_GROUPS)" >&2; BAD=1; continue; } ;;
+        --family) is_family "$name" || { echo "not a family: '$name' (families: $ALL_FAMILIES)" >&2; BAD=1; continue; } ;;
+        --test)   is_test   "$name" || { echo "not a test: no tests/$name.rs" >&2; BAD=1; continue; } ;;
+      esac
+      got="$(resolve_selector "$name")" || { BAD=1; continue; }
+      SELECTED="$SELECTED $got" ;;
+    --exclude)
+      name="${2:?--exclude needs a name}"; shift 2
+      got="$(resolve_selector "$name")" || { BAD=1; continue; }
+      EXCLUDED="$EXCLUDED $got" ;;
+    -*) echo "unknown flag: $1" >&2; BAD=1; shift ;;
+    *)
+      got="$(resolve_selector "$1")" || { BAD=1; shift; continue; }
+      SELECTED="$SELECTED $got"; shift ;;
+  esac
+done
+[ "$BAD" -eq 0 ] || { echo "refusing to run: fix the selectors above" >&2; exit 2; }
+
+# No selector means the whole board.
+if [ -z "${SELECTED// /}" ]; then
+  for g in $ALL_GROUPS; do SELECTED="$SELECTED $(group_tests "$g")"; done
+fi
+SELECTED="$(dedupe "$SELECTED")"
+if [ -n "${EXCLUDED// /}" ]; then
+  keep=""
+  for t in $SELECTED; do
+    skip=0
+    for x in $EXCLUDED; do [ "$t" = "$x" ] && { skip=1; break; }; done
+    [ "$skip" -eq 0 ] && keep="$keep $t"
+  done
+  SELECTED="$keep"
+fi
+
+# An empty selection is an error, never a green board: the old runner answered a
+# typo'd --group with "PASS 0 ... all configured groups green" and exit 0.
+if [ -z "${SELECTED// /}" ]; then
+  echo "selection is empty (everything was excluded) — nothing would be tested" >&2
+  exit 2
+fi
+
+if [ "$DRY" -eq 1 ]; then
+  echo "would run $(echo $SELECTED | wc -w) test(s):"
+  for t in $SELECTED; do printf '  %s\n' "$t"; done
+  exit 0
+fi
 
 # ---- run -------------------------------------------------------------------
 PASS=0; FAIL=0; SKIP=0; MISS=0
@@ -118,11 +153,27 @@ run_one() {
 echo "=============================================================="
 echo " Syrinx full suite  ($(date '+%Y-%m-%d %H:%M:%S'))"
 echo "=============================================================="
+# Print grouped, but drive off the resolved selection so a bare-test selector and
+# an --exclude are both honoured. Anything selected that belongs to no group is
+# reported under "(ungrouped)" rather than silently dropped.
+shown=" "
 for g in $ALL_GROUPS; do
-  [ -n "$SELECT" ] && [ "$g" != "$SELECT" ] && continue
+  members=""
+  for t in $(group_tests "$g"); do
+    case " $SELECTED " in *" $t "*) members="$members $t" ;; esac
+  done
+  [ -z "${members// /}" ] && continue
   echo; echo "── group: $g ─────────────────────────────────────────────────"
-  for t in $(group_tests "$g"); do run_one "$t"; done
+  for t in $members; do run_one "$t"; shown="$shown$t "; done
 done
+loose=""
+for t in $SELECTED; do
+  case "$shown" in *" $t "*) ;; *) loose="$loose $t" ;; esac
+done
+if [ -n "${loose// /}" ]; then
+  echo; echo "── (ungrouped) ───────────────────────────────────────────────"
+  for t in $loose; do run_one "$t"; done
+fi
 rm -f "$LOG"
 
 echo
