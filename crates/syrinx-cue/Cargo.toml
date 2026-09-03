@@ -1,0 +1,27 @@
+[package]
+name = "syrinx-cue"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Backbone-agnostic expressive control: the canonical cue IR and ALL lowering.
+# Per ADR-0001 §2.1 no backend crate may parse bracket syntax itself — this crate owns
+# the parser, the canonical vocabulary, and every lowering pass. It is pure Rust with no
+# model dependency, so it unit-tests without weights or a GPU.
+
+[features]
+default = []
+
+[dependencies]
+# Already used across the workspace (syrinx-fish, syrinx-qwen). MIT OR Apache-2.0.
+serde = { version = "1", features = ["derive"] }
+# Dependency justification (session rule: license must be AGPL/MIT-compatible).
+#   toml 0.8 — MIT OR Apache-2.0 — https://github.com/toml-rs/toml
+# Needed because ADR-0001 specifies the canonical vocabulary as DATA (`vocab.toml`), not
+# Rust literals, so it can be edited without a recompile and validated by a schema test.
+# `toml` is the de-facto parser, is already in the dependency graph transitively via
+# cargo's own manifest handling, and pulls only serde which we already depend on.
+toml = "0.8"
+
+[dev-dependencies]
+serde_json = "1"

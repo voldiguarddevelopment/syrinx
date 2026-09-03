@@ -1,0 +1,176 @@
+# Backend control capabilities (C2.1) — one entry per **checkpoint variant**, not per crate.
+#
+# Why per checkpoint: Qwen3-TTS 0.6B-CustomVoice and 1.7B-CustomVoice expose the identical
+# API and differ only in whether the instruction is actually obeyed. A per-crate or
+# per-variant table would be forced to lie about one of them.
+#
+# `*_support` values, and the distinction the whole file exists to carry:
+#   unsupported — the backend has no channel for this; lowering must fall back.
+#   accepted    — the backend TAKES it without error but does NOT change its output.
+#                 Lowered exactly like `unsupported`, and reported, because silently
+#                 accepting a control the user believes is working is the worst outcome.
+#   honored     — verified to affect the audio.
+#
+# Every row cites where its claim comes from; see docs/backends/CONTROL_SURVEY.md.
+
+# ------------------------------------------------------------------ Fish
+
+[[backend]]
+id = "fish-s1-mini"
+krate = "syrinx-fish"
+model = "openaudio-s1-mini"
+inline = "closed"
+granularity = "word"
+instruct = "unsupported"
+emotion = "honored"
+style = "honored"
+event = "honored"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "shipped card ~/models/openaudio-s1-mini/README.md; CONTROL_SURVEY.md §1"
+notes = "Closed set of 65 markers (50 emotion + 5 tone + 10 special), spelled `(tag)`. A tag outside the set is not understood, so lowering must map into the set or drop."
+
+[[backend]]
+id = "fish-s2-pro"
+krate = "syrinx-fish"
+model = "s2-pro"
+inline = "open"
+granularity = "word"
+instruct = "unsupported"
+emotion = "honored"
+style = "honored"
+event = "honored"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "shipped card ~/models/s2-pro/README.md ('15,000+ unique tags'); CONTROL_SURVEY.md §1"
+notes = "Open vocabulary: free text inside [] is accepted, so `Free` cues pass through byte-identical. The only backend that loses nothing."
+
+# ------------------------------------------------------------------ Qwen3-TTS
+
+[[backend]]
+id = "qwen3-0.6b-base"
+krate = "syrinx-qwen"
+model = "Qwen3-TTS-12Hz-0.6B-Base"
+inline = "none"
+granularity = "none"
+instruct = "unsupported"
+emotion = "unsupported"
+style = "unsupported"
+event = "unsupported"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "generate_voice_clone(text, language, ref_audio, ref_text) takes no instruct; CONTROL_SURVEY.md §1"
+notes = "Clone-only. No expressive channel of any kind — every cue must be dropped and reported."
+
+[[backend]]
+id = "qwen3-0.6b-customvoice"
+krate = "syrinx-qwen"
+model = "Qwen3-TTS-12Hz-0.6B-CustomVoice"
+inline = "none"
+granularity = "utterance"
+instruct = "accepted"
+emotion = "accepted"
+style = "accepted"
+event = "unsupported"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "crates/syrinx-qwen/src/prompt.rs::PromptConfig::honors_instruct + its test `the_06b_custom_voice_checkpoint_drops_the_instruction`"
+notes = "THE reason caps are per-checkpoint. Upstream gates instruction support on a substring test for the 1.7B size, so this checkpoint accepts an `instruct` string and silently discards it. Identical API to the 1.7B, different truth."
+
+[[backend]]
+id = "qwen3-1.7b-base"
+krate = "syrinx-qwen"
+model = "Qwen3-TTS-12Hz-1.7B-Base"
+inline = "none"
+granularity = "none"
+instruct = "unsupported"
+emotion = "unsupported"
+style = "unsupported"
+event = "unsupported"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "same clone-only API as the 0.6B Base; checkpoint list in crates/syrinx-qwen/src/tokenizer.rs"
+notes = "Clone-only, as the 0.6B Base."
+
+[[backend]]
+id = "qwen3-1.7b-customvoice"
+krate = "syrinx-qwen"
+model = "Qwen3-TTS-12Hz-1.7B-CustomVoice"
+inline = "none"
+granularity = "utterance"
+instruct = "honored"
+emotion = "honored"
+style = "honored"
+event = "unsupported"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "prompt.rs::honors_instruct (true for 1b7) + test `the_17b_custom_voice_checkpoint_is_instructable`; CONTROL_SURVEY.md §1"
+notes = "Natural-language instruct + 9 preset timbres. No inline syntax exists, so cues lower to an utterance-scoped instruction; conflicting cues force a sub-utterance split (C2.3)."
+
+[[backend]]
+id = "qwen3-1.7b-voicedesign"
+krate = "syrinx-qwen"
+model = "Qwen3-TTS-12Hz-1.7B-VoiceDesign"
+inline = "none"
+granularity = "utterance"
+instruct = "honored"
+emotion = "honored"
+style = "honored"
+event = "unsupported"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "generate_voice_design(text, instruct, language); CONTROL_SURVEY.md §1"
+notes = "The instruct describes the VOICE rather than the delivery, so an emotion cue steers timbre design. Lowering must not assume delivery semantics."
+
+# ------------------------------------------------------------------ CosyVoice (deprecated)
+
+# Kept per ADR-0001 D2: deprecated backends still get caps, because the lowering code paths
+# still exist and an un-capped backend is exactly the hole this table closes.
+
+[[backend]]
+id = "cosyvoice2"
+krate = "syrinx-serve"
+model = "CosyVoice2-0.5B"
+inline = "closed"
+granularity = "word"
+instruct = "honored"
+emotion = "accepted"
+style = "accepted"
+event = "honored"
+prosody = "unsupported"
+emphasis = "honored"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "cosyvoice/tokenizer/tokenizer.py additional_special_tokens; CONTROL_SURVEY.md §1"
+notes = "Closed 7-token inline set ([breath] [noise] [laughter] [cough] [clucking] [accent] [quick_breath]) plus span forms <strong> and <laughter>. Emotion/style have no inline token: they reach the model only through the instruct prefix, so they are accepted at the API and not honored inline."
+
+[[backend]]
+id = "cosyvoice3"
+krate = "syrinx-serve"
+model = "CosyVoice3"
+inline = "closed"
+granularity = "word"
+instruct = "honored"
+emotion = "accepted"
+style = "accepted"
+event = "honored"
+prosody = "unsupported"
+emphasis = "honored"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "tokenizer.py; in-tree crates/syrinx-serve/src/synth_cv3; CONTROL_SURVEY.md §1"
+notes = "Same inline set as CV2. <|endofprompt|> is required for all CV3 inference."

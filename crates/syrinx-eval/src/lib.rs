@@ -8,6 +8,7 @@
 
 /// Real measured metrics (SIM-o / RTF / TTFB / WER / MOS-proxy). On by default.
 #[cfg(feature = "real")]
+pub mod activation;
 pub mod metrics;
 
 /// The five metric keys the metrics JSON always carries, in schema order.

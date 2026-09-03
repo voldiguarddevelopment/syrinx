@@ -1,0 +1,54 @@
+{"id": "en-emotion-happy-leading", "kind": "emotion", "label": "happy", "lang": "en", "placement": "leading", "text": "[happy] I really cannot believe what you just told me."}
+{"id": "en-emotion-sad-mid", "kind": "emotion", "label": "sad", "lang": "en", "placement": "mid", "text": "We should probably leave [sad] before it gets any later."}
+{"id": "en-emotion-angry-trailing", "kind": "emotion", "label": "angry", "lang": "en", "placement": "trailing", "text": "That was the strangest thing I have seen all week. [angry]"}
+{"id": "en-emotion-excited-leading", "kind": "emotion", "label": "excited", "lang": "en", "placement": "leading", "text": "[excited] I really cannot believe what you just told me."}
+{"id": "en-emotion-calm-mid", "kind": "emotion", "label": "calm", "lang": "en", "placement": "mid", "text": "We should probably leave [calm] before it gets any later."}
+{"id": "en-emotion-fearful-trailing", "kind": "emotion", "label": "fearful", "lang": "en", "placement": "trailing", "text": "That was the strangest thing I have seen all week. [fearful]"}
+{"id": "en-emotion-surprised-leading", "kind": "emotion", "label": "surprised", "lang": "en", "placement": "leading", "text": "[surprised] I really cannot believe what you just told me."}
+{"id": "en-style-whisper-leading", "kind": "style", "label": "whisper", "lang": "en", "placement": "leading", "text": "[whisper] I really cannot believe what you just told me."}
+{"id": "en-style-shout-mid", "kind": "style", "label": "shout", "lang": "en", "placement": "mid", "text": "We should probably leave [shout] before it gets any later."}
+{"id": "en-style-serious-trailing", "kind": "style", "label": "serious", "lang": "en", "placement": "trailing", "text": "That was the strangest thing I have seen all week. [serious]"}
+{"id": "en-style-gentle-leading", "kind": "style", "label": "gentle", "lang": "en", "placement": "leading", "text": "[gentle] I really cannot believe what you just told me."}
+{"id": "en-event-laughs-leading", "kind": "event", "label": "laughs", "lang": "en", "placement": "leading", "text": "[laughs] I really cannot believe what you just told me."}
+{"id": "en-event-sigh-mid", "kind": "event", "label": "sigh", "lang": "en", "placement": "mid", "text": "We should probably leave [sigh] before it gets any later."}
+{"id": "en-event-breath-trailing", "kind": "event", "label": "breath", "lang": "en", "placement": "trailing", "text": "That was the strangest thing I have seen all week. [breath]"}
+{"id": "en-event-cough-leading", "kind": "event", "label": "cough", "lang": "en", "placement": "leading", "text": "[cough] I really cannot believe what you just told me."}
+{"id": "de-emotion-happy-leading", "kind": "emotion", "label": "happy", "lang": "de", "placement": "leading", "text": "[happy] Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "de-emotion-sad-mid", "kind": "emotion", "label": "sad", "lang": "de", "placement": "mid", "text": "Wir sollten wohl gehen [sad] bevor es noch später wird."}
+{"id": "de-emotion-angry-trailing", "kind": "emotion", "label": "angry", "lang": "de", "placement": "trailing", "text": "Das war das Seltsamste was ich diese Woche gesehen habe. [angry]"}
+{"id": "de-emotion-excited-leading", "kind": "emotion", "label": "excited", "lang": "de", "placement": "leading", "text": "[excited] Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "de-emotion-calm-mid", "kind": "emotion", "label": "calm", "lang": "de", "placement": "mid", "text": "Wir sollten wohl gehen [calm] bevor es noch später wird."}
+{"id": "de-emotion-fearful-trailing", "kind": "emotion", "label": "fearful", "lang": "de", "placement": "trailing", "text": "Das war das Seltsamste was ich diese Woche gesehen habe. [fearful]"}
+{"id": "de-emotion-surprised-leading", "kind": "emotion", "label": "surprised", "lang": "de", "placement": "leading", "text": "[surprised] Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "de-style-whisper-leading", "kind": "style", "label": "whisper", "lang": "de", "placement": "leading", "text": "[whisper] Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "de-style-shout-mid", "kind": "style", "label": "shout", "lang": "de", "placement": "mid", "text": "Wir sollten wohl gehen [shout] bevor es noch später wird."}
+{"id": "de-style-serious-trailing", "kind": "style", "label": "serious", "lang": "de", "placement": "trailing", "text": "Das war das Seltsamste was ich diese Woche gesehen habe. [serious]"}
+{"id": "de-style-gentle-leading", "kind": "style", "label": "gentle", "lang": "de", "placement": "leading", "text": "[gentle] Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "de-event-laughs-leading", "kind": "event", "label": "laughs", "lang": "de", "placement": "leading", "text": "[laughs] Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "de-event-sigh-mid", "kind": "event", "label": "sigh", "lang": "de", "placement": "mid", "text": "Wir sollten wohl gehen [sigh] bevor es noch später wird."}
+{"id": "de-event-breath-trailing", "kind": "event", "label": "breath", "lang": "de", "placement": "trailing", "text": "Das war das Seltsamste was ich diese Woche gesehen habe. [breath]"}
+{"id": "de-event-cough-leading", "kind": "event", "label": "cough", "lang": "de", "placement": "leading", "text": "[cough] Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "pl-emotion-happy-leading", "kind": "emotion", "label": "happy", "lang": "pl", "placement": "leading", "text": "[happy] Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "pl-emotion-sad-mid", "kind": "emotion", "label": "sad", "lang": "pl", "placement": "mid", "text": "Powinniśmy chyba wyjść zanim [sad] zrobi się jeszcze później."}
+{"id": "pl-emotion-angry-trailing", "kind": "emotion", "label": "angry", "lang": "pl", "placement": "trailing", "text": "To była najdziwniejsza rzecz jaką widziałem w tym tygodniu. [angry]"}
+{"id": "pl-emotion-excited-leading", "kind": "emotion", "label": "excited", "lang": "pl", "placement": "leading", "text": "[excited] Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "pl-emotion-calm-mid", "kind": "emotion", "label": "calm", "lang": "pl", "placement": "mid", "text": "Powinniśmy chyba wyjść zanim [calm] zrobi się jeszcze później."}
+{"id": "pl-emotion-fearful-trailing", "kind": "emotion", "label": "fearful", "lang": "pl", "placement": "trailing", "text": "To była najdziwniejsza rzecz jaką widziałem w tym tygodniu. [fearful]"}
+{"id": "pl-emotion-surprised-leading", "kind": "emotion", "label": "surprised", "lang": "pl", "placement": "leading", "text": "[surprised] Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "pl-style-whisper-leading", "kind": "style", "label": "whisper", "lang": "pl", "placement": "leading", "text": "[whisper] Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "pl-style-shout-mid", "kind": "style", "label": "shout", "lang": "pl", "placement": "mid", "text": "Powinniśmy chyba wyjść zanim [shout] zrobi się jeszcze później."}
+{"id": "pl-style-serious-trailing", "kind": "style", "label": "serious", "lang": "pl", "placement": "trailing", "text": "To była najdziwniejsza rzecz jaką widziałem w tym tygodniu. [serious]"}
+{"id": "pl-style-gentle-leading", "kind": "style", "label": "gentle", "lang": "pl", "placement": "leading", "text": "[gentle] Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "pl-event-laughs-leading", "kind": "event", "label": "laughs", "lang": "pl", "placement": "leading", "text": "[laughs] Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "pl-event-sigh-mid", "kind": "event", "label": "sigh", "lang": "pl", "placement": "mid", "text": "Powinniśmy chyba wyjść zanim [sigh] zrobi się jeszcze później."}
+{"id": "pl-event-breath-trailing", "kind": "event", "label": "breath", "lang": "pl", "placement": "trailing", "text": "To była najdziwniejsza rzecz jaką widziałem w tym tygodniu. [breath]"}
+{"id": "pl-event-cough-leading", "kind": "event", "label": "cough", "lang": "pl", "placement": "leading", "text": "[cough] Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "en-neutral-0", "kind": "neutral", "label": "", "lang": "en", "placement": "none", "text": "I really cannot believe what you just told me."}
+{"id": "en-neutral-1", "kind": "neutral", "label": "", "lang": "en", "placement": "none", "text": "We should probably leave before it gets any later."}
+{"id": "en-neutral-2", "kind": "neutral", "label": "", "lang": "en", "placement": "none", "text": "That was the strangest thing I have seen all week."}
+{"id": "de-neutral-0", "kind": "neutral", "label": "", "lang": "de", "placement": "none", "text": "Ich kann wirklich nicht glauben was du mir gerade gesagt hast."}
+{"id": "de-neutral-1", "kind": "neutral", "label": "", "lang": "de", "placement": "none", "text": "Wir sollten wohl gehen bevor es noch später wird."}
+{"id": "de-neutral-2", "kind": "neutral", "label": "", "lang": "de", "placement": "none", "text": "Das war das Seltsamste was ich diese Woche gesehen habe."}
+{"id": "pl-neutral-0", "kind": "neutral", "label": "", "lang": "pl", "placement": "none", "text": "Naprawdę nie mogę uwierzyć w to co mi właśnie powiedziałeś."}
+{"id": "pl-neutral-1", "kind": "neutral", "label": "", "lang": "pl", "placement": "none", "text": "Powinniśmy chyba wyjść zanim zrobi się jeszcze później."}
+{"id": "pl-neutral-2", "kind": "neutral", "label": "", "lang": "pl", "placement": "none", "text": "To była najdziwniejsza rzecz jaką widziałem w tym tygodniu."}

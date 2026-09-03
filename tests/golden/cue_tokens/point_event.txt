@@ -1,0 +1,17 @@
+source: "he paused [laughs] and carried on"
+text:   "he paused  and carried on"
+-- tokens --
+  0  "he"
+  1  "paused"
+  2  "and"
+  3  "carried"
+  4  "on"
+-- cues --
+cue 0 raw="laughs" kind=Event { label: "laugh" } span=10..10 -> token 2 .. 2
+-- stream --
+TOK    0 "he"
+TOK    1 "paused"
+CUE  "laughs"
+TOK    2 "and"
+TOK    3 "carried"
+TOK    4 "on"

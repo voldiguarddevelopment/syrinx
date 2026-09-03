@@ -27,6 +27,8 @@ members = [
     "crates/syrinx-eval",
     "crates/syrinx-cli",
     "crates/syrinx-fish",
+    "crates/syrinx-cue",
+    "crates/syrinx-qwen",
     "crates/syrinx-stt",
 ]
 
@@ -34,6 +36,9 @@ members = [
 # parse JSON goldens (`serde_json`); the audio-server tests drive the Axum
 # `/v1/audio/speech` router via `tower::oneshot` (axum/tower/tokio/http-body).
 [dev-dependencies]
+sha2 = "0.10"
+syrinx-cue = { path = "crates/syrinx-cue" }
+syrinx-prosody = { path = "crates/syrinx-prosody" }
 serde_json = "1"
 axum = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -64,6 +69,7 @@ syrinx-eval = { path = "crates/syrinx-eval", optional = true }
 # Fish Audio e2e + parity tests at the repo root (`tests/real_fish_*.rs`). Mirrors how
 # syrinx-serve / syrinx-eval are wired.
 syrinx-fish = { path = "crates/syrinx-fish", optional = true }
+syrinx-qwen = { path = "crates/syrinx-qwen", optional = true }
 # Optional normal dep so the root `real` feature can toggle `syrinx-stt/real` for the
 # Whisper STT e2e test at the repo root (`tests/real_stt.rs`) + the TTS↔STT oracle.
 # Mirrors how syrinx-eval / syrinx-fish are wired.
@@ -91,7 +97,9 @@ real = [
     "dep:syrinx-eval",
     "syrinx-eval/real",
     "dep:syrinx-fish",
+    "dep:syrinx-qwen",
     "syrinx-fish/real",
+    "syrinx-qwen/real",
     "dep:syrinx-stt",
     "syrinx-stt/real",
 ]
@@ -113,5 +121,6 @@ cuda = [
     "syrinx-vocoder/cuda",
     "syrinx-serve/cuda",
     "syrinx-fish/cuda",
+    "syrinx-qwen/cuda",
     "syrinx-stt/cuda",
 ]

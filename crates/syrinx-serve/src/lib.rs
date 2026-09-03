@@ -62,22 +62,29 @@ pub const SILENT_BUFFER_LEN: usize = 1024;
 
 /// Buffered vs. streaming selector for a speech request. JSON wire form is
 /// snake_case: `"wav"` and `"stream"`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponseFormat {
-    /// A single buffered WAV body.
+    /// A single buffered WAV body. The default when the field is absent.
+    #[default]
     Wav,
     /// A streamed body.
     Stream,
 }
 
-/// The typed OpenAI-style speech request. All four fields are required; a
-/// missing field fails deserialization.
+/// The typed OpenAI-style speech request. `model`, `input` and `voice` are
+/// required; a missing one fails deserialization with a typed 422.
+///
+/// `response_format` is **optional** and defaults to [`ResponseFormat::Wav`],
+/// matching OpenAI's `/v1/audio/speech`, where the field may be omitted. Clients
+/// that send the minimal `{model, input, voice}` body therefore get a buffered WAV
+/// rather than a 422. Requests that already specified the field are unaffected.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SpeechRequest {
     pub model: String,
     pub input: String,
     pub voice: String,
+    #[serde(default)]
     pub response_format: ResponseFormat,
 }
 
@@ -474,6 +481,7 @@ pub fn router() -> Router {
 pub fn router_with_synth(synth: Arc<dyn Synth>) -> Router {
     Router::new()
         .route("/v1/audio/speech", post(speech))
+        .route("/v1/audio/caps", get(caps))
         .route("/v1/health", get(health))
         .route("/v1/version", get(version))
         .with_state(synth)
@@ -512,6 +520,20 @@ pub fn serve_blocking(synth: RealSynth, addr: std::net::SocketAddr) -> std::io::
 #[cfg(feature = "real")]
 pub fn serve_blocking_cv3(synth: Cv3RealSynth, addr: std::net::SocketAddr) -> std::io::Result<()> {
     serve_router_blocking(router_with_cv3_synth(synth), addr)
+}
+
+/// Boot the OpenAI-compatible audio server around **any** [`Synth`] implementation
+/// and serve it blocking on `addr`. The CV2/CV3 entry points ([`serve_blocking`],
+/// [`serve_blocking_cv3`]) are bound to their concrete synth types; this one takes
+/// the trait object, so a backend that lives outside this crate — the Fish
+/// `syrinx-fish` path, driven from `syrinx-cli` — can be served without
+/// `syrinx-serve` taking a dependency on it.
+#[cfg(feature = "real")]
+pub fn serve_blocking_dyn(
+    synth: Arc<dyn Synth>,
+    addr: std::net::SocketAddr,
+) -> std::io::Result<()> {
+    serve_router_blocking(router_with_synth(synth), addr)
 }
 
 /// Shared blocking-serve core: run `app` on a self-contained multi-thread Tokio
@@ -565,7 +587,11 @@ async fn version() -> Response {
 ///   * deserialization failure (e.g. a missing required field) -> **422**,
 ///   * a blank `input` -> **400**,
 ///   * the synth returning an empty buffered body (load/synth failure) -> **500**.
-async fn speech(State(synth): State<Arc<dyn Synth>>, body: Bytes) -> Response {
+async fn speech(
+    State(synth): State<Arc<dyn Synth>>,
+    uri: axum::http::Uri,
+    body: Bytes,
+) -> Response {
     let request: SpeechRequest = match serde_json::from_slice(&body) {
         Ok(request) => request,
         // A malformed/incomplete body is a typed 422 (unchanged contract).
@@ -586,6 +612,13 @@ async fn speech(State(synth): State<Arc<dyn Synth>>, body: Bytes) -> Response {
             "input must not be empty".to_string(),
             "invalid_request_error",
         );
+    }
+
+    // `?explain=1` returns the lowering report INSTEAD of audio, so a caller can find out
+    // why a cue did nothing without burning a synthesis pass. Absent the flag the request
+    // is handled exactly as before — inline cues change nothing about the audio contract.
+    if explain_requested(&uri) {
+        return explain_response(&request, backend_of(&uri));
     }
 
     match request.response_format {
@@ -655,6 +688,23 @@ fn synth_failure_response() -> Response {
 
 /// A typed JSON [`ApiError`] body at an explicit `status` with an explicit error
 /// `kind`.
+/// Build a 200 JSON response from a serializable body, matching the style of
+/// [`api_error_response`] (explicit builder, no `IntoResponse` tuple magic).
+fn json_ok_response<T: Serialize>(body: &T) -> Response {
+    match serde_json::to_vec(body) {
+        Ok(json) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(json))
+            .expect("a json response must build"),
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("serialization failed: {e}"),
+            "server_error",
+        ),
+    }
+}
+
 fn api_error_response(status: StatusCode, message: String, kind: &str) -> Response {
     let error = ApiError {
         error: ApiErrorBody {
@@ -668,4 +718,83 @@ fn api_error_response(status: StatusCode, message: String, kind: &str) -> Respon
         .header(header::CONTENT_TYPE, "application/json")
         .body(Body::from(json))
         .expect("an error response must build")
+}
+
+// ---------------------------------------------------------------- expressive cues (C3.3)
+
+/// The JSON body of `GET /v1/audio/caps`: every backend's declared control capabilities,
+/// straight from `syrinx-cue`'s table. One entry per **checkpoint variant**, because two
+/// checkpoints of the same variant can differ (the 0.6B CustomVoice accepts an instruction
+/// and ignores it, the 1.7B obeys it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CapsResponse {
+    pub backends: Vec<syrinx_cue::ControlCaps>,
+}
+
+/// The JSON body returned for `POST /v1/audio/speech?explain=1`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ExplainResponse {
+    /// The backend the explanation is for.
+    pub backend: String,
+    /// The text the backend would receive, with all cue markup removed.
+    pub text: String,
+    /// One entry per cue: what lowering did with it and why.
+    pub report: syrinx_cue::LoweringReport,
+}
+
+/// Is `explain` set to a truthy value in the query string?
+fn explain_requested(uri: &axum::http::Uri) -> bool {
+    query_value(uri, "explain").is_some_and(|v| v == "1" || v == "true")
+}
+
+/// The `backend=` query parameter, defaulting to Fish S2-pro (the primary TTS path).
+fn backend_of(uri: &axum::http::Uri) -> String {
+    query_value(uri, "backend").unwrap_or_else(|| "fish-s2-pro".to_string())
+}
+
+fn query_value(uri: &axum::http::Uri, key: &str) -> Option<String> {
+    uri.query()?.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == key).then(|| v.to_string())
+    })
+}
+
+/// `GET /v1/audio/caps`.
+async fn caps() -> Response {
+    match syrinx_cue::CapsTable::embedded() {
+        Ok(t) => {
+            json_ok_response(&CapsResponse { backends: t.all().to_vec() })
+        }
+        Err(e) => api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("capability table unavailable: {e}"),
+            "server_error",
+        ),
+    }
+}
+
+/// Build the `?explain=1` body for a request.
+fn explain_response(request: &SpeechRequest, backend: String) -> Response {
+    let Some(id) = syrinx_cue::BackendId::from_str(&backend) else {
+        return api_error_response(
+            StatusCode::BAD_REQUEST,
+            format!("unknown backend `{backend}`; see GET /v1/audio/caps"),
+            "invalid_request_error",
+        );
+    };
+    let (Ok(vocab), Ok(caps)) = (syrinx_cue::Vocab::embedded(), id.caps()) else {
+        return api_error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "cue tables unavailable".to_string(),
+            "server_error",
+        );
+    };
+    let doc = syrinx_cue::parse(&request.input, &vocab, &syrinx_cue::ParseOptions::default());
+    let lowered = syrinx_cue::lower_full(&doc, &caps, &vocab);
+    let body = ExplainResponse {
+        backend,
+        text: lowered.text.clone(),
+        report: lowered.report,
+    };
+    json_ok_response(&body)
 }

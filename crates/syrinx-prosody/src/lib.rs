@@ -1,5 +1,6 @@
 //! syrinx-prosody — editable prosody-plan model + override API (scaffold; T-00.01).
 
+pub mod cues;
 pub mod duration;
 pub mod markup;
 pub mod pitch;

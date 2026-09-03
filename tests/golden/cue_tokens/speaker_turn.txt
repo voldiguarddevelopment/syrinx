@@ -1,0 +1,21 @@
+source: "<|speaker:0|> hello there <|speaker:1|> and hello to you"
+text:   " hello there  and hello to you"
+-- tokens --
+  0  "hello"
+  1  "there"
+  2  "and"
+  3  "hello"
+  4  "to"
+  5  "you"
+-- cues --
+cue 0 raw="speaker:0" kind=SpeakerTurn { id: 0 } span=0..0 -> token 0 .. 0
+cue 1 raw="speaker:1" kind=SpeakerTurn { id: 1 } span=13..13 -> token 2 .. 2
+-- stream --
+CUE  "speaker:0"
+TOK    0 "hello"
+TOK    1 "there"
+CUE  "speaker:1"
+TOK    2 "and"
+TOK    3 "hello"
+TOK    4 "to"
+TOK    5 "you"

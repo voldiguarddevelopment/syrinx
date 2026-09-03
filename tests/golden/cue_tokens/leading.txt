@@ -1,0 +1,13 @@
+source: "[happy] good morning everyone"
+text:   " good morning everyone"
+-- tokens --
+  0  "good"
+  1  "morning"
+  2  "everyone"
+-- cues --
+cue 0 raw="happy" kind=Emotion { label: "happy", intensity: 0.6 } span=0..22 -> token 0 .. 3
+-- stream --
+CUE  "happy"
+TOK    0 "good"
+TOK    1 "morning"
+TOK    2 "everyone"

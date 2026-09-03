@@ -105,8 +105,7 @@ syrinx synth — render text in a reference voice
                            --text (e.g. \"[happy]\") are Fish-native PLAIN TEXT.
                            --ref-wav clones the voice (s2-pro: encoded to prompt
                            codes; --prompt-text is the optional ref transcript).
-                           s1-mini has no reference-cloning path: --ref-wav is
-                           ignored there (text-only synthesis).
+                           Both variants clone from --ref-wav.
 
   Fish batch render (load the model + reference ONCE; mutually exclusive with --text/--out):
     --batch <JSONL>        Render every matching corpus entry (one compact JSON
@@ -160,9 +159,22 @@ syrinx serve — boot the OpenAI-compatible audio server in a reference voice
 
     syrinx serve --prompt-text <TEXT> --ref-wav <WAV> [--port <N>]
                  [--model-dir <DIR>] [--max-steps <N>] [--cuda] [--cv3]
+                 [--fish <s1-mini|s2-pro> --fish-dir <DIR>]
 
     --port <N>             Listen port (default 8080); binds 127.0.0.1.
     --cv3                  Serve the CosyVoice3 synthesizer (SYRINX_CV3_* files).
+    --quantized            (with --fish s2-pro) load the dual-AR projections int4
+                           Q4_0 and run them through candle's FUSED quantized
+                           kernels — not the CosyVoice dequant-on-fetch path. Cuts
+                           resident VRAM so the 5B fits a card shared with other
+                           models. Lossy; measure before trusting it.
+    --fish <VARIANT>       Serve the pure-Rust Fish Audio port instead of CosyVoice:
+                           s1-mini or s2-pro. Mutually exclusive with --cv3. The
+                           checkpoint (--fish-dir) is loaded ONCE at boot and held
+                           across requests; with --ref-wav the reference is encoded
+                           to prompt codes once at boot too, so a request is just
+                           the dual-AR loop + codec decode. Body is 44.1 kHz WAV
+                           (CosyVoice serves 24 kHz). Both variants clone.
     Then POST /v1/audio/speech  {\"model\":\"syrinx\",\"input\":\"<text>\",\"voice\":\"v\"}
 ";
 
@@ -231,6 +243,47 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
         wav: Option<PathBuf>,
         lang: Option<String>,
         check_tts: Option<String>,
+        /// C3.3: which backend `syrinx cue` explains for.
+        backend: Option<String>,
+        /// C3.3: print the lowering report.
+        explain: bool,
+    }
+
+
+    const CUE_USAGE: &str = "\
+    syrinx cue --text <TEXT> [--backend <ID>] [--explain]
+
+    Parse expressive cues and show exactly what a backend would receive.
+
+      --text <TEXT>      the text to analyse (bracket cues or the SSML subset)
+      --backend <ID>     a backend id from `caps` (default: fish-s2-pro)
+      --explain          print the per-cue lowering report (default: on)
+
+    Every cue is listed with what lowering did to it and why, so a cue that does
+    nothing can be diagnosed without synthesizing anything.
+    ";
+
+    /// `syrinx cue` — the CLI half of the C3.3 control surface.
+    fn cmd_cue(o: Opts) -> Result<(), String> {
+        let text = o.text.ok_or("--text is required")?;
+        let backend = o.backend.unwrap_or_else(|| "fish-s2-pro".to_string());
+        let id = syrinx_cue::BackendId::from_str(&backend)
+            .ok_or_else(|| format!("unknown backend `{backend}`; try one of: {}",
+                syrinx_cue::BackendId::ALL.iter().map(|b| b.as_str())
+                    .collect::<Vec<_>>().join(", ")))?;
+        let vocab = syrinx_cue::Vocab::embedded().map_err(|e| e.to_string())?;
+        let caps = id.caps().map_err(|e| e.to_string())?;
+
+        // One entry point for both syntaxes; a mixed document is a hard error, not a guess.
+        let doc = syrinx_cue::parse_any(&text, &vocab, &syrinx_cue::ParseOptions::default())
+            .map_err(|e| e.to_string())?;
+        let lowered = syrinx_cue::lower_full(&doc, &caps, &vocab);
+
+        println!("backend: {} ({})", caps.id, caps.model);
+        println!("text:    {:?}", lowered.text);
+        println!("cues:    {}", doc.cues.len());
+        print!("{}", lowered.report.explain());
+        Ok(())
     }
 
     pub fn run() -> i32 {
@@ -247,6 +300,7 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
             "serve" => (SERVE_USAGE, cmd_serve),
             "stream" => (STREAM_USAGE, cmd_stream),
             "stt" => (STT_USAGE, cmd_stt),
+            "cue" => (CUE_USAGE, cmd_cue),
             "-h" | "--help" | "help" => {
                 println!("{USAGE}");
                 return 0;
@@ -316,6 +370,8 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                 "--cv3" => o.cv3 = true,
                 "--quality" => o.quality = true,
                 "--instruct" => o.instruct = Some(need(&mut argv, "--instruct")?),
+                "--backend" => o.backend = Some(need(&mut argv, "--backend")?),
+                "--explain" => o.explain = true,
                 "--rl" => o.rl = Some(PathBuf::from(need(&mut argv, "--rl")?)),
                 "--quantized" => o.quantized = true,
                 "--emotion-tags" => o.emotion_tags = true,
@@ -639,15 +695,28 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
     /// `--quantized` / `--emotion-tags` / `--emotion-lang`) on any path other than
     /// `synth --cv3`, so they are never silently ignored on a CV2 / serve / stream command.
     fn reject_cv3_feature_flags(o: &Opts) -> Result<(), String> {
+        reject_cv3_feature_flags_except_quantized(o)?;
+        if o.quantized {
+            return Err(
+                "--quantized is valid only on `synth --cv3` and the Fish s2-pro path \
+                 (`synth --fish s2-pro` / `serve --fish s2-pro`)"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    /// The CV3-only steering flags minus `--quantized`, which the Fish s2-pro path now
+    /// implements too (int4 `Q4_0` projections through candle's fused quantized kernels).
+    fn reject_cv3_feature_flags_except_quantized(o: &Opts) -> Result<(), String> {
         if o.quality
             || o.instruct.is_some()
             || o.rl.is_some()
-            || o.quantized
             || o.emotion_tags
             || o.emotion_lang.is_some()
         {
             return Err(
-                "--quality/--instruct/--rl/--quantized/--emotion-tags/--emotion-lang are \
+                "--quality/--instruct/--rl/--emotion-tags/--emotion-lang are \
                  CV3-only and valid only on `synth --cv3`"
                     .to_string(),
             );
@@ -661,12 +730,215 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
     fn reject_fish_flags(o: &Opts) -> Result<(), String> {
         if o.fish.is_some() || o.fish_dir.is_some() {
             return Err(
-                "--fish/--fish-dir are valid only on `synth --fish` (the pure-Rust Fish \
-                 Audio port); they are not valid on the CosyVoice2/CV3 or serve/stream paths"
+                "--fish/--fish-dir are valid only on `synth --fish` and `serve --fish` \
+                 (the pure-Rust Fish Audio port); they are not valid on the CosyVoice2/CV3 \
+                 or stream paths"
                     .to_string(),
             );
         }
         Ok(())
+    }
+
+
+    /// The **Fish** server backend: drives the pure-Rust Fish Audio port for every
+    /// request and returns the codec's native **44.1 kHz** audio as WAV bytes.
+    ///
+    /// Mirrors [`RealSynth`]/[`Cv3RealSynth`], with the two differences that matter
+    /// operationally:
+    ///
+    /// * **Load once, hold across requests.** The 4.4 B dual-AR is loaded at boot and
+    ///   kept resident; per-request loading would cost ~25 s of model load per call.
+    /// * **The reference is encoded once, at boot.** `s2-pro` clones by conditioning
+    ///   on codec *prompt codes*, and encoding a 10 s reference is a full codec
+    ///   encoder pass. Doing it once here is what makes the per-request path just the
+    ///   dual-AR loop plus the codec decode.
+    ///
+    /// `synthesize_cloned` takes `&mut self`, so the model sits behind a `Mutex` and
+    /// requests are serialized — the right default for a single GPU holding one 4.4 B
+    /// model, and the same choice the CV2/CV3 backends make.
+    struct FishRealSynth {
+        model: std::sync::Mutex<FishModel>,
+        /// Reference transcript; empty is valid (conditions on the audio codes alone).
+        ref_text: String,
+        /// Prompt codes from the reference clip, or `None` for un-cloned synthesis.
+        ref_codes: Option<candle_core::Tensor>,
+        params: DriveParams,
+    }
+
+    /// The loaded variant. `s1-mini` has no reference-conditioned cloning path, so it
+    /// only ever runs the text-only branch.
+    enum FishModel {
+        S1(Box<S1Mini>),
+        S2(Box<S2Pro>),
+    }
+
+    impl syrinx_serve::Synth for FishRealSynth {
+        fn synthesize(&self, req: &syrinx_serve::SpeechRequest) -> Vec<u8> {
+            // The Synth trait has no error channel: on a poisoned lock or a synth
+            // failure, log and return an empty body — the handler maps that to a
+            // typed HTTP 500 rather than a 200 with silence.
+            let mut model = match self.model.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let wav = match &mut *model {
+                FishModel::S1(m) => match &self.ref_codes {
+                    Some(codes) => {
+                        m.synthesize_cloned(&self.ref_text, codes, &req.input, &self.params)
+                    }
+                    None => m.synthesize(&req.input, &self.params),
+                },
+                FishModel::S2(m) => match &self.ref_codes {
+                    Some(codes) => {
+                        m.synthesize_cloned(&self.ref_text, codes, &req.input, &self.params)
+                    }
+                    None => m.synthesize(&req.input, &self.params),
+                },
+            };
+            let wav = match wav {
+                Ok(w) => w,
+                Err(e) => {
+                    eprintln!("syrinx-serve --fish: synthesis failed: {e}");
+                    return Vec::new();
+                }
+            };
+            // 44.1 kHz, not the CosyVoice 24 kHz: the whole point of the Fish path is
+            // the wider band, and the header must declare the rate the samples are.
+            match wavio::encode_wav(&wav, fish_audio::SAMPLE_RATE_44K) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    eprintln!("syrinx-serve --fish: wav encode failed: {e}");
+                    Vec::new()
+                }
+            }
+        }
+    }
+
+
+    /// Resolve the Fish device the same way `synth --fish` does: CPU unless `--cuda`,
+    /// and `SYRINX_FISH_DEVICE=<N>` picks the CUDA ordinal (CUDA_VISIBLE_DEVICES is
+    /// unreliable under WSL). Shared so `serve --fish` and `synth --fish` cannot drift.
+    fn fish_device(o: &Opts) -> candle_core::Device {
+        if o.cuda {
+            #[cfg(not(feature = "cuda"))]
+            eprintln!(
+                "syrinx: --cuda requested but this binary was built without the `cuda` \
+                 feature; running on CPU"
+            );
+            let ord = std::env::var("SYRINX_FISH_DEVICE")
+                .ok()
+                .and_then(|s| s.trim().parse::<usize>().ok());
+            syrinx_serve::synth::pick_device(ord)
+        } else {
+            candle_core::Device::Cpu
+        }
+    }
+
+    /// The dual-AR driver params for a Fish run: `--max-steps` caps the frame count and
+    /// the seed is pinned to 0 so a render is bit-reproducible (the CV `lm_seed: 0`
+    /// convention).
+    fn fish_params(o: &Opts) -> DriveParams {
+        DriveParams {
+            seed: 0,
+            max_new_frames: o
+                .max_steps
+                .unwrap_or_else(|| DriveParams::default().max_new_frames),
+            ..Default::default()
+        }
+    }
+
+    /// `serve --fish <s1-mini|s2-pro>` — boot the OpenAI-compatible server on the Fish
+    /// path. Loads the checkpoint and encodes the reference clip **once**, then holds
+    /// both for the process lifetime; every `POST /v1/audio/speech` reuses them.
+    fn cmd_serve_fish(o: Opts) -> Result<(), String> {
+        let variant = FishVariant::from_id(o.fish.as_deref().unwrap_or_default())
+            .ok_or("--fish expects `s1-mini` or `s2-pro`")?;
+        let dir = o
+            .fish_dir
+            .as_ref()
+            .ok_or("--fish requires --fish-dir <DIR> (the checkpoint directory)")?;
+        let dev = fish_device(&o);
+        let params = fish_params(&o);
+        let port = o.port.unwrap_or(8080);
+        let addr: SocketAddr = ([127, 0, 0, 1], port).into();
+
+        let t0 = std::time::Instant::now();
+        let (model, ref_codes) = match variant {
+            FishVariant::S1Mini => {
+                let m = S1Mini::load(dir, dev.clone()).map_err(|e| e.to_string())?;
+                let codes = match &o.ref_wav {
+                    Some(ref_wav) => {
+                        let samples =
+                            fish_audio::read_ref_wav_44k(ref_wav).map_err(|e| e.to_string())?;
+                        let n = samples.len();
+                        let wav_t = candle_core::Tensor::from_vec(samples, n, &dev)
+                            .map_err(|e| e.to_string())?;
+                        let codes = m.encode_reference(&wav_t).map_err(|e| e.to_string())?;
+                        eprintln!(
+                            "syrinx serve --fish s1-mini: cloning from {} ({} samples @44.1k) \
+                             — encoded ONCE at boot",
+                            ref_wav.display(),
+                            n
+                        );
+                        Some(codes)
+                    }
+                    None => None,
+                };
+                (FishModel::S1(Box::new(m)), codes)
+            }
+            FishVariant::S2Pro => {
+                let mut m = if o.quantized {
+                    S2Pro::load_quantized(dir, dev.clone()).map_err(|e| e.to_string())?
+                } else {
+                    S2Pro::load(dir, dev.clone()).map_err(|e| e.to_string())?
+                };
+                let codes = match &o.ref_wav {
+                    Some(ref_wav) => {
+                        let samples =
+                            fish_audio::read_ref_wav_44k(ref_wav).map_err(|e| e.to_string())?;
+                        let n = samples.len();
+                        let wav_t = candle_core::Tensor::from_vec(samples, n, &dev)
+                            .map_err(|e| e.to_string())?;
+                        let codes = m.encode_reference(&wav_t).map_err(|e| e.to_string())?;
+                        eprintln!(
+                            "syrinx serve --fish s2-pro: cloning from {} ({} samples @44.1k, \
+                             ref-transcript {:?}) — encoded ONCE at boot",
+                            ref_wav.display(),
+                            n,
+                            o.prompt_text.clone().unwrap_or_default()
+                        );
+                        Some(codes)
+                    }
+                    None => {
+                        eprintln!(
+                            "syrinx serve --fish s2-pro: no --ref-wav; serving the model's \
+                             own voice (un-cloned)"
+                        );
+                        None
+                    }
+                };
+                (FishModel::S2(Box::new(m)), codes)
+            }
+        };
+        eprintln!(
+            "syrinx serve --fish {}: model resident after {:.1}s",
+            variant.dir_name(),
+            t0.elapsed().as_secs_f32()
+        );
+
+        let synth = FishRealSynth {
+            model: std::sync::Mutex::new(model),
+            ref_text: o.prompt_text.clone().unwrap_or_default(),
+            ref_codes,
+            params,
+        };
+        eprintln!(
+            "syrinx serve --fish {}: listening on http://{addr}  (POST /v1/audio/speech, \
+             44.1 kHz WAV)",
+            variant.dir_name()
+        );
+        syrinx_serve::serve_blocking_dyn(std::sync::Arc::new(synth), addr)
+            .map_err(|e| e.to_string())
     }
 
     /// `synth --fish <s1-mini|s2-pro>` — drive the pure-Rust Fish Audio port. Loads the
@@ -688,8 +960,9 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
             return Err("--fish and --cv3 are mutually exclusive (pick one synthesizer)".to_string());
         }
         // The CV3-only feature flags steer the CosyVoice3 path; reject them on the Fish path
+        // (except --quantized, which s2-pro implements natively)
         // so they are never silently ignored (Fish emotion tags are plain text in --text).
-        reject_cv3_feature_flags(o)?;
+        reject_cv3_feature_flags_except_quantized(o)?;
         if o.plan.is_some() || o.pitch.is_some() || o.rate.is_some() {
             eprintln!(
                 "syrinx synth --fish: prosody plan/pitch/rate are CosyVoice2-only and are \
@@ -737,21 +1010,44 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
 
         let wav = match variant {
             FishVariant::S1Mini => {
-                let mut model = S1Mini::load(dir, dev).map_err(|e| e.to_string())?;
-                if o.ref_wav.is_some() {
-                    eprintln!(
-                        "syrinx synth --fish s1-mini: s1-mini has no reference-conditioned \
-                         cloning path; --ref-wav is ignored (text-only synthesis)"
-                    );
+                let mut model = S1Mini::load(dir, dev.clone()).map_err(|e| e.to_string())?;
+                match &o.ref_wav {
+                    Some(ref_wav) => {
+                        // s1-mini clones the same way s2-pro does: the reference is
+                        // resampled to the codec's 44.1 kHz, encoded to prompt codes, and
+                        // spliced into the prompt ahead of the target text.
+                        let ref_text = o.prompt_text.clone().unwrap_or_default();
+                        let samples =
+                            fish_audio::read_ref_wav_44k(ref_wav).map_err(|e| e.to_string())?;
+                        let n = samples.len();
+                        let wav_t = candle_core::Tensor::from_vec(samples, n, &dev)
+                            .map_err(|e| e.to_string())?;
+                        let ref_codes =
+                            model.encode_reference(&wav_t).map_err(|e| e.to_string())?;
+                        eprintln!(
+                            "syrinx synth --fish s1-mini: cloning from {} ({} samples @44.1k, \
+                             ref-transcript {:?})",
+                            ref_wav.display(),
+                            n,
+                            ref_text
+                        );
+                        model
+                            .synthesize_cloned(&ref_text, &ref_codes, text, &params)
+                            .map_err(|e| e.to_string())?
+                    }
+                    None => model.synthesize(text, &params).map_err(|e| e.to_string())?,
                 }
-                model.synthesize(text, &params).map_err(|e| e.to_string())?
             }
             FishVariant::S2Pro => {
                 // `S2Pro::load` picks the compute dtype from the device: f32 on CPU
                 // (parity) and bf16 on CUDA (the 4.4B LM fits a 12 GB GPU in bf16, ~9 GB,
                 // where f32 ~18 GB would OOM). So a `--features cuda` + `--cuda` run gets
                 // the bf16-fit path automatically; the CPU path is byte-unchanged.
-                let mut model = S2Pro::load(dir, dev.clone()).map_err(|e| e.to_string())?;
+                let mut model = if o.quantized {
+                    S2Pro::load_quantized(dir, dev.clone()).map_err(|e| e.to_string())?
+                } else {
+                    S2Pro::load(dir, dev.clone()).map_err(|e| e.to_string())?
+                };
                 match &o.ref_wav {
                     Some(ref_wav) => {
                         // Resample the reference to the codec's 44.1 kHz, encode it to prompt
@@ -948,8 +1244,16 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                  feature; running on CPU"
             );
         }
+        // SYRINX_FISH_DEVICE=<N> picks the CUDA ordinal. This is the path that most
+        // needs it: multi-GPU corpus rendering runs one batch process per card, and
+        // without the ordinal every process lands on cuda:0 and OOMs (the 5B bf16 LM
+        // is ~10.4 GB, so two of them will not share a 12 GB card). Mirrors the
+        // single-synth path above.
         let dev = if o.cuda {
-            syrinx_serve::synth::pick_device(None)
+            let ord = std::env::var("SYRINX_FISH_DEVICE")
+                .ok()
+                .and_then(|s| s.trim().parse::<usize>().ok());
+            syrinx_serve::synth::pick_device(ord)
         } else {
             candle_core::Device::Cpu
         };
@@ -1324,6 +1628,14 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
     }
 
     fn cmd_serve(o: Opts) -> Result<(), String> {
+        if o.fish.is_some() || o.fish_dir.is_some() {
+            if o.cv3 {
+                return Err(
+                    "--fish and --cv3 are mutually exclusive (pick one synthesizer)".to_string(),
+                );
+            }
+            return cmd_serve_fish(o);
+        }
         reject_cv3_feature_flags(&o)?;
         reject_fish_flags(&o)?;
         let (prompt_text, r16, r24) = read_voice(&o)?;

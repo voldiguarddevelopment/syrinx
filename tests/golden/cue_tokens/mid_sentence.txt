@@ -1,0 +1,21 @@
+source: "it was fine until [angry] the second call"
+text:   "it was fine until  the second call"
+-- tokens --
+  0  "it"
+  1  "was"
+  2  "fine"
+  3  "until"
+  4  "the"
+  5  "second"
+  6  "call"
+-- cues --
+cue 0 raw="angry" kind=Emotion { label: "angry", intensity: 0.6 } span=18..34 -> token 4 .. 7
+-- stream --
+TOK    0 "it"
+TOK    1 "was"
+TOK    2 "fine"
+TOK    3 "until"
+CUE  "angry"
+TOK    4 "the"
+TOK    5 "second"
+TOK    6 "call"

@@ -1,0 +1,215 @@
+openapi: 3.0.3
+info:
+  title: Syrinx OpenAI-compatible audio API
+  version: "1.0.0"
+  description: >
+    OpenAI-compatible speech synthesis with an expressive-cue control surface.
+    Inline cues (`[happy] hello`) may appear in `input` and are stripped before the text
+    reaches a backend — no cue markup is ever spoken. See docs/backends/CONTROL_SURVEY.md
+    and ADR-0001.
+paths:
+  /v1/audio/speech:
+    post:
+      summary: Synthesize speech (OpenAI-compatible)
+      description: >
+        Unchanged OpenAI-compatible contract. `input` may carry inline expressive cues;
+        they are parsed, lowered for the target backend and removed from the spoken text.
+        With `explain=1` the endpoint returns the lowering report as JSON **instead of**
+        audio, so a caller can see why a cue did or did not take effect without spending a
+        synthesis pass.
+      parameters:
+        - name: explain
+          in: query
+          required: false
+          schema: { type: string, enum: ["1", "true"] }
+          description: Return the lowering report as JSON instead of audio.
+        - name: backend
+          in: query
+          required: false
+          schema: { type: string, default: fish-s2-pro }
+          description: >
+            Which backend the explanation is for. Must be an id from
+            `GET /v1/audio/caps`; an unknown id is a 400.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SpeechRequest' }
+      responses:
+        "200":
+          description: Audio, or the lowering report when `explain=1`.
+          content:
+            audio/wav:
+              schema: { type: string, format: binary }
+            application/json:
+              schema: { $ref: '#/components/schemas/ExplainResponse' }
+        "400": { description: Blank input, or an unknown backend id. }
+        "422": { description: Malformed request body. }
+        "500": { description: Synthesis failure. }
+  /v1/audio/caps:
+    get:
+      summary: Backend control capabilities
+      description: >
+        Every backend's declared control surface, one entry per **checkpoint variant**.
+        Two checkpoints of the same variant can differ: `qwen3-0.6b-customvoice` *accepts*
+        an instruction and ignores it, while `qwen3-1.7b-customvoice` honors it. The
+        `accepted` support level exists to express exactly that, and clients should treat
+        it as "not supported" for the purpose of deciding what to send.
+      responses:
+        "200":
+          description: The capability table.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CapsResponse' }
+  /v1/health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: Service health.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Health' }
+  /v1/version:
+    get:
+      summary: Build version
+      responses:
+        "200":
+          description: Crate name and version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Version' }
+components:
+  schemas:
+    SpeechRequest:
+      type: object
+      required: [model, input, voice]
+      properties:
+        model: { type: string }
+        input:
+          type: string
+          description: >
+            Text to speak. May contain inline cues — `[happy]`, `[laughs]`,
+            `[pause 400ms]`, `<|speaker:1|>` — or an SSML subset
+            (`<prosody>`, `<emphasis>`, `<break/>`). The two syntaxes may not be mixed.
+            Use `\[` for a literal bracket.
+        voice: { type: string }
+        response_format:
+          type: string
+          enum: [wav, stream]
+          default: wav
+    CapsResponse:
+      type: object
+      required: [backends]
+      properties:
+        backends:
+          type: array
+          items: { $ref: '#/components/schemas/ControlCaps' }
+    ControlCaps:
+      type: object
+      required: [id, krate, model, inline, granularity, instruct, emotion, style, event,
+                 prosody, emphasis, pause, speaker_turn, source, notes]
+      properties:
+        id: { type: string, example: fish-s2-pro }
+        krate: { type: string, description: Owning crate. }
+        model: { type: string, description: Checkpoint this row is true for. }
+        inline:
+          type: string
+          enum: [none, closed, open]
+          description: What inline markup the backend understands.
+        granularity:
+          type: string
+          enum: [none, utterance, word]
+        instruct: { $ref: '#/components/schemas/Support' }
+        emotion: { $ref: '#/components/schemas/Support' }
+        style: { $ref: '#/components/schemas/Support' }
+        event: { $ref: '#/components/schemas/Support' }
+        prosody: { $ref: '#/components/schemas/Support' }
+        emphasis: { $ref: '#/components/schemas/Support' }
+        pause: { $ref: '#/components/schemas/Support' }
+        speaker_turn: { $ref: '#/components/schemas/Support' }
+        source: { type: string, description: Where the capability claim was verified. }
+        notes: { type: string }
+    Support:
+      type: string
+      enum: [unsupported, accepted, honored]
+      description: >
+        `unsupported` — no channel. `accepted` — taken without error but NOT acted on;
+        treat as unsupported. `honored` — verified to affect the audio.
+    ExplainResponse:
+      type: object
+      required: [backend, text, report]
+      properties:
+        backend: { type: string }
+        text:
+          type: string
+          description: The text the backend receives, with all cue markup removed.
+        report: { $ref: '#/components/schemas/LoweringReport' }
+    LoweringReport:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/ReportEntry' }
+    ReportEntry:
+      type: object
+      required: [source, raw, action]
+      properties:
+        source:
+          type: object
+          description: Byte range of the original markup in the submitted input.
+          properties:
+            start: { type: integer }
+            end: { type: integer }
+        raw: { type: string, description: Exactly what the author wrote. }
+        action:
+          description: >
+            One of `PassedThrough` (emitted verbatim), `Normalized` (synonym resolved),
+            `Mapped` (translated to a native spelling), `Unmapped` (no native spelling),
+            `Projected` (converted to a free-text instruction), or `Dropped` with a reason.
+          oneOf:
+            - type: object
+              properties:
+                PassedThrough:
+                  type: object
+                  properties: { rendered: { type: string } }
+            - type: object
+              properties:
+                Normalized:
+                  type: object
+                  properties:
+                    from: { type: string }
+                    to: { type: string }
+            - type: object
+              properties:
+                Mapped:
+                  type: object
+                  properties: { to: { type: string } }
+            - type: string
+              enum: [Unmapped]
+            - type: object
+              properties:
+                Projected:
+                  type: object
+                  properties: { to: { type: string } }
+            - type: object
+              properties:
+                Dropped:
+                  type: object
+                  properties:
+                    reason:
+                      type: string
+                      enum: [Unsupported, AcceptedButIgnored, NoNativeSpelling]
+    Health:
+      type: object
+      required: [status, version]
+      properties:
+        status: { type: string, example: ok }
+        version: { type: string }
+    Version:
+      type: object
+      required: [name, version]
+      properties:
+        name: { type: string }
+        version: { type: string }

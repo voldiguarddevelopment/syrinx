@@ -34,6 +34,7 @@ tn = ["real", "syrinx-serve/tn"]
 cuda = ["real", "syrinx-serve/cuda", "syrinx-fish/cuda", "syrinx-stt/cuda"]
 
 [dependencies]
+syrinx-cue = { path = "../syrinx-cue" }
 # The synthesizer + WAV-I/O helpers live behind syrinx-serve's `real` feature;
 # pulled in only under this crate's `real` feature. Args are hand-rolled (no clap)
 # and the WAV codec is reused from syrinx-serve (`wavio`), keeping deps minimal.

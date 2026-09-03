@@ -1,0 +1,419 @@
+# Canonical cue vocabulary (C1.1).
+#
+# Derived from the verified native sets in docs/backends/CONTROL_SURVEY.md (2026-09-03),
+# NOT invented: Fish S1's 65 enumerated tags, Fish S2's documented common list,
+# CosyVoice's tokenizer `additional_special_tokens`, Step-Audio-EditX's emotion/style
+# tables, and Chatterbox Turbo's documented paralinguistics.
+#
+# Schema (enforced by vocab::tests):
+#   [[emotion]] / [[style]] / [[event]]
+#     id        canonical snake_case id, unique across ALL kinds
+#     arousal   0..1   (calm -> activated)
+#     valence   0..1   (negative -> positive)   omitted for `event` and `style`
+#     synonyms  author spellings that map here; lowercase; unique across all entries
+#     fish_s1   native `(tag)` spelling, or omitted if the closed set has no member
+#     fish_s2   native `[tag]` spelling (open vocabulary, so always expressible)
+#     cosyvoice native inline token, or omitted (instruct-only)
+#     step_audio native `[tag]`, or omitted
+#
+# `fish_s2` is always present because S2's vocabulary is open ("15,000+ unique tags");
+# absence elsewhere is meaningful and drives Dropped/Hoisted outcomes in the report.
+
+# ---------------------------------------------------------------- emotions (valenced)
+[[emotion]]
+id = "happy"
+arousal = 0.70
+valence = 0.90
+synonyms = ["happy", "joyful", "delighted", "cheerful", "glad", "delight"]
+fish_s1 = "delighted"
+fish_s2 = "happy"
+step_audio = "happy"
+
+[[emotion]]
+id = "excited"
+arousal = 0.90
+valence = 0.85
+synonyms = ["excited", "enthusiastic", "eager", "keen", "thrilled"]
+fish_s1 = "excited"
+fish_s2 = "excited"
+step_audio = "excited"
+
+[[emotion]]
+id = "sad"
+arousal = 0.25
+valence = 0.10
+synonyms = ["sad", "unhappy", "sorrowful", "downcast", "depressed"]
+fish_s1 = "sad"
+fish_s2 = "sad"
+step_audio = "sad"
+
+[[emotion]]
+id = "angry"
+arousal = 0.90
+valence = 0.10
+synonyms = ["angry", "furious", "mad", "irate", "enraged"]
+fish_s1 = "angry"
+fish_s2 = "angry"
+step_audio = "angry"
+
+[[emotion]]
+id = "afraid"
+arousal = 0.85
+valence = 0.15
+synonyms = ["afraid", "scared", "fearful", "frightened", "terrified"]
+fish_s1 = "scared"
+fish_s2 = "scared"
+step_audio = "fear"
+
+[[emotion]]
+id = "surprised"
+arousal = 0.85
+valence = 0.60
+synonyms = ["surprised", "astonished", "amazed", "shocked", "startled"]
+fish_s1 = "surprised"
+fish_s2 = "surprised"
+step_audio = "surprised"
+
+[[emotion]]
+id = "anxious"
+arousal = 0.75
+valence = 0.25
+synonyms = ["anxious", "nervous", "worried", "uneasy", "apprehensive"]
+fish_s1 = "anxious"
+fish_s2 = "anxious"
+
+[[emotion]]
+id = "calm"
+arousal = 0.15
+valence = 0.70
+synonyms = ["calm", "relaxed", "serene", "composed", "at ease"]
+fish_s1 = "relaxed"
+fish_s2 = "relaxed"
+
+[[emotion]]
+id = "confused"
+arousal = 0.50
+valence = 0.35
+synonyms = ["confused", "puzzled", "perplexed", "bewildered"]
+fish_s1 = "confused"
+fish_s2 = "confused"
+step_audio = "confusion"
+
+[[emotion]]
+id = "curious"
+arousal = 0.60
+valence = 0.65
+synonyms = ["curious", "inquisitive", "interested", "intrigued"]
+fish_s1 = "curious"
+fish_s2 = "curious"
+
+[[emotion]]
+id = "disgusted"
+arousal = 0.65
+valence = 0.10
+synonyms = ["disgusted", "revolted", "repulsed"]
+fish_s1 = "disgusted"
+fish_s2 = "disgusted"
+step_audio = "disgusted"
+
+[[emotion]]
+id = "proud"
+arousal = 0.60
+valence = 0.85
+synonyms = ["proud", "triumphant"]
+fish_s1 = "proud"
+fish_s2 = "proud"
+
+[[emotion]]
+id = "grateful"
+arousal = 0.40
+valence = 0.85
+synonyms = ["grateful", "thankful", "appreciative"]
+fish_s1 = "grateful"
+fish_s2 = "grateful"
+
+[[emotion]]
+id = "guilty"
+arousal = 0.45
+valence = 0.20
+synonyms = ["guilty", "remorseful", "ashamed", "embarrassed"]
+fish_s1 = "guilty"
+fish_s2 = "guilty"
+step_audio = "embarrass"
+
+[[emotion]]
+id = "sarcastic"
+arousal = 0.55
+valence = 0.35
+synonyms = ["sarcastic", "sardonic", "snarky", "sneering", "ironic"]
+fish_s1 = "sarcastic"
+fish_s2 = "sarcastic"
+
+[[emotion]]
+id = "impatient"
+arousal = 0.75
+valence = 0.30
+synonyms = ["impatient", "restless", "in a hurry", "hurried"]
+fish_s1 = "impatient"
+fish_s2 = "impatient"
+
+[[emotion]]
+id = "confident"
+arousal = 0.60
+valence = 0.80
+synonyms = ["confident", "assured", "self-assured"]
+fish_s1 = "confident"
+fish_s2 = "confident"
+
+[[emotion]]
+id = "empathetic"
+arousal = 0.40
+valence = 0.75
+synonyms = ["empathetic", "compassionate", "sympathetic", "comforting"]
+fish_s1 = "empathetic"
+fish_s2 = "empathetic"
+step_audio = "empathy"
+
+[[emotion]]
+id = "serious"
+arousal = 0.45
+valence = 0.45
+synonyms = ["serious", "grave", "solemn", "earnest"]
+fish_s1 = "serious"
+fish_s2 = "serious"
+step_audio = "serious"
+
+[[emotion]]
+id = "amused"
+arousal = 0.60
+valence = 0.85
+synonyms = ["amused", "entertained", "tickled"]
+fish_s1 = "amused"
+fish_s2 = "amused"
+
+[[emotion]]
+id = "hesitant"
+arousal = 0.35
+valence = 0.40
+synonyms = ["hesitant", "hesitating", "reluctant", "unsure", "tentative"]
+fish_s1 = "hesitating"
+fish_s2 = "hesitating"
+
+[[emotion]]
+id = "disdainful"
+arousal = 0.55
+valence = 0.20
+synonyms = ["disdainful", "scornful", "contemptuous", "disapproving"]
+fish_s1 = "disdainful"
+fish_s2 = "disdainful"
+
+[[emotion]]
+id = "panicked"
+arousal = 0.95
+valence = 0.10
+synonyms = ["panicked", "frantic", "hysterical", "panicking"]
+fish_s1 = "panicked"
+fish_s2 = "panicked"
+
+[[emotion]]
+id = "moved"
+arousal = 0.50
+valence = 0.75
+synonyms = ["moved", "touched", "affected"]
+fish_s1 = "moved"
+fish_s2 = "moved"
+
+[[emotion]]
+id = "painful"
+arousal = 0.70
+valence = 0.10
+synonyms = ["painful", "in pain", "hurting", "anguished"]
+fish_s1 = "painful"
+fish_s2 = "painful"
+
+# ------------------------------------------------------------------ styles (unvalenced)
+[[style]]
+id = "whisper"
+arousal = 0.20
+synonyms = ["whisper", "whispering", "whispered", "hushed", "in a small voice"]
+fish_s1 = "whispering"
+fish_s2 = "whisper"
+step_audio = "whisper"
+
+[[style]]
+id = "shout"
+arousal = 0.95
+synonyms = ["shout", "shouting", "yelling", "loud", "raised voice"]
+fish_s1 = "shouting"
+fish_s2 = "shouting"
+
+[[style]]
+id = "scream"
+arousal = 1.00
+synonyms = ["scream", "screaming", "shrieking"]
+fish_s1 = "screaming"
+fish_s2 = "screaming"
+
+[[style]]
+id = "soft"
+arousal = 0.20
+synonyms = ["soft", "soft tone", "gentle", "tender", "quietly"]
+fish_s1 = "soft tone"
+fish_s2 = "soft"
+
+[[style]]
+id = "broadcast"
+arousal = 0.55
+synonyms = ["broadcast", "news", "anchor", "presenter", "professional broadcast tone"]
+fish_s2 = "professional broadcast tone"
+step_audio = "news"
+
+[[style]]
+id = "narrator"
+arousal = 0.40
+synonyms = ["narrator", "narration", "storytelling", "audiobook"]
+fish_s2 = "narrator"
+
+[[style]]
+id = "singing"
+arousal = 0.65
+synonyms = ["singing", "sung", "melodic"]
+fish_s2 = "singing"
+
+[[style]]
+id = "authoritative"
+arousal = 0.60
+synonyms = ["authoritative", "authority", "commanding", "firm"]
+fish_s2 = "authoritative"
+step_audio = "authority"
+
+[[style]]
+id = "warm"
+arousal = 0.35
+synonyms = ["warm", "friendly", "kindly"]
+fish_s2 = "warm"
+step_audio = "warm"
+
+[[style]]
+id = "fast"
+arousal = 0.75
+synonyms = ["fast", "quick", "rapid", "in a hurry tone"]
+fish_s1 = "in a hurry tone"
+fish_s2 = "fast"
+
+[[style]]
+id = "child"
+arousal = 0.60
+synonyms = ["child", "childlike", "young"]
+fish_s2 = "childlike voice"
+step_audio = "child"
+
+[[style]]
+id = "elderly"
+arousal = 0.30
+synonyms = ["elderly", "older", "aged", "old"]
+fish_s2 = "elderly voice"
+step_audio = "older"
+
+[[style]]
+id = "accented"
+arousal = 0.50
+synonyms = ["accented", "with strong accent", "accent"]
+fish_s2 = "with strong accent"
+cosyvoice = "[accent]"
+
+# ------------------------------------------------------------------- point events
+[[event]]
+id = "laugh"
+arousal = 0.85
+synonyms = ["laugh", "laughs", "laughing", "laughter", "haha"]
+fish_s1 = "laughing"
+fish_s2 = "laughing"
+cosyvoice = "[laughter]"
+step_audio = "laugh"
+
+[[event]]
+id = "chuckle"
+arousal = 0.60
+synonyms = ["chuckle", "chuckles", "chuckling", "giggle"]
+fish_s1 = "chuckling"
+fish_s2 = "chuckle"
+
+[[event]]
+id = "sigh"
+arousal = 0.30
+synonyms = ["sigh", "sighs", "sighing", "exhale"]
+fish_s1 = "sighing"
+fish_s2 = "sigh"
+step_audio = "sigh"
+
+[[event]]
+id = "breath"
+arousal = 0.35
+synonyms = ["breath", "breathe", "inhale", "breathing"]
+fish_s2 = "inhale"
+cosyvoice = "[breath]"
+step_audio = "breath"
+
+[[event]]
+id = "quick_breath"
+arousal = 0.60
+synonyms = ["quick breath", "gasp", "sharp breath"]
+fish_s2 = "gasp"
+cosyvoice = "[quick_breath]"
+
+[[event]]
+id = "cough"
+arousal = 0.45
+synonyms = ["cough", "coughs", "coughing", "clearing throat"]
+fish_s2 = "clearing throat"
+cosyvoice = "[cough]"
+step_audio = "cough"
+
+[[event]]
+id = "sob"
+arousal = 0.75
+synonyms = ["sob", "sobbing", "crying", "crying loudly", "weeping"]
+fish_s1 = "sobbing"
+fish_s2 = "sobbing"
+
+[[event]]
+id = "pant"
+arousal = 0.80
+synonyms = ["pant", "panting", "out of breath", "breathing heavily"]
+fish_s1 = "panting"
+fish_s2 = "panting"
+
+[[event]]
+id = "groan"
+arousal = 0.55
+synonyms = ["groan", "groaning", "moan", "moaning"]
+fish_s1 = "groaning"
+fish_s2 = "moaning"
+
+[[event]]
+id = "tsk"
+arousal = 0.45
+synonyms = ["tsk", "tut", "tutting"]
+fish_s2 = "tsk"
+
+[[event]]
+id = "clucking"
+arousal = 0.40
+synonyms = ["clucking", "cluck"]
+fish_s2 = "clucking"
+cosyvoice = "[clucking]"
+
+[[event]]
+id = "audience_laughter"
+arousal = 0.70
+synonyms = ["audience laughter", "crowd laughing", "background laughter", "audience laughing"]
+fish_s1 = "audience laughing"
+fish_s2 = "audience laughter"
+
+[[event]]
+id = "uhm"
+arousal = 0.35
+synonyms = ["uhm", "um", "erm", "hesitation sound"]
+fish_s2 = "uhm"
+step_audio = "uhm"

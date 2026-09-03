@@ -44,6 +44,8 @@ cuda = [
 ]
 
 [dependencies]
+# D1: the cue parser/registry live in syrinx-cue; this crate keeps only the crossfade.
+syrinx-cue = { path = "../syrinx-cue" }
 axum = "0.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
