@@ -231,7 +231,11 @@ impl FishConfig {
         let codec = CodecConfig {
             num_codebooks: 10,    // 1 semantic-derived + 9 residual
             semantic_size: 4096,
-            residual_size: 1024,  // PARITY: confirm s2 codec codebook size on-box
+            // CONFIRMED on-box 2026-09-03: every `quantizer.quantizer.quantizers.{0..8}
+            // .codebook.weight` in s2-pro's codec.pth is [1024, 8] (semantic is [4096, 8]).
+            // Note `S2Pro::load` overwrites this with the fast head's 4096 — see the note
+            // there; the codec itself no longer takes any ceiling from this field.
+            residual_size: 1024,
             codebook_dim: 8,      // PARITY: confirm s2 codec codebook_dim on-box
             sample_rate: 44_100,
             frame_hop: 2048,      // PARITY: confirm s2 codec hop / frame rate on-box

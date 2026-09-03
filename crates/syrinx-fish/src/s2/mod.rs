@@ -19,12 +19,17 @@
 
 // The backend body is Candle-backed and so lives behind the crate's `real` feature
 // (mirroring `common::dualar`/`codec` and the s1 backend); `config`/`sampling` stay pure.
+// `codec` and `load` are public so the codec can be exercised WITHOUT the LM. CLAUDE.md
+// names the EVA-GAN codec the least-certain piece in the tree and the first thing to
+// scrutinize on-box; a codec-only test loads ~2 GB (decode side, f32) where going through
+// `S2Pro` costs ~10 GB on GPU or ~19 GB on the CPU parity path. That difference is what
+// makes a boundary test on the codec routinely runnable instead of a special occasion.
 #[cfg(feature = "real")]
-pub(crate) mod codec;
+pub mod codec;
 #[cfg(feature = "real")]
 mod fast_ar;
 #[cfg(feature = "real")]
-pub(crate) mod load;
+pub mod load;
 #[cfg(feature = "real")]
 mod nn;
 #[cfg(feature = "real")]
@@ -82,9 +87,11 @@ mod backend {
             f.attention_qkv_bias = w.has("fast_layers.0.attention.wqkv.bias");
             f.attention_o_bias = w.has("fast_layers.0.attention.wo.bias");
         }
-        // Residual codebook width == the shared value/output table height (4096). This is
-        // both the MCF per-codebook stride on the slow embed and the fast head's logit
-        // width (and so `first_code`'s clamp ceiling).
+        // The fast AR head's logit width (4096) — the MCF per-codebook stride on the slow
+        // embed and `first_code`'s clamp ceiling. Despite the field name this is NOT the
+        // codec's residual codebook height (those tables are 1024 x 8); the codec clamps
+        // against its own tables in `EvaGanDac::decode_codebook` and must never take a
+        // ceiling from here.
         let residual = w.g("fast_embeddings.weight")?.dim(0)?;
         cfg.codec.residual_size = residual;
         Ok(())

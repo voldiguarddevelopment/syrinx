@@ -338,7 +338,15 @@ impl EvaGanDac {
     fn decode_codebook(&self, prefix: &str, codes: &[u32]) -> Result<Tensor> {
         let t = codes.len();
         let cb = self.w.g(&format!("{prefix}.codebook.weight"))?; // [size, cbdim]
-        let idx = Tensor::from_vec(codes.to_vec(), (t,), self.dev())?;
+        // Clamp against THIS table's own height, which is the only ceiling that is always
+        // right. The reference clamps here too (`DownsampleResidualVectorQuantize.decode`),
+        // and the two tables differ: the semantic codebook has 4096 entries but every
+        // residual codebook has 1024. `CodecConfig::residual_size` is the fast AR head's
+        // logit width (4096) — a *sampling* bound, not a table height — so using it here
+        // let a residual code in 1024..=4095 reach `index_select` out of bounds.
+        let ceiling = (cb.dim(0)? - 1) as u32;
+        let clamped: Vec<u32> = codes.iter().map(|&c| c.min(ceiling)).collect();
+        let idx = Tensor::from_vec(clamped, (t,), self.dev())?;
         let zp = cb.index_select(&idx, 0)?; // [T, cbdim]
         let zp = zp.transpose(0, 1)?.unsqueeze(0)?.contiguous()?; // [1, cbdim, T]
         self.causal_conv1d(
@@ -436,17 +444,13 @@ impl EvaGanDac {
         let host: Vec<u32> = codes.to_dtype(DType::U32)?.flatten_all()?.to_vec1()?;
         let row = |r: usize| -> Vec<u32> { (0..t).map(|c| host[r * t + c]).collect() };
 
-        let sem_max = (self.cfg.semantic_size - 1) as u32;
-        let res_max = (self.cfg.residual_size - 1) as u32;
-
         // Factorized RVQ from_codes: semantic codebook 0 + 9 residual codebooks, all
-        // summed into the shared 1024-dim latent.
-        let sem: Vec<u32> = row(0).iter().map(|&c| c.min(sem_max)).collect();
-        let mut z = self.decode_codebook("quantizer.semantic_quantizer.quantizers.0", &sem)?;
+        // summed into the shared 1024-dim latent. Range-clamping lives in
+        // `decode_codebook`, against each table's own height — see the note there.
+        let mut z = self.decode_codebook("quantizer.semantic_quantizer.quantizers.0", &row(0))?;
         for i in 0..(n_cb - 1) {
-            let res: Vec<u32> = row(i + 1).iter().map(|&c| c.min(res_max)).collect();
             let zr =
-                self.decode_codebook(&format!("quantizer.quantizer.quantizers.{i}"), &res)?;
+                self.decode_codebook(&format!("quantizer.quantizer.quantizers.{i}"), &row(i + 1))?;
             z = (z + zr)?;
         }
 
