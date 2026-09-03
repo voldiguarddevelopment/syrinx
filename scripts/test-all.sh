@@ -2,7 +2,7 @@
 # =============================================================================
 # Syrinx — ONE-RUN test/parity suite for the WHOLE project.
 #
-#   CosyVoice2 · CosyVoice3 · Fish s1-mini · Fish s2-pro · voice · emotion · eval
+#   CosyVoice2 · CosyVoice3 · Fish s1-mini · Fish s2-pro · Qwen3-TTS · voice · emotion · eval
 #
 # Run on the model box (weights + parity fixtures present). Each component group
 # either PASSES, FAILS, or SKIPS (when its weights/fixtures aren't configured) —
@@ -43,7 +43,7 @@ GROUP_cv3e2e="real_cv3_e2e_parity real_cv3_eval_metrics real_cv3_voice real_cv3_
 # Fish groups — test files are added by the syrinx-fish integration wave; the runner
 # tolerates absent files (reports SKIP) so this script is stable as the port lands.
 GROUP_fish_s1="real_fish_s1_parity real_fish_s1_e2e"
-GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e"
+GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e real_fish_s2_codec_clamp"
 # STT (pure-Rust Whisper) — the audio->text reverse path + the native TTS oracle.
 # Env-gated on a Whisper model dir + a test clip; self-skips off-box. Download:
 #   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
@@ -51,9 +51,17 @@ GROUP_stt="real_stt"
 
 # Expressive control (the cue layer: syrinx-cue + its wiring). Model-free and
 # deterministic — these run everywhere and must never SKIP.
-GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate"
+GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate cue_activation_measure"
 
-ALL_GROUPS="modelfree cue cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
+# Qwen3-TTS port (syrinx-qwen). Model-FREE half only: the geometry contract, the loader's
+# tensor manifest against the published safetensors HEADERS (checked in under
+# tests/golden/qwen/, no weight data), and the pure-Rust sampling stack. No weights, no
+# Candle, no GPU — these run everywhere and must never SKIP. The weight-backed half
+# (tokenizer goldens, verify_checkpoint, codec/speaker parity, end-to-end synth) is NOT
+# here: see docs/backends/QWEN_PORT_STATUS.md for what it needs and how to run it.
+GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract"
+
+ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
 
 group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
 

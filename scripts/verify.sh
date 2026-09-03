@@ -2,7 +2,7 @@
 # =============================================================================
 # Syrinx — ONE-FILE end-to-end verification. Run this on the model box and it
 # does everything: preflight → build → config → (download) → parity fixtures →
-# test the WHOLE project (CV2 · CV3 · Fish s1-mini · Fish s2-pro · voice · emotion).
+# test the WHOLE project (CV2 · CV3 · Fish s1-mini · Fish s2-pro · Qwen3-TTS · voice · emotion).
 #
 #   ./scripts/verify.sh                 full verify (uses scripts/test-all.env)
 #   ./scripts/verify.sh --download      also download the Fish weights from HF first
@@ -39,16 +39,24 @@ GROUP_cv2e2e="real_synth_e2e real_eval_metrics real_eval_multilingual real_lm_ha
 GROUP_cv3="real_cv3_lm_parity real_cv3_flow_parity real_cv3_flow_stream_consistency real_cv3_hift_parity real_cv3_stok_parity real_cv3_ras real_cv3_quant_parity real_cv3_quant_footprint"
 GROUP_cv3e2e="real_cv3_e2e_parity real_cv3_eval_metrics real_cv3_voice real_cv3_emotion"
 GROUP_fish_s1="real_fish_s1_parity real_fish_s1_e2e"
-GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e"
+GROUP_fish_s2="real_fish_s2_parity real_fish_s2_e2e real_fish_s2_codec_clamp"
 # STT (pure-Rust Whisper): audio->text + the native TTS oracle. Self-skips off-box.
 #   hf download openai/whisper-base --local-dir "$SYRINX_STT_MODEL_DIR"
 GROUP_stt="real_stt"
 
 # Expressive control (the cue layer: syrinx-cue + its wiring). Model-free and
 # deterministic — these run everywhere and must never SKIP.
-GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate"
-ALL_GROUPS="modelfree cue cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
-[ "$QUICK" = 1 ] && ALL_GROUPS="modelfree cue"
+GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate cue_activation_measure"
+
+# Qwen3-TTS port (syrinx-qwen). Model-FREE half only: the geometry contract, the loader's
+# tensor manifest against the published safetensors HEADERS (checked in under
+# tests/golden/qwen/, no weight data), and the pure-Rust sampling stack. No weights, no
+# Candle, no GPU — these run everywhere and must never SKIP. The weight-backed half
+# (tokenizer goldens, verify_checkpoint, codec/speaker parity, end-to-end synth) is NOT
+# here: see docs/backends/QWEN_PORT_STATUS.md for what it needs and how to run it.
+GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract"
+ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt"
+[ "$QUICK" = 1 ] && ALL_GROUPS="modelfree cue qwen"
 group_tests() { local v="GROUP_$1"; echo "${!v:-}"; }
 
 # ── 0. preflight ─────────────────────────────────────────────────────────────
@@ -96,16 +104,35 @@ fi
 
 # ── 4. Fish parity fixtures ──────────────────────────────────────────────────
 step "4/6  Fish parity fixtures (scripts/gen-fish-ref.py)"
-if [ "$QUICK" = 1 ]; then
-  echo "  (skipped in --quick)"
-elif command -v python >/dev/null && [ -f "$ROOT/scripts/gen-fish-ref.py" ]; then
-  if python "$ROOT/scripts/gen-fish-ref.py" 2>&1 | tail -4 | sed 's/^/  /'; [ "${PIPESTATUS[0]}" -ne 0 ]; then
-    echo "  $(c '1;33' 'gen-fish-ref.py did not complete (likely the `# TODO(on-box)` model-load).')"
-    echo "  $(c '1;33' '   → Fish PARITY tests will SKIP; the Fish e2e smoke tests still run.')"
-  fi
+# NOT run automatically. Dumping the fixtures loads the REFERENCE fish-speech model:
+# the codec anchor costs ~2 GB, the s2-pro slow-AR anchor ~19 GB in CPU/f32 (the same
+# footprint as real_fish_s2_e2e). Firing that off in the middle of a verify would race
+# the suite below for memory, so this step only reports readiness and prints the exact
+# commands. Run them once, under scripts/run-isolated.sh, then set SYRINX_FISH_*_REF.
+if [ -n "${SYRINX_FISH_S1_REF:-}${SYRINX_FISH_S2_REF:-}" ]; then
+  for v in S1 S2; do
+    eval "p=\${SYRINX_FISH_${v}_REF:-}"
+    [ -n "$p" ] || continue
+    if [ -f "$p" ]; then echo "  $(c '32' "SYRINX_FISH_${v}_REF present") $p"
+    else echo "  $(c '31' "SYRINX_FISH_${v}_REF set but missing") $p"; fi
+  done
 else
-  echo "  $(c '1;33' 'python or gen-fish-ref.py missing — Fish parity tests will SKIP')"
+  echo "  $(c '1;33' 'no SYRINX_FISH_S1_REF / SYRINX_FISH_S2_REF — Fish PARITY tests will SKIP')"
+  echo "  $(c '1;33' '   (the Fish e2e smoke tests still run)')"
 fi
+FISHPY="${SYRINX_FISH_REF_PY:-$HOME/refs/fish-speech/.venv/bin/python}"
+FISHROOT="${FISH_SPEECH_ROOT:-$HOME/refs/fish-speech}"
+if [ -x "$FISHPY" ]; then
+  echo "  reference interpreter: $FISHPY"
+else
+  echo "  $(c '1;33' "no reference interpreter at $FISHPY")"
+  echo "     cd $FISHROOT && uv venv --python 3.12 .venv && uv sync --extra cpu"
+fi
+echo "  to (re)generate — one at a time, never alongside another real-feature suite:"
+echo "     MEMMAX=24G scripts/run-isolated.sh $FISHPY scripts/gen-fish-ref.py \\"
+echo "        --variant s2-pro --ckpt \"\${SYRINX_FISH_S2_DIR:-/data/models/s2-pro}\" \\"
+echo "        --out \$HOME/parity-fish/s2/ref.safetensors --fish-speech-root $FISHROOT"
+echo "     (add --codec-only for the cheap ~2 GB codec anchor first)"
 
 # ── 5. test everything ───────────────────────────────────────────────────────
 step "5/6  test the whole project"
