@@ -235,8 +235,17 @@ Narrower entry points (all read the same `test-all.env`):
   print "all configured groups green" with exit 0, which is the one outcome this project
   cannot tolerate. Groups and families are defined once, in `scripts/test-groups.sh`,
   and shared by both runners so they cannot drift.
-  Use `--test real_cue_activation` for the C4.2 certification run: it is deliberately in
-  no group, so it never fires on a routine board.
+  **Opt-in tests** are deliberately in no group and no family, so no routine board and no
+  full `verify.sh` ever fires them; `--list` prints them in their own table under the
+  groups, and you reach one by naming it:
+      ./scripts/test-all.sh --test real_cue_activation       # C4.2 certification run
+      ./scripts/test-all.sh --test real_qwen_greedy_parity   # ~21 min, 1.7B CPU/f32
+  `real_qwen_greedy_parity` is the multi-frame greedy-decode anchor for the Qwen3-TTS
+  generation loop — the only gate that covers the KV cache, position advancement, the
+  per-frame talker→predictor handoff and the trailing-text schedule across many frames.
+  Run it deliberately after ANY change to that loop. It left `GROUP_qwen_ckpt` because it
+  alone took 21.6 min of that group's 21.6 min; the four remaining weight-backed Qwen
+  gates take 23 s together. Opt-in is not optional: an unrun gate is a dead gate.
 - `./scripts/run-fish.sh <s1-mini|s2-pro> "<text>" <ref.wav> [out]` — one synth; `--parity <variant>` runs that model's Fish tests.
 - `./scripts/synth-samples.sh <variant> [--scale small|reply|chapter] [--lang L]` — batch-render the 610-sample corpus.
 

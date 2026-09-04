@@ -52,9 +52,41 @@ GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract"
 # Weight-backed Qwen tests. Kept OUT of GROUP_qwen deliberately: that group is model-free
 # and must never SKIP, while these self-skip without a checkpoint and the reference dump
 # from scripts/gen-qwen-ref.py.
-GROUP_qwen_ckpt="real_qwen_prompt_parity real_qwen_stack_parity real_qwen_encode_parity real_qwen_speaker_parity real_qwen_greedy_parity"
+# real_qwen_greedy_parity is NOT here — it is an opt-in test, see OPT_IN_TESTS below.
+# Measured on NovaBox (CPU/f32, --features real --release, warm build): these four take
+# 23 s together, where the five-test group took 21.6 min.
+GROUP_qwen_ckpt="real_qwen_prompt_parity real_qwen_stack_parity real_qwen_encode_parity real_qwen_speaker_parity"
 
 ALL_GROUPS="modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qwen_ckpt"
+
+# ---- opt-in tests (deliberately in NO group) ---------------------------------
+# A test named here is reachable only by naming it:
+#
+#     ./scripts/test-all.sh --test <name>          (verify.sh takes the same selector)
+#
+# It belongs to no group and no family, so neither a bare `test-all.sh`, nor a bare
+# `verify.sh`, nor any family selector ever fires it. That is reserved for gates whose
+# cost is measured in tens of minutes: real gates, run deliberately, never on a routine
+# board. Putting one in a group of its own would NOT achieve that — both runners expand
+# ALL_GROUPS when given no selector, so a group is by definition part of the full board;
+# and a group left out of ALL_GROUPS would vanish from `--list` and from the grouped run
+# output, which is worse than being honestly ungrouped.
+#
+# They ARE listed by `--list` (list_groups prints this table), because a gate nobody can
+# find is a gate nobody runs. Opt-in, not hidden.
+OPT_IN_TESTS="real_cue_activation real_qwen_greedy_parity real_fish_s2_batch_parity"
+
+optin_why() {
+  case "$1" in
+    real_cue_activation)
+      echo "C4.2 cue-activation certification — full render sweep + Whisper scoring" ;;
+    real_qwen_greedy_parity)
+      echo "Qwen3-TTS multi-frame greedy AR loop vs reference — ~21 min, 1.7B CPU/f32" ;;
+    real_fish_s2_batch_parity)
+      echo "Fish s2 batched vs single prefill (SYRINX_FISH_BATCH_PARITY=1) — ~19 GB CPU/f32" ;;
+    *) echo "" ;;
+  esac
+}
 
 # ---- family -> groups --------------------------------------------------------
 # One model family per line, plus meta-families for the two cuts that matter most
@@ -85,8 +117,16 @@ is_group()  { [ -n "$(group_tests  "$1")" ]; }
 is_family() { [ -n "$(family_groups "$1")" ]; }
 is_test()   { [ -f "$SYRINX_ROOT/tests/$1.rs" ]; }
 
+list_optin() {
+  for t in $OPT_IN_TESTS; do printf '  %-24s %s\n' "$t" "$(optin_why "$t")"; done
+}
+
+# Prints the groups, then the opt-in tests that deliberately belong to none of them.
+# Both runners' `--list` calls this one function, so the second table cannot drift.
 list_groups() {
   for g in $ALL_GROUPS; do printf '  %-12s %s\n' "$g" "$(group_tests "$g")"; done
+  echo "opt-in tests (in no group — run with: --test <name>):"
+  list_optin
 }
 
 list_families() {

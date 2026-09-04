@@ -38,7 +38,7 @@
 
 use candle_core::{DType, Device, Result, Tensor, D};
 
-use super::nn::{attention, causal_mask_at, precompute_rope, swiglu, AttnShape, KvCache, Weights};
+use super::nn::{attention, precompute_rope, swiglu, AttnShape, KvCache, Weights};
 use crate::common::config::CodecConfig;
 
 // --- s2 causal-DAC structural constants ---------------------------------------
@@ -62,8 +62,23 @@ const TF_HEAD_DIM: usize = 64;
 /// Codec Transformer RoPE base. PARITY: the fish reference uses 10_000 for the codec
 /// Transformer; confirm on-box (the LM backbone uses a larger base).
 const TF_ROPE_BASE: f64 = 10_000.0;
-/// Codec Transformer / norm epsilon. PARITY: confirm the codec RMSNorm eps on-box.
+/// Codec Transformer / norm epsilon. CONFIRMED on-box 2026-09-04: the reference
+/// `ModelArgs.norm_eps` for every codec Transformer is 1e-5.
 const TF_NORM_EPS: f64 = 1e-5;
+/// Window-limited-attention window for `quantizer.pre_module` / `quantizer.post_module`.
+///
+/// CONFIRMED on-box 2026-09-04 by instantiating the reference codec and reading
+/// `WindowLimitedTransformer.window_size` off each module: both bottleneck Transformers
+/// are 128, the deepest encoder block's is [`TF_WINDOW_ENCODER`]. The reference builds a
+/// `make_window_limited_mask`, NOT a plain causal one, so query `i` may only attend keys
+/// `max(0, i - window + 1) ..= i`. Using a full causal mask here agreed with the
+/// reference only while the latent was shorter than the window — i.e. under
+/// `128 * 2048 / 44100 == 5.94 s` of audio — and silently diverged above it.
+const TF_WINDOW_BOTTLENECK: usize = 128;
+/// Window-limited-attention window for the deepest encoder block's Transformer
+/// (`encoder.block.4.block.5`). CONFIRMED on-box 2026-09-04 (see [`TF_WINDOW_BOTTLENECK`]);
+/// at that stage's 86.13 Hz rate 512 frames is also ~5.94 s.
+const TF_WINDOW_ENCODER: usize = 512;
 /// `Snake1d` numerical epsilon (`(alpha + 1e-9).reciprocal()`).
 const SNAKE_EPS: f64 = 1e-9;
 /// `F.normalize` epsilon (p=2).
@@ -455,7 +470,7 @@ impl EvaGanDac {
         }
 
         // Decode bottleneck: `post_module` Transformer (after RVQ, before upsample).
-        self.transformer("quantizer.post_module", &z)
+        self.transformer("quantizer.post_module", &z, TF_WINDOW_BOTTLENECK)
     }
 
     /// The strictly-causal synthesis stack: ConvNeXt `upsample` (×4) → DAC generator
@@ -609,7 +624,7 @@ impl EvaGanDac {
         let n = self.cfg.encoder_rates.len();
         let bp = format!("encoder.block.{n}");
         let x = if self.w.has(&format!("{bp}.block.5.norm.weight")) {
-            self.transformer(&format!("{bp}.block.5"), x)?
+            self.transformer(&format!("{bp}.block.5"), x, TF_WINDOW_ENCODER)?
         } else {
             x.clone()
         };
@@ -774,7 +789,7 @@ impl EvaGanDac {
         // sequence, so it must not be chunked — but it runs at 1/2048 the sample rate,
         // where length costs nothing.
         let z = self.encode_latent_chunked(&wav, encode_chunk_frames_env())?;
-        let z = self.transformer("quantizer.pre_module", &z)?;
+        let z = self.transformer("quantizer.pre_module", &z, TF_WINDOW_BOTTLENECK)?;
 
         // Factorized RVQ: 1 semantic codebook, then 9 residual codebooks on the residual.
         let (sem_codes, z_sem) =
@@ -807,13 +822,15 @@ impl EvaGanDac {
     /// layer count is discovered from the checkpoint. Channels-first in/out; inside it is
     /// a channels-last pre-norm RoPE Transformer (RMSNorm → `Attention` → LayerScale
     /// residual → RMSNorm → SwiGLU → LayerScale residual), matching the fish reference
-    /// `TransformerBlock`. Attention is **full causal** (the `causal_mask` bool buffer in
-    /// the checkpoint is a triangular `register_buffer`, recomputed here since Candle's
-    /// pickle reader skips BoolStorage).
+    /// `TransformerBlock`. Attention is **window-limited causal** with `window` positions
+    /// of context (the checkpoint's `causal_mask` bool buffer is a plain triangular
+    /// `register_buffer` that the reference does NOT use for these modules — it builds
+    /// `make_window_limited_mask` instead — and Candle's pickle reader skips BoolStorage
+    /// anyway, so the mask is recomputed here).
     //
-    // PARITY: RoPE base (`TF_ROPE_BASE`) + RMSNorm eps (`TF_NORM_EPS`) are best-effort;
-    // the `freqs_cis` buffer in the checkpoint is ignored in favour of recomputation.
-    fn transformer(&self, prefix: &str, x: &Tensor) -> Result<Tensor> {
+    // CONFIRMED on-box 2026-09-04 against the reference codec: RoPE base 10_000, RMSNorm
+    // eps 1e-5, head_dim 64, and — see `window` below — a WINDOW-limited causal mask.
+    fn transformer(&self, prefix: &str, x: &Tensor, window: usize) -> Result<Tensor> {
         // Discover the layer count from the checkpoint (8 for pre/post_module, 4 for the
         // encoder block.4 Transformer).
         let mut n_layers = 0usize;
@@ -832,8 +849,23 @@ impl EvaGanDac {
         let head_dim = TF_HEAD_DIM;
         let n_head = dim / head_dim;
         let dt = self.w.dt;
+        // The reference's RoPE table is BF16-ROUNDED, and reproducing that is required for
+        // parity. `Transformer.__init__` calls
+        // `precompute_freqs_cis(327680, head_dim, rope_base)` WITHOUT a `dtype`, and that
+        // argument defaults to `torch.bfloat16`. `load_codec_model(precision=float32)`
+        // later casts the buffer up to f32, but the bf16 rounding is already baked into
+        // the values, so the reference effectively runs RoPE at bf16 precision — and the
+        // weights were trained that way. Computing the table in full f32 (what this did
+        // before) is *more* accurate and therefore WRONG: measured on-box 2026-09-04, it
+        // was the entire cause of the s2 codec parity failure — 6.36e-3 max-abs on the
+        // decoded waveform against a 1e-3 tolerance, versus 1.28e-5 once the table is
+        // rounded. The reference's own f32-vs-f64 spread is 4.4e-6, so that gap was 1400x
+        // the numerical floor: a real defect, not accumulation noise.
         let (cos, sin) = precompute_rope(t, head_dim, TF_ROPE_BASE, self.dev(), dt)?;
-        let mask = causal_mask_at(0, t, self.dev(), dt)?; // full lower-triangular causal mask
+        let cos = cos.to_dtype(DType::BF16)?.to_dtype(dt)?;
+        let sin = sin.to_dtype(DType::BF16)?.to_dtype(dt)?;
+        // Window-limited causal mask (`make_window_limited_mask`), NOT a full causal one.
+        let mask = window_causal_mask(t, window, self.dev(), dt)?;
         let shape = AttnShape {
             n_head,
             n_local_heads: n_head,
@@ -882,6 +914,23 @@ impl EvaGanDac {
 }
 
 // --- free helpers -------------------------------------------------------------
+
+/// Additive **window-limited** causal mask `[t, t]`, reproducing the reference
+/// `WindowLimitedTransformer.make_window_limited_mask`: query `i` may attend key `j` iff
+/// `max(0, i - window + 1) <= j <= i`, else `-inf`.
+fn window_causal_mask(t: usize, window: usize, dev: &Device, dt: DType) -> Result<Tensor> {
+    let mut data = vec![0f32; t * t];
+    for i in 0..t {
+        for j in 0..t {
+            let too_late = j > i;
+            let too_old = i >= window && j < i - window + 1;
+            if too_late || too_old {
+                data[i * t + j] = f32::NEG_INFINITY;
+            }
+        }
+    }
+    Tensor::from_vec(data, (t, t), dev)?.to_dtype(dt)
+}
 
 /// `get_extra_padding_for_conv1d`: the right-side alignment padding for a causal conv.
 fn extra_padding(length: usize, kernel_eff: usize, stride: usize, padding_total: usize) -> usize {
