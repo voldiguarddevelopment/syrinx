@@ -1,6 +1,6 @@
 # ADR-0002 — `\[` cannot currently speak a literal bracket
 
-Status: **proposed — blocked on a maintainer decision (requires unfreezing a test)**
+Status: **accepted and implemented 2026-09-05** (maintainer authorized the unfreeze)
 Date: 2026-09-05
 Supersedes: nothing. Narrows ADR-0001 §9.1 / **D5** if accepted.
 
@@ -101,6 +101,38 @@ Recommendation: **option 1**. The defect is a genuine violation of a stated inva
 fix is three lines, and the frozen test it contradicts is asserting an assumption
 (`doc.text` holds resolved brackets) that the rest of the module's documentation
 contradicts — so unfreezing it is correcting the record, not weakening a gate.
+
+## Decision — option 1, implemented
+
+The maintainer authorized the unfreeze on 2026-09-05. `parse.rs` now keeps the escape
+(`text.push(c); text.push(n);`) and `pass_strip` resolves it once, at the end of lowering,
+exactly as its own doc comment always claimed. Three frozen expectations were restated to
+match the corrected contract — none were loosened:
+
+| file | change |
+|---|---|
+| `tests/parser_fixtures.rs` | 3 escape fixtures now expect the escape to survive `parse` (`a \[b\] c.` stays escaped in `doc.text`) rather than being resolved there |
+| `tests/invariant_property.rs` | `esc()` skips already-escaped brackets, so serialising no longer emits `\\[` |
+| `tests/qwen_server.rs` | its bracket check becomes `brackets <= escaped`, the same bound the headline property already used. The stricter "no brackets at all" form it had held ONLY while this defect was live |
+
+Verified end to end after the change:
+
+```
+$ syrinx cue --text 'he said \[hello\] loudly' --backend fish-s2-pro
+text:    "he said [hello] loudly"          <- the defect, fixed
+
+$ syrinx cue --text 'array[0] index.' --backend fish-s2-pro
+text:    "array index."   cues: 1          <- D5 intact: unescaped is still cue syntax
+
+$ syrinx cue --text '[happy] hello \[world\]' --backend qwen3-1.7b-customvoice
+text:    " hello [world]"  cues: 1
+  [0] instruct "Speak in a happy, cheerful tone"   <- cue honoured AND bracket spoken
+```
+
+Both backend kinds (`Inline::Open` and `Inline::None`) behave identically, all nine
+`syrinx-cue` suites pass, and the boards are green: model-free 20 PASS, `qwen3` 8 PASS,
+0 SKIP, 0 FAIL. The dangerous direction of the invariant is unchanged — nothing leaks, and
+the property test still bounds output brackets by source escapes.
 
 ## Impact while unfixed
 

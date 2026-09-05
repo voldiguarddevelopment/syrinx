@@ -104,7 +104,31 @@ fn hard_invariant_holds_for_the_fixture_corpus_too() {
 /// serialisation reparses them as cues. This is the serialiser's half of the escape
 /// contract.
 fn esc(s: &str) -> String {
-    s.replace('[', "\\[").replace(']', "\\]")
+    // Escape only brackets that are NOT already escaped. Since adr/0002 the parser leaves
+    // `\[` intact in `doc.text` (resolving it there made lowering's strip a second pass
+    // that destroyed it), so blindly re-escaping would emit `\\[`, which reparses as a
+    // backslash followed by a cue opener and breaks the round-trip.
+    let mut out = String::with_capacity(s.len());
+    let b = s.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\' && matches!(b.get(i + 1), Some(b'[') | Some(b']')) {
+            out.push('\\');
+            out.push(b[i + 1] as char);
+            i += 2;
+            continue;
+        }
+        if b[i] == b'[' || b[i] == b']' {
+            out.push('\\');
+            out.push(b[i] as char);
+            i += 1;
+            continue;
+        }
+        let ch = s[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 fn serialize_fish(doc: &syrinx_cue::CueDoc) -> String {

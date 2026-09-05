@@ -176,6 +176,13 @@ pub fn parse(input: &str, vocab: &Vocab, opts: &ParseOptions) -> CueDoc {
         if c == '\\' && i + 1 < b.len() {
             let n = input[i + clen..].chars().next().unwrap();
             if n == '[' || n == ']' || n == '(' || n == ')' {
+                // Keep the ESCAPE; do not resolve it here. `pass_strip` is documented and
+                // tested as the one place `\[` becomes `[`, run exactly once at the very
+                // end of lowering. Resolving it here too made lowering's strip a SECOND
+                // pass, which `projection_strip.rs` pins as destroying the very brackets
+                // the first pass produced — so `\[`, which CLAUDE.md calls the only way to
+                // speak a literal bracket, could not speak one at all. See adr/0002.
+                text.push(c);
                 text.push(n);
                 i += clen + n.len_utf8();
                 continue;

@@ -40,9 +40,9 @@ const CASES: &[(&str, &str, usize)] = &[
     ("<|speaker:12|>hello.", "hello.", 1),
     ("[speaker 1] hey.", " hey.", 1),
     ("<|speaker:0|>a.<|speaker:1|>b.", "a.b.", 2),
-    (r"a \[b\] c.", "a [b] c.", 0),
-    (r"\[happy\] not a cue.", "[happy] not a cue.", 0),
-    (r"array\[0\] index.", "array[0] index.", 0),
+    (r"a \[b\] c.", r"a \[b\] c.", 0),
+    (r"\[happy\] not a cue.", r"\[happy\] not a cue.", 0),
+    (r"array\[0\] index.", r"array\[0\] index.", 0),
     // The documented cost of the strict rule: unescaped brackets in technical text are
     // cue syntax. Loud (text visibly missing + a cue in the report), not silent.
     ("array[0] index.", "array index.", 1),

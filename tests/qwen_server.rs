@@ -427,9 +427,25 @@ async fn no_cue_markup_ever_reaches_the_backend_as_spoken_text() {
             );
             let seen = rec.seen();
             assert!(!seen.is_empty(), "{} / {input:?}: nothing rendered", backend.as_str());
+            // An ESCAPED bracket is the one legitimate way a bracket may be spoken
+            // (CLAUDE.md: "`\[` is the only way to speak a literal bracket"), so the
+            // invariant is not "no brackets" — it is "no brackets the source did not
+            // escape". This mirrors the headline property in
+            // crates/syrinx-cue/tests/projection_strip.rs, which asserts the same bound.
+            // Asserting the stricter form here happened to hold only while adr/0002's
+            // defect was live and escapes were being destroyed; it would now forbid the
+            // fixed behaviour.
+            let escaped = input.matches(r"\[").count() + input.matches(r"\]").count();
             for seen in seen {
                 let text = &seen.text;
-                for bad in ['[', ']', '<', '>', '|'] {
+                let brackets = text.matches('[').count() + text.matches(']').count();
+                assert!(
+                    brackets <= escaped,
+                    "{} / {input:?}: {brackets} bracket(s) reached the backend but the \
+                     source escaped only {escaped}: {text:?}",
+                    backend.as_str()
+                );
+                for bad in ['<', '>', '|'] {
                     assert!(
                         !text.contains(bad),
                         "{} / {input:?}: cue markup `{bad}` reached the backend as text: \
