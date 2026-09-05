@@ -80,7 +80,7 @@ while [ $# -gt 0 ]; do
       case "$kind" in
         --group)  is_group  "$name" || { echo "not a group: '$name' (groups: $ALL_GROUPS)" >&2; BAD=1; continue; } ;;
         --family) is_family "$name" || { echo "not a family: '$name' (families: $ALL_FAMILIES)" >&2; BAD=1; continue; } ;;
-        --test)   is_test   "$name" || { echo "not a test: no tests/$name.rs" >&2; BAD=1; continue; } ;;
+        --test)   is_test   "$name" || { echo "not a test: no tests/$name.rs, and not one of: $PSEUDO_TESTS" >&2; BAD=1; continue; } ;;
       esac
       got="$(resolve_selector "$name")" || { BAD=1; continue; }
       SELECTED="$SELECTED $got" ;;
@@ -129,24 +129,35 @@ PASS=0; FAIL=0; SKIP=0; MISS=0
 declare -a FAILED_TESTS=()
 LOG="$(mktemp)"
 
+# One board row. What a row IS — its cargo argv, whether a SKIP marker is the
+# row's own verdict, and what detail it reports — is answered by
+# scripts/test-groups.sh, never here: rows that are not `--test <name>` (the
+# `crate_unit_tests` workspace-lib row) must not be special-cased into this
+# runner and verify.sh separately.
 run_one() {
   local t="$1"
-  if [ ! -f "$ROOT/tests/$t.rs" ]; then
+  if ! test_present "$t"; then
     printf '  %-40s \033[2mMISSING (not built yet)\033[0m\n' "$t"; ((MISS++)); return
   fi
-  cargo test $CARGO_FLAGS --test "$t" -- --nocapture >"$LOG" 2>&1
+  local -a targs=(); local a
+  while IFS= read -r a; do targs+=("$a"); done < <(test_cargo_args "$t")
+  cargo test $CARGO_FLAGS "${targs[@]}" -- --nocapture >"$LOG" 2>&1
   local rc=$?
+  # Passed as an ARGUMENT, never spliced into the format string: a detail that
+  # happened to contain a % would otherwise eat the next field.
+  local detail; detail="$(test_detail "$t" "$LOG")"
+  [ -n "$detail" ] && detail="  $(printf '\033[2m(%s)\033[0m' "$detail")"
   if [ $rc -ne 0 ]; then
-    printf '  %-40s \033[31mFAIL\033[0m\n' "$t"; ((FAIL++)); FAILED_TESTS+=("$t")
-  elif grep -qE 'SKIP |skipping ' "$LOG"; then
+    printf '  %-40s \033[31mFAIL\033[0m%s\n' "$t" "$detail"; ((FAIL++)); FAILED_TESTS+=("$t")
+  elif test_can_skip "$t" && grep -qE 'SKIP |skipping ' "$LOG"; then
     # Case-SENSITIVE, and the trailing space matters: the two real self-skip
     # conventions are `SKIP <name>: ...` and `skipping <name>: ...`. The old
     # case-insensitive bare `skip` also matched a passing test's *name* —
     # `concat_crossfade_skips_empty_segments_and_handles_none` in emotion_tags —
     # so a green model-free test was reported as SKIP on every board.
-    printf '  %-40s \033[33mSKIP\033[0m\n' "$t"; ((SKIP++))
+    printf '  %-40s \033[33mSKIP\033[0m%s\n' "$t" "$detail"; ((SKIP++))
   else
-    printf '  %-40s \033[32mPASS\033[0m\n' "$t"; ((PASS++))
+    printf '  %-40s \033[32mPASS\033[0m%s\n' "$t" "$detail"; ((PASS++))
   fi
 }
 

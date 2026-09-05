@@ -18,6 +18,8 @@ real = [
     "dep:syrinx-prosody",
     "dep:syrinx-fish",
     "dep:syrinx-stt",
+    "dep:syrinx-qwen",
+    "syrinx-qwen/real",
     "dep:serde_json",
     "dep:candle-core",
     "syrinx-serve/real",
@@ -47,6 +49,9 @@ syrinx-fish = { path = "../syrinx-fish", optional = true }
 # The pure-Rust Whisper STT engine behind the `stt` command (audio -> text) and the
 # native TTS-intelligibility oracle (`--check-tts` WER). Real-gated like the rest.
 syrinx-stt = { path = "../syrinx-stt", optional = true }
+# The pure-Rust Qwen3-TTS port behind the `qwen` command. Real-gated like the rest;
+# its Candle backends live behind `syrinx-qwen/real`.
+syrinx-qwen = { path = "../syrinx-qwen", optional = true }
 # Parse a `--plan <FILE.json>` render plan.
 serde_json = { version = "1", optional = true }
 # The `Device` handed to `Cv3Synthesizer::load_with_lm` for the `--rl` checkpoint

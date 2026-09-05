@@ -102,8 +102,16 @@ and the driver reproduces the reference's decode-`cat(ref_code, generated)`-then
 
 - **CUDA / bf16 on this path has never been run.** The CUDA tolerances in the test are
   labelled slack, not evidence. Do not cite them as parity.
-- **0.6B-Base is unanchored against a real clip** — the fixture is 1.7B. Re-running the
-  generator with `--ckpt …0.6B-Base` closes it.
+- ~~**0.6B-Base is unanchored against a real clip** — the fixture is 1.7B.~~ **CLOSED
+  2026-09-05.** The generator was re-run with `--ckpt … 0.6B-Base` into
+  `~/parity-qwen/speaker-0.6b.safetensors`, and `tests/real_qwen_speaker_parity.rs` now
+  iterates over every configured checkpoint rather than the first one it finds. The
+  1024-wide encoder agrees at **6e-7** per component (L2 norm 10.409607 vs 10.409612),
+  mel 0.00025, driver cosine 0.999980 — inside the bounds the 1.7B set, with more margin,
+  and no tolerance was moved. That 6e-7 is the reference's own noise floor: re-dumping the
+  same fixture with `OMP_NUM_THREADS=1` instead of 32 moves the reference's x-vector by
+  4.8e-7 with `wav24`/`mel` bit-identical. Full write-up in
+  `docs/backends/QWEN_PORT_STATUS.md` § "Both `-Base` widths anchored".
 - **Clone *quality* is unjudged.** WER says the words are right; whether it sounds like
   the reference speaker is SIM-o / perceptual, and per `CLAUDE.md` that is
   blocked-on-human, never automated into a green.

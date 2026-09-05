@@ -23,6 +23,8 @@ real = [
     "syrinx-speaker/real",
     "syrinx-acoustic/real",
     "syrinx-vocoder/real",
+    "dep:syrinx-qwen",
+    "syrinx-qwen/real",
 ]
 # Text normalization in the real synth path: when enabled alongside `real`, the
 # synthesizer normalizes `tts_text`/`prompt_text` (wetext-style zh+en) before
@@ -41,6 +43,7 @@ cuda = [
     "syrinx-speaker/cuda",
     "syrinx-acoustic/cuda",
     "syrinx-vocoder/cuda",
+    "syrinx-qwen/cuda",
 ]
 
 [dependencies]
@@ -72,3 +75,7 @@ syrinx-frontend = { path = "../syrinx-frontend", optional = true }
 syrinx-speaker = { path = "../syrinx-speaker", optional = true }
 syrinx-acoustic = { path = "../syrinx-acoustic", optional = true }
 syrinx-vocoder = { path = "../syrinx-vocoder", optional = true }
+# Qwen3-TTS (Apache-2.0 weights): the `synth_qwen` engine. Optional and pulled in only by
+# `real`, exactly like the CosyVoice sub-models — the model-free `qwen` planning module
+# does not touch it, so the scaffold build stays Candle-free.
+syrinx-qwen = { path = "../syrinx-qwen", optional = true }

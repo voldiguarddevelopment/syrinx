@@ -39,7 +39,7 @@ while [ $# -gt 0 ]; do case "$1" in
     case "$kind" in
       --group)  is_group  "$name" || { echo "not a group: '$name'" >&2; BAD=1; }; ;;
       --family) is_family "$name" || { echo "not a family: '$name'" >&2; BAD=1; }; ;;
-      --test)   is_test   "$name" || { echo "not a test: no tests/$name.rs" >&2; BAD=1; }; ;;
+      --test)   is_test   "$name" || { echo "not a test: no tests/$name.rs, and not one of: $PSEUDO_TESTS" >&2; BAD=1; }; ;;
     esac
     got="$(resolve_selector "$name")" && SELECTED="$SELECTED $got" || BAD=1 ;;
   --exclude)
@@ -154,17 +154,28 @@ echo "     (add --codec-only for the cheap ~2 GB codec anchor first)"
 step "5/6  test the whole project"
 PASS=0 FAIL=0 SKIP=0 MISS=0; FAILED=""
 LOG="$(mktemp)"; trap 'rm -f "$LOG"' EXIT
+# One board row. Everything that varies BETWEEN rows — the cargo argv, whether a
+# SKIP marker is the row's own verdict, what detail it reports — comes from
+# scripts/test-groups.sh, so the `crate_unit_tests` workspace-lib row is not
+# special-cased here and in test-all.sh separately.
 run_one() {
   local t="$1"
-  [ -f "$ROOT/tests/$t.rs" ] || { printf '  %-40s %s\n' "$t" "$(c '2' 'MISSING')"; MISS=$((MISS+1)); return; }
-  if cargo test --features real --release --test "$t" -- --nocapture >"$LOG" 2>&1; then
+  test_present "$t" || { printf '  %-40s %s\n' "$t" "$(c '2' 'MISSING')"; MISS=$((MISS+1)); return; }
+  local -a targs=(); local a
+  while IFS= read -r a; do targs+=("$a"); done < <(test_cargo_args "$t")
+  cargo test --features real --release "${targs[@]}" -- --nocapture >"$LOG" 2>&1
+  local rc=$?
+  local detail; detail="$(test_detail "$t" "$LOG")"
+  [ -n "$detail" ] && detail="  $(c '2' "($detail)")"
+  if [ "$rc" -eq 0 ]; then
     # Case-SENSITIVE, trailing space required: the two real self-skip conventions are
     # `SKIP <name>: ...` and `skipping <name>: ...`. A case-insensitive bare `skip` also
     # matched a passing test's *name* (emotion_tags' concat_crossfade_skips_...), so a
     # green model-free test was reported as SKIP on every board.
-    if grep -qE 'SKIP |skipping ' "$LOG"; then printf '  %-40s %s\n' "$t" "$(c '33' SKIP)"; SKIP=$((SKIP+1))
-    else printf '  %-40s %s\n' "$t" "$(c '32' PASS)"; PASS=$((PASS+1)); fi
-  else printf '  %-40s %s\n' "$t" "$(c '31' FAIL)"; FAIL=$((FAIL+1)); FAILED="$FAILED $t"; fi
+    if test_can_skip "$t" && grep -qE 'SKIP |skipping ' "$LOG"; then
+      printf '  %-40s %s%s\n' "$t" "$(c '33' SKIP)" "$detail"; SKIP=$((SKIP+1))
+    else printf '  %-40s %s%s\n' "$t" "$(c '32' PASS)" "$detail"; PASS=$((PASS+1)); fi
+  else printf '  %-40s %s%s\n' "$t" "$(c '31' FAIL)" "$detail"; FAIL=$((FAIL+1)); FAILED="$FAILED $t"; fi
 }
 shown=" "
 for g in $ALL_GROUPS; do

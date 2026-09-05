@@ -245,10 +245,44 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
         check_tts: Option<String>,
         /// C3.3: which backend `syrinx cue` explains for.
         backend: Option<String>,
+        // --- Qwen3-TTS front door (`qwen` only) ---
+        tok_dir: Option<PathBuf>,
+        speaker: Option<String>,
+        voice_design: bool,
         /// C3.3: print the lowering report.
         explain: bool,
     }
 
+
+
+    const QWEN_USAGE: &str = "\
+    syrinx qwen --text <TEXT> --model-dir <DIR> --tokenizer-dir <DIR> --out <WAV>
+
+    Render text through the pure-Rust Qwen3-TTS port, with expressive cues honoured.
+
+      --text <TEXT>          text to speak; may carry bracket cues or the SSML subset
+      --model-dir <DIR>      a Qwen3-TTS-12Hz-* checkpoint directory
+      --tokenizer-dir <DIR>  the Qwen3-TTS-12Hz-Tokenizer directory (the codec)
+      --out <WAV>            output path (24 kHz mono)
+      --backend <ID>         capability row to lower cues against; inferred from
+                             --model-dir when omitted (see `syrinx cue`)
+      --speaker <NAME>       CustomVoice preset timbre (default: serena)
+      --lang <LANG>          language (default: english)
+      --voice-design         use the VoiceDesign prompt, where the instruction
+                             describes the VOICE rather than the delivery
+      --instruct <TEXT>      an explicit instruction, overriding anything the cues
+                             lower to
+      --explain              print the lowering report and the per-request plan
+      --cuda                 run on the GPU (SYRINX_QWEN_DEVICE picks the ordinal)
+
+    Cues are lowered by syrinx-cue against the CHOSEN CHECKPOINT capability row, so
+    the same text behaves differently and correctly per checkpoint: -Base has no
+    expressive channel and every cue is dropped; 0.6B-CustomVoice accepts an
+    instruction and silently discards it; 1.7B-CustomVoice and VoiceDesign honour it.
+    Qwen has no inline syntax at all, so cues become an utterance-scoped instruction,
+    and conflicting cues split the line into several requests that are rendered
+    separately and concatenated.
+    ";
 
     const CUE_USAGE: &str = "\
     syrinx cue --text <TEXT> [--backend <ID>] [--explain]
@@ -262,6 +296,200 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
     Every cue is listed with what lowering did to it and why, so a cue that does
     nothing can be diagnosed without synthesizing anything.
     ";
+
+    /// `syrinx qwen` — render through the pure-Rust Qwen3-TTS port, cues included.
+    ///
+    /// This is where the cue layer stops being theory for this family. `caps.toml` has
+    /// carried five Qwen `[[backend]]` rows since C2.1, describing three genuinely
+    /// different behaviours, but nothing could route a cue to a Qwen render — the port
+    /// was verified and unreachable. The lowering itself stays in `syrinx-cue`: this
+    /// function parses, lowers and hoists exactly as `cmd_cue` does, then feeds the
+    /// resulting per-utterance instruction into the prompt builder.
+    ///
+    /// Qwen is `Inline::None` + `Granularity::Utterance` — it has NO inline syntax, so a
+    /// cue can only reach it as an instruction, and two conflicting cues on one line can
+    /// only be honoured by splitting into separate requests. That is what `pass_hoist`
+    /// returns and what this renders: N segments, concatenated with the same crossfade
+    /// the server uses.
+    #[cfg(feature = "real")]
+    fn cmd_qwen(o: Opts) -> Result<(), String> {
+        use syrinx_qwen::prompt;
+
+        let text = o.text.ok_or("--text is required")?;
+        let model_dir = o.model_dir.ok_or("--model-dir is required")?;
+        let tok_dir = o.tok_dir.ok_or("--tokenizer-dir is required")?;
+        let out = o.out.unwrap_or_else(|| PathBuf::from("qwen-out.wav"));
+        let speaker = o.speaker.unwrap_or_else(|| "serena".to_string());
+        let language = o.lang.unwrap_or_else(|| "english".to_string());
+
+        // Which capability row to lower against. Explicit --backend wins; otherwise infer
+        // from the checkpoint directory by matching caps.toml's own `model` field, so the
+        // mapping lives in the table rather than being duplicated here.
+        let id = match &o.backend {
+            Some(b) => syrinx_cue::BackendId::from_str(b)
+                .ok_or_else(|| format!("unknown backend `{b}`; see `syrinx cue`"))?,
+            None => {
+                let base = model_dir
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .ok_or("--model-dir has no directory name to infer a backend from")?;
+                *syrinx_cue::BackendId::ALL
+                    .iter()
+                    .find(|b| b.caps().map(|c| c.model == base).unwrap_or(false))
+                    .ok_or_else(|| {
+                        format!(
+                            "cannot infer a backend from `{base}`; pass --backend explicitly \
+                             (see `syrinx cue` for the ids)"
+                        )
+                    })?
+            }
+        };
+        let caps = id.caps().map_err(|e| e.to_string())?;
+        let vocab = syrinx_cue::Vocab::embedded().map_err(|e| e.to_string())?;
+
+        // Parse -> lower -> hoist. Identical to `syrinx cue`, deliberately: one owner of
+        // cue semantics, and `--explain` here shows the same report.
+        let doc = syrinx_cue::parse_any(&text, &vocab, &syrinx_cue::ParseOptions::default())
+            .map_err(|e| e.to_string())?;
+        let lowered = syrinx_cue::lower_full(&doc, &caps, &vocab);
+        let mut report = lowered.report.clone();
+        let segments = if caps.granularity == syrinx_cue::Granularity::Utterance {
+            syrinx_cue::pass_hoist(
+                &lowered,
+                &caps,
+                &syrinx_cue::SplitOptions::default(),
+                &mut report,
+            )
+        } else {
+            // No utterance channel: speak the stripped text plainly. The cues were already
+            // dropped and reported by `lower_full`.
+            vec![syrinx_cue::UtteranceSegment {
+                text: lowered.text.clone(),
+                instruct: None,
+                cues: Vec::new(),
+            }]
+        };
+
+        if o.explain {
+            println!("backend:  {} ({})", caps.id, caps.model);
+            print!("{}", report.explain());
+            println!("requests: {}", segments.len());
+            for (i, seg) in segments.iter().enumerate() {
+                println!("  [{i}] instruct {:?}\n      text     {:?}", seg.instruct, seg.text);
+            }
+        }
+
+        let dev = if o.cuda { qwen_device() } else { candle_core::Device::Cpu };
+        let dt = if dev.is_cuda() { candle_core::DType::BF16 } else { candle_core::DType::F32 };
+        let cfg_json = std::fs::read_to_string(model_dir.join("config.json"))
+            .map_err(|e| format!("read config.json: {e}"))?;
+        let pcfg = prompt::PromptConfig::from_json(&cfg_json).map_err(|e| format!("{e:?}"))?;
+        let tok = syrinx_qwen::tokenizer::QwenTokenizer::from_dir(&model_dir)
+            .map_err(|e| format!("{e:?}"))?;
+        let mut model = syrinx_qwen::model::Qwen3Tts::load(&model_dir, dev.clone())
+            .map_err(|e| format!("load talker: {e}"))?;
+
+        // The codec bag is loaded once and reused across segments.
+        let cw = syrinx_qwen::load::load_tensors(&tok_dir, &dev, dt)
+            .map_err(|e| format!("load codec: {e}"))?;
+        let w = syrinx_qwen::nn::Weights { map: cw, dev: dev.clone(), dt };
+        let tk_json = std::fs::read_to_string(tok_dir.join("config.json"))
+            .map_err(|e| format!("read tokenizer config.json: {e}"))?;
+        let dcfg = syrinx_qwen::codec::decoder::DecoderConfig::from_json(&tk_json)
+            .map_err(|e| format!("{e:?}"))?;
+        let decoder = syrinx_qwen::codec::decoder::Decoder::new("decoder", dcfg);
+
+        let mut rendered: Vec<Vec<f32>> = Vec::with_capacity(segments.len());
+        for (i, seg) in segments.iter().enumerate() {
+            let body = seg.text.trim();
+            if body.is_empty() {
+                continue;
+            }
+            // An explicit --instruct overrides what the cues lowered to, for every segment.
+            let instruct = o.instruct.as_deref().or(seg.instruct.as_deref());
+            let plan = if o.voice_design {
+                let ins = instruct
+                    .ok_or("--voice-design needs an instruction (from a cue or --instruct)")?;
+                prompt::build_voice_design(&tok, &pcfg, body, ins, &language, true)
+                    .map_err(|e| format!("{e:?}"))?
+            } else {
+                prompt::build_custom_voice(&tok, &pcfg, body, &speaker, instruct, &language, true)
+                    .map_err(|e| format!("{e:?}"))?
+            };
+            let prompt_t = model.realize_plan(&plan, None, &[]).map_err(|e| e.to_string())?;
+            let params = syrinx_qwen::model::DriveParams::default();
+            let gen = model.generate(&prompt_t, &params).map_err(|e| e.to_string())?;
+            if gen.frames.is_empty() {
+                return Err(format!("segment {i} generated no frames"));
+            }
+            let wav = qwen_decode(&w, &decoder, &gen, model.config().num_code_groups, dt)?;
+            eprintln!(
+                "syrinx qwen: segment {i}: {} frames -> {:.2}s{}",
+                gen.frames.len(),
+                wav.len() as f32 / 24_000.0,
+                instruct.map(|s| format!("  instruct {s:?}")).unwrap_or_default()
+            );
+            rendered.push(wav);
+        }
+        if rendered.is_empty() {
+            return Err("nothing to speak".to_string());
+        }
+
+        // Same crossfade the server uses for multi-segment output, so a cue-driven split
+        // does not announce itself with a click at every boundary.
+        let wav = syrinx_serve::emotion::concat_crossfade(&rendered, 240);
+        wavio::write_wav_24k(&out, &wav).map_err(|e| e.to_string())?;
+        eprintln!(
+            "syrinx qwen: wrote {} ({:.2}s @ 24 kHz, {} segment(s))",
+            out.display(),
+            wav.len() as f32 / 24_000.0,
+            rendered.len()
+        );
+        Ok(())
+    }
+
+    /// CUDA ordinal for the Qwen path (`SYRINX_QWEN_DEVICE`), mirroring `fish_device`.
+    #[cfg(feature = "real")]
+    fn qwen_device() -> candle_core::Device {
+        let ord = std::env::var("SYRINX_QWEN_DEVICE")
+            .ok()
+            .and_then(|s| s.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        candle_core::Device::new_cuda(ord).unwrap_or_else(|e| {
+            eprintln!("syrinx qwen: cuda:{ord} unavailable ({e}); running on CPU");
+            candle_core::Device::Cpu
+        })
+    }
+
+    /// Generated codes -> waveform: split RVQ (semantic stack + acoustic stack, summed in
+    /// parallel, not serially) then the causal decoder. Mirrors
+    /// `crates/syrinx-qwen/examples/synth.rs`; belongs in the crate once its public
+    /// surface settles.
+    #[cfg(feature = "real")]
+    fn qwen_decode(
+        w: &syrinx_qwen::nn::Weights,
+        decoder: &syrinx_qwen::codec::decoder::Decoder,
+        gen: &syrinx_qwen::model::Generated,
+        num_code_groups: usize,
+        dt: candle_core::DType,
+    ) -> Result<Vec<f32>, String> {
+        let rows = gen.group_rows(num_code_groups);
+        let sem = syrinx_qwen::codec::rvq::Rvq::load(w, "decoder.quantizer.rvq_first", 1)
+            .map_err(|e| e.to_string())?;
+        let ac = syrinx_qwen::codec::rvq::Rvq::load(
+            w,
+            "decoder.quantizer.rvq_rest",
+            rows.len() - 1,
+        )
+        .map_err(|e| e.to_string())?;
+        let z_sem = sem.decode(w, &rows[..1], dt).map_err(|e| e.to_string())?;
+        let z_ac = ac.decode(w, &rows[1..], dt).map_err(|e| e.to_string())?;
+        let z = (z_sem + z_ac).map_err(|e| e.to_string())?;
+        decoder
+            .decode(w, &z)
+            .and_then(|t| t.flatten_all()?.to_vec1::<f32>())
+            .map_err(|e| e.to_string())
+    }
 
     /// `syrinx cue` — the CLI half of the C3.3 control surface.
     fn cmd_cue(o: Opts) -> Result<(), String> {
@@ -325,6 +553,7 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
             "stream" => (STREAM_USAGE, cmd_stream),
             "stt" => (STT_USAGE, cmd_stt),
             "cue" => (CUE_USAGE, cmd_cue),
+            "qwen" => (QWEN_USAGE, cmd_qwen),
             "-h" | "--help" | "help" => {
                 println!("{USAGE}");
                 return 0;
@@ -395,6 +624,9 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
                 "--quality" => o.quality = true,
                 "--instruct" => o.instruct = Some(need(&mut argv, "--instruct")?),
                 "--backend" => o.backend = Some(need(&mut argv, "--backend")?),
+                "--tokenizer-dir" => o.tok_dir = Some(PathBuf::from(need(&mut argv, "--tokenizer-dir")?)),
+                "--speaker" => o.speaker = Some(need(&mut argv, "--speaker")?),
+                "--voice-design" => o.voice_design = true,
                 "--explain" => o.explain = true,
                 "--rl" => o.rl = Some(PathBuf::from(need(&mut argv, "--rl")?)),
                 "--quantized" => o.quantized = true,

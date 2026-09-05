@@ -34,6 +34,21 @@ pub mod voice;
 #[cfg(feature = "real")]
 pub mod wavio;
 
+// Qwen3-TTS on the OpenAI-compatible surface. Split in two, deliberately:
+//
+//   * `qwen` — MODEL-FREE. Turns a `SpeechRequest` into the per-checkpoint correct
+//     synthesis requests: it calls syrinx-cue's `parse_any -> lower_full -> pass_hoist`
+//     (it parses NOTHING itself) and enforces the capability differences the five Qwen
+//     `caps.toml` rows record. No Candle, so it is unit-testable at the repo root without
+//     weights — which is the point: the "no cue markup ever reaches a backend" invariant
+//     must be gateable off-box.
+//   * `synth_qwen` — the Candle engine that renders those requests. Same `real` gate as
+//     the CV2/CV3 synthesizers.
+pub mod qwen;
+
+#[cfg(feature = "real")]
+pub mod synth_qwen;
+
 // Inline EMOTION TAGGING for the CV3 instruct path: a `tag -> instruct` registry, the
 // `[tag]`/`(tag)` parser, and the equal-power segment cross-fade. Pure-Rust + model-free
 // (no Candle/`Tensor`), so — like `watermark` — it is NON-optional (no `real` gate) and

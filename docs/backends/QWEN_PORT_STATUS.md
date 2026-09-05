@@ -13,13 +13,15 @@ That boundary is the point of the document: everything above the line is gateabl
 and now runs on the board; everything below it cannot be turned green without hardware,
 and must not be faked into looking green.
 
-Last audited 2026-09-03.
+Last audited 2026-09-03; amended 2026-09-05 (the `unit` board row, and the 0.6B-Base
+speaker anchor — see the last two sections).
 
 ---
 
 ## 1. What is on the board today
 
-`GROUP_qwen` in `scripts/test-all.sh` and `scripts/verify.sh` (also in `verify.sh --quick`):
+`GROUP_qwen` in `scripts/test-groups.sh`, shared by `scripts/test-all.sh` and
+`scripts/verify.sh` (also in `verify.sh --quick`):
 
 | repo-root test | what it certifies |
 |----------------|-------------------|
@@ -34,11 +36,12 @@ Fixtures: `tests/golden/qwen/config/` (published `config.json`, byte-for-byte) a
 
 These are model-free: no weights, no Candle, no GPU, no Python. They must never SKIP.
 
-> **Also on disk but NOT on the board: 105 unit tests inside the crate**
-> (`cargo test -p syrinx-qwen`, all passing). `scripts/test-all.sh` invokes
-> `cargo test --test <name>`, which only ever runs repo-root integration binaries, so no
-> member crate's `#[cfg(test)]` module is exercised by `verify.sh` — for `syrinx-qwen` or
-> for any other crate. That is a harness-wide gap, not a Qwen one; it is recorded in §5.
+> **The crate's own unit tests are ON the board since 2026-09-05** — 108 of them for
+> `syrinx-qwen`, 133 workspace-wide. They used to be invisible: `scripts/test-all.sh`
+> invoked `cargo test --test <name>`, which only ever runs repo-root integration binaries,
+> so no member crate's `#[cfg(test)]` module was exercised by `verify.sh`, for
+> `syrinx-qwen` or for any other crate. The `unit` group now carries one row,
+> `crate_unit_tests`, that runs `cargo test --workspace --lib`. See §5 gap 2.
 
 ---
 
@@ -69,7 +72,7 @@ the weights and `GROUP_qwen` is defined as never-SKIP.
 | what | where | gate | status on this box |
 |------|-------|------|--------------------|
 | Text tokenizer: golden ids vs `AutoTokenizer` | `src/tokenizer.rs:408`, `:416`, `:431`, `:445`, `:471`, `:486` | `SYRINX_QWEN_DIR`, else `~/models/Qwen3-TTS-12Hz-*` | **passing** (`cargo test -p syrinx-qwen`) — 6 golden id sequences, round trips, the two pre-tokenizer regexes |
-| Speaker encoder vs the reference on real weights | `src/speaker.rs` (`real_checkpoint_parity`, in-crate) | `SYRINX_QWEN_BASE_DIR` | superseded on the board by `tests/real_qwen_speaker_parity.rs` (see the parity table below); kept because it is the only check covering the **0.6B** (1024-wide) checkpoint |
+| Speaker encoder vs the reference on real weights | `src/speaker.rs` (`real_checkpoint_parity`, in-crate) | `SYRINX_QWEN_BASE_DIR` | superseded on the board by `tests/real_qwen_speaker_parity.rs`, which since 2026-09-05 covers **both** `-Base` widths (see the parity table below). Still useful as a hand-copied-numbers cross-check, and it now runs on the board too, inside the `crate_unit_tests` row |
 | Mimi encoder vs HuggingFace `MimiModel` | `src/codec/encoder.rs:1239` (`matches_the_python_reference`) | `SYRINX_QWEN_TOKENIZER_DIR` + `SYRINX_QWEN_ENCODER_REF` | SKIPs (env unset). The module header records an earlier manual run: 16×5 and 16×32 codes identical, latent max-abs 1.2e-4 / 2.5e-4 |
 | Whole-checkpoint load + shape verify | `src/load.rs:137` (`verify_checkpoint`), `examples/verify.rs` | needs `model.safetensors` (1.8–3.9 GB) | never run in CI; `tests/qwen_tensor_manifest.rs` now proves the *manifest* it checks against is right |
 | Weight materialisation | `src/load.rs:182` (`load_tensors`), `examples/loadcheck.rs` | needs the weights | never automated |
@@ -149,10 +152,12 @@ cargo test --features real --release --test qwen_sampling_contract -- --nocaptur
 Expected: `PASS` on all three, 41 assertions-bearing tests, no SKIP. (No GPU, no weights,
 cheap — but it does pull in the full `real` dependency graph, which is why it is here.)
 
-**2. The crate's own 105 unit tests** (CPU, ~8 s, no GPU):
+**2. The crate's own 108 unit tests** (CPU, ~2 s, no GPU) — or the whole workspace's 133,
+which is exactly what the board's `unit` group runs:
 
 ```bash
 cargo test -p syrinx-qwen
+./scripts/test-all.sh unit     # cargo test --workspace --lib, 13.6 s warm
 ```
 
 **3. Un-SKIP the weight-backed checkpoints** (CPU only; reads 1.8–3.9 GB from disk):
@@ -203,9 +208,29 @@ peak memory during the wave stage (`SYRINX_QWEN_CODEC_CHUNK_FRAMES` bounds it).
    `tests/real_qwen_*.rs` members (prompt, stack, encode, speaker, greedy) and the
    `SYRINX_QWEN_*` paths in `test-all.env`. It self-skips off-box; the `qwen3` family
    selector runs it together with the model-free `GROUP_qwen`.
-2. **No member-crate unit tests reach the board, for any crate.** 105 passing Qwen tests
-   (and every other crate's) are outside `verify.sh` because `run_one` calls
-   `cargo test --test <name>`. A `cargo test --workspace --lib` row would close it.
+2. ~~**No member-crate unit tests reach the board, for any crate.**~~ **CLOSED
+   2026-09-05.** `GROUP_unit="crate_unit_tests"` in `scripts/test-groups.sh` is a
+   **pseudo-test**: a board row whose cargo argv is `--workspace --lib --no-fail-fast`
+   instead of `--test <name>`. Both runners were changed to ask `test-groups.sh` what a
+   row *is* — `test_present` / `test_cargo_args` / `test_can_skip` / `test_detail` — so the
+   row is defined once and neither runner special-cases it. 133 unit tests now report on
+   every board (108 `syrinx-qwen`, 13 `syrinx-fish`, 8 `syrinx-cue`, 4 `syrinx-stt`), in
+   13.6 s warm / 14.5 s with `test-all.env` sourced, and the row prints its counts:
+   `PASS (133 passed, 0 failed, 1 self-skipped, 0 ignored in 4 crates)`.
+   Two decisions worth keeping:
+   - The row can never be **SKIP**. SKIP means "this row's prerequisite is unconfigured",
+     and a workspace-lib run has none. Individual unit tests inside it do self-skip — on
+     this box exactly one, the Mimi `matches_the_python_reference` — and the runners'
+     generic `SKIP ` grep would otherwise have painted all 133 tests yellow because of that
+     one line. The self-skips are reported as a count instead.
+   - `--no-fail-fast`, because the row is 13 binaries: without it cargo stops at the first
+     failing crate and the board says "128 passed in 3 crates", silently omitting the rest.
+     It does not soften the verdict — cargo still exits non-zero and the row goes FAIL.
+   Verified red-on-real-failure, not assumed: flipping `speaker.rs:1034`'s
+   `assert_eq!(cfg.enc_dim, 1024)` to `1025` gave
+   `crate_unit_tests FAIL (132 passed, 1 failed, 1 self-skipped, 0 ignored in 4 crates)`
+   with `PASS 0 … FAIL 1` and exit 1 from `test-all.sh`, and `VERIFICATION FAILED` / exit 1
+   from `verify.sh`. Restored afterwards.
 3. ~~**No Python reference dump for Qwen.**~~ **CLOSED 2026-09-03.** Four generators now
    exist — `gen-qwen-ref.py` (prompt, talker, predictor, codec decode) plus
    `gen-qwen-ref-encoder.py`, `gen-qwen-ref-speaker.py` and `gen-qwen-ref-greedy.py`.
@@ -219,11 +244,19 @@ peak memory during the wave stage (`SYRINX_QWEN_CODEC_CHUNK_FRAMES` bounds it).
    the parsers to a Candle-free module would let them join `GROUP_qwen` as never-SKIP
    tests. Worth doing; not done here, because it is a production refactor and this pass
    was scoped to getting the crate honestly onto the board.
-6. **Not wired into anything.** `syrinx-qwen` has no `syrinx-cli` subcommand, no
-   `syrinx-serve` backend, and no `syrinx-eval` hookup. `crates/syrinx-cue/caps.toml`
-   already carries the five Qwen `[[backend]]` entries, so the cue layer knows about it;
-   nothing else does. (`scripts/render-qwen.py` drives the **Python** reference, not this
-   crate.)
+6. ~~**Not wired into anything.**~~ **CLOSED 2026-09-05.** `syrinx qwen` renders through
+   the port from the CLI, and `syrinx-serve` gained a Qwen backend (`src/qwen.rs` planning
+   layer + `src/synth_qwen.rs` Candle engine) reachable over `/v1/audio/speech`. Both route
+   cues through `syrinx-cue` rather than parsing any syntax themselves, and both respect
+   the per-checkpoint capability rows: Base drops every cue, 0.6B-CustomVoice reports
+   accepted-and-discarded, 1.7B-CustomVoice and VoiceDesign honour the instruction, and
+   VoiceDesign refuses to split (its instruct describes the VOICE, so a mid-line split
+   would change who is speaking). Conflicting cues on an instructable checkpoint become N
+   requests, rendered separately and concatenated with the server's crossfade — verified
+   end to end: `[happy] ... [sad] ...` produced 2 segments transcribing as
+   "What a wonderful morning, but then the letter arrived."
+   Still unexecuted: `synth_qwen.rs` is compile-verified but has never loaded a checkpoint
+   (needs a `real_qwen_serve_*` test on the box), and there is no `syrinx-eval` hookup.
 
 
 ## First end-to-end renders — 2026-09-03
@@ -266,7 +299,8 @@ reference's own modules; `tests/real_qwen_prompt_parity.rs` and
 | code predictor | `predictor.logits` (fed the reference's own input) | 0.00003 |
 | codec (decode) | `codec.wav`, `codec_edge.wav` | 0.000022 / 0.000005 |
 | codec (encode) | `{full,ragged}.{wav,latent,codes}` from `scripts/gen-qwen-ref-encoder.py`, checked by `tests/real_qwen_encode_parity.rs` | **codes bit-exact** (2000 + 512, zero differences); latent 3.206e-4 / 2.351e-4 against max abs 37.492 |
-| speaker encoder (`-Base` x-vector) | `mel`, `xvector` from `scripts/gen-qwen-ref-speaker.py`, checked by `tests/real_qwen_speaker_parity.rs` | mel 0.00025; **x-vector 0.0000010** per component (2048 wide, L2 norm 17.028715 on both sides), from the reference's own mel and end to end alike |
+| speaker encoder (`-Base` x-vector), **1.7B** | `mel`, `xvector` from `scripts/gen-qwen-ref-speaker.py`, checked by `tests/real_qwen_speaker_parity.rs` | mel 0.00025; **x-vector 0.0000010** per component (2048 wide, L2 norm 17.028715 on both sides), from the reference's own mel and end to end alike |
+| speaker encoder (`-Base` x-vector), **0.6B** | the same generator + gate, second fixture (`SYRINX_QWEN_REF_SPEAKER_0_6B`) | mel 0.00025 (bit-identical fixture, same clip); **x-vector 0.0000006** per component (1024 wide, L2 norm 10.409607 vs 10.409612), from the reference's own mel and end to end alike |
 
 Fixtures are generated on **CPU/float32** deliberately: the reference decoding identical
 codes on CUDA vs CPU disagrees with itself by 0.031 on a [-1,1] waveform, which would
@@ -358,3 +392,63 @@ rather than by value: its x-vector must stay at cosine >= 0.9995 of the referenc
 version of the resampler (Lanczos-16 at cutoff 1.0, copied from `syrinx_serve::wavio`) at
 cosine 0.996886, which turned out to be real image leakage above the input Nyquist landing
 in the top mel bands.
+
+## Both `-Base` widths anchored — 2026-09-05
+
+`renders/2026-09-03-qwen-base-clone/FINDINGS.md` §5 left the 0.6B-Base "unanchored against
+a real clip": the speaker fixture was dumped from the 1.7B, and the two checkpoints differ
+in exactly one thing, `speaker_encoder_config.enc_dim` (1024 vs 2048). That is a small
+difference and precisely the kind a port can get wrong in one direction only, so it was a
+real hole rather than a formality.
+
+Closed. `scripts/gen-qwen-ref-speaker.py --ckpt …-0.6B-Base` dumped a second fixture
+(`/home/floofy/parity-qwen/speaker-0.6b.safetensors`, CPU/float32, same
+`voice_en_10s.wav`), and `tests/real_qwen_speaker_parity.rs` now iterates over **every
+configured checkpoint** instead of the first one it finds.
+
+| anchor | 1.7B-Base (2048) | 0.6B-Base (1024) | bound |
+|---|---|---|---|
+| mel `[937, 128]` | 0.0002508 | 0.0002508 | 5e-3 |
+| x-vector from the reference's own mel | 0.0000010 | **0.0000006** | 1e-4 |
+| x-vector end to end (`embed`) | 0.0000010 | **0.0000006** | 1e-4 |
+| driver-path resample, cosine | 0.999977 | **0.999980** | >= 0.9995 |
+| x-vector L2 norm | 17.028715 / 17.028715 | 10.409607 / 10.409612 | — |
+
+**No bug.** `SpeakerEncoderConfig::from_model_config` already read `enc_dim` from
+`config.json` rather than hardcoding it, and the 1024-wide stack agrees with the reference
+as well as the 2048-wide one does. The tolerances were NOT touched: the 0.6B lands inside
+the bounds the 1.7B set, with more margin, not less.
+
+**The 6e-7 is the reference's own noise floor, and that was measured rather than
+asserted.** Re-dumping the same 0.6B fixture from the same reference, same CPU, same f32,
+changing only `OMP_NUM_THREADS` (32 -> 1) moves its x-vector by **4.8e-7**, while `wav24`
+and `mel` come back bit-identical — so all of that drift is the encoder's own reduction
+order. The port's disagreement is the same magnitude as the reference's disagreement with
+itself; there is no residue left for a porting fault to hide in. (This is the same
+discipline that made the Fish RoPE diagnosis trustworthy: establish what the reference does
+to itself before attributing anything to the port.)
+
+Two negative controls, run once and then reverted:
+
+| injected defect | result |
+|---|---|
+| the `tdnn` ReLU dropped (`speaker.rs:589`) — the `text_projection` bug's exact shape | encoder / end-to-end / driver all FAIL on the first case at 556.68 and cosine 0.2678; the mel anchor stays green on both, so the localization claim still holds |
+| the 0.6B **fixture** nudged by 2e-5 relative (1.5e-4 absolute) | the 1.7B case passes at 1.0e-6 and the **0.6B case fails** at 0.0001516 against the 1e-4 bound — i.e. the second checkpoint is genuinely asserted, not merely loaded |
+
+### Configuration
+
+One new variable, `SYRINX_QWEN_REF_SPEAKER_0_6B`, pointed at the second fixture. There is
+deliberately no required second checkpoint-dir variable: `gen-qwen-ref-speaker.py` records
+the absolute `--ckpt` in the fixture's safetensors `__metadata__`, and the test reads it
+from there, so a fixture can never be silently paired with the wrong checkpoint.
+`SYRINX_QWEN_BASE_DIR_0_6B` exists only as an override for a checkpoint that has moved
+since the dump. A fixture whose checkpoint is reachable by neither route is a **hard
+failure**, not a skip — a half-configured anchor is a hole. With no fixture variable set at
+all the file SKIPs as before, and a box with only the 1.7B configured still reports PASS
+(the unconfigured checkpoint prints a plain `not configured` note, deliberately without the
+`SKIP ` token the runners grep for, so one missing fixture cannot paint a row that really
+ran).
+
+Still open on this path, unchanged: CUDA/bf16 has never been run (the CUDA tolerances in
+the test are labelled slack, not evidence), clone *quality* is perceptual and
+blocked-on-human, and resampling is bounded by effect rather than anchored tensor-for-tensor.
