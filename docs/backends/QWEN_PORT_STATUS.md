@@ -13,8 +13,9 @@ That boundary is the point of the document: everything above the line is gateabl
 and now runs on the board; everything below it cannot be turned green without hardware,
 and must not be faked into looking green.
 
-Last audited 2026-09-03; amended 2026-09-05 (the `unit` board row, and the 0.6B-Base
-speaker anchor — see the last two sections).
+Last audited 2026-09-03; amended 2026-09-05 (the `unit` board row, the 0.6B-Base speaker
+anchor, and the first execution of `syrinx-serve`'s Qwen engine — see the last three
+sections).
 
 ---
 
@@ -252,11 +253,18 @@ peak memory during the wave stage (`SYRINX_QWEN_CODEC_CHUNK_FRAMES` bounds it).
    accepted-and-discarded, 1.7B-CustomVoice and VoiceDesign honour the instruction, and
    VoiceDesign refuses to split (its instruct describes the VOICE, so a mid-line split
    would change who is speaking). Conflicting cues on an instructable checkpoint become N
-   requests, rendered separately and concatenated with the server's crossfade — verified
-   end to end: `[happy] ... [sad] ...` produced 2 segments transcribing as
-   "What a wonderful morning, but then the letter arrived."
-   Still unexecuted: `synth_qwen.rs` is compile-verified but has never loaded a checkpoint
-   (needs a `real_qwen_serve_*` test on the box), and there is no `syrinx-eval` hookup.
+   requests, rendered separately and concatenated — verified end to end: `[happy] ... [sad]
+   ...` produced 2 segments transcribing as "What a wonderful morning, but then the letter
+   arrived." (**Corrected 2026-09-05:** this line previously said "concatenated with the
+   server's crossfade". It is a plain butt-join — `QwenSynth::render_all` does
+   `out.extend(...)`, and `tests/qwen_server.rs` pins the body at exactly
+   `segments * SAMPLES_PER_SEGMENT` samples, which a crossfade would shorten.
+   `emotion::concat_crossfade` exists but is wired only into the CosyVoice3 tagged path.
+   Whether the Qwen path *should* crossfade its seams is an open design question, not a
+   bug being reported here.)
+   ~~Still unexecuted: `synth_qwen.rs` is compile-verified but has never loaded a
+   checkpoint.~~ **CLOSED 2026-09-05** by `tests/real_qwen_serve.rs` — see the section
+   below. Still open on this path: there is no `syrinx-eval` hookup.
 
 
 ## First end-to-end renders — 2026-09-03
@@ -452,3 +460,80 @@ ran).
 Still open on this path, unchanged: CUDA/bf16 has never been run (the CUDA tolerances in
 the test are labelled slack, not evidence), clone *quality* is perceptual and
 blocked-on-human, and resampling is bounded by effect rather than anchored tensor-for-tensor.
+
+
+## `syrinx-serve`'s Qwen engine executed — 2026-09-05
+
+`crates/syrinx-serve/src/synth_qwen.rs` had never loaded a checkpoint. `tests/real_qwen_serve.rs`
+is that run: three real renders through the **actual Axum router** (`tower::oneshot`, no
+port bound), each scored by the native Whisper oracle rather than by its byte count.
+
+| case | checkpoint | audio | render (CPU/f32) | WER |
+|---|---|---|---|---|
+| plain — `Come closer, I have something to tell you.` | 0.6B-CustomVoice, preset `serena` | 3.60 s (86 400 samples) | 259 s | **0.0000** |
+| cued — `[whisper] The garden gate was open again this morning.` | same engine, second request | 3.52 s (84 480 samples) | 257 s | **0.0000** |
+| clone — in-context, 10 s reference clip | 0.6B-Base, `clone_from_wav` → ICL frames | 2.80 s (67 200 samples) | 214 s | **0.0000** |
+
+Everything that is not generation is negligible: 1.9 s to load the CustomVoice engine,
+0.9 s for the `-Base` one, 1.0 s to build the clone voice (x-vector + Mimi encode of a
+10 s clip), ~1.6 s per Whisper pass. The whole file is ~12.3 min, which is why it is an
+**opt-in** test in `scripts/test-groups.sh` rather than a member of `GROUP_qwen_ckpt`
+(23 s for four tests):
+
+```text
+source scripts/test-all.env
+SYRINX_QWEN_CV_DIR_0_6B=/data/models/Qwen3-TTS-12Hz-0.6B-CustomVoice \
+SYRINX_QWEN_BASE_DIR_0_6B=/data/models/Qwen3-TTS-12Hz-0.6B-Base \
+  MEMMAX=10G scripts/run-isolated.sh ./scripts/test-all.sh --test real_qwen_serve
+```
+
+What the run establishes that no model-free test could:
+
+- **The engine loads and renders.** `QwenModelEngine::load` → `into_synth` →
+  `router_with_qwen_synth` → `POST /v1/audio/speech` answers 200 + `audio/wav` with a
+  canonical 24 kHz mono PCM16 body whose every header field is checked, not just its
+  magic bytes.
+- **The loaded engine is reusable.** The plain and cued renders are two requests through
+  **one** engine, and the second is as clean as the first — so the `Mutex<Qwen3Tts>` that
+  serializes `realize_plan`/`generate` leaves no state behind between requests. A stale KV
+  cache would have shown up as a garbled second render; it did not.
+- **The load-time cross-checks fire before the weights are touched.** Handing `load` a
+  mismatched backend/voice, a mismatched backend/checkpoint, a non-Qwen backend, or
+  `clone_from_wav` a non-`-Base` checkpoint returns the mismatch message *while the
+  tokenizer directory argument points at a path that does not exist* — only possible if
+  the check precedes the talker mmap and the codec bag. The whole case runs in 0.00 s.
+- **No cue markup is spoken.** The cued transcript is held to `brackets <= escaped`, the
+  same bound `crates/syrinx-cue/tests/projection_strip.rs` puts on the lowered text,
+  carried through to what a listener hears; the source escapes nothing, so the bound is
+  zero brackets. The style label `whisper` is not in the transcript either.
+- **The in-context clone path works end to end through the server**, including
+  `render_inner`'s `decode(cat(ref_frames, generated))`-then-cut — the least-exercised
+  arithmetic in the module. The reference clip's transcript is read by the same Whisper
+  oracle rather than borrowed from `SYRINX_STT_REF`, which is the ground truth for a
+  *different*, longer clip.
+
+The WER ceiling is derived rather than chosen: every probe is exactly eight words, so
+`1/8 = 0.125` is the smallest non-zero score any of them can produce, and the bound admits
+exactly one wrong word. It is not flaky — `(seed, weights, prompt)` reproduces the talker
+bit-for-bit and Whisper's greedy decode is deterministic — and a silent or babbling render
+scores ~1.0, eight times the bound. All three measured 0.0000, matching the 2026-09-03
+renders.
+
+### Configuration
+
+Two variables, both new to `scripts/test-all.env` and both self-skipping when unset:
+
+| variable | value on NovaBox | without it |
+|---|---|---|
+| `SYRINX_QWEN_CV_DIR_0_6B` | `/data/models/Qwen3-TTS-12Hz-0.6B-CustomVoice` | the whole file SKIPs |
+| `SYRINX_QWEN_BASE_DIR_0_6B` | `/data/models/Qwen3-TTS-12Hz-0.6B-Base` | only the clone case SKIPs (it falls back to `SYRINX_QWEN_BASE_DIR`, the 1.7B, if that is set) |
+
+`SYRINX_QWEN_TOK_DIR`, `SYRINX_STT_MODEL_DIR` and `SYRINX_QWEN_REF_WAV` are already
+configured. The 1.7B `SYRINX_QWEN_CV_DIR` is deliberately **not** a fallback for the
+CustomVoice case: it is a job three times the size, and its known instruct-repeat defect
+would confuse the cued render.
+
+Still open on this path: no CUDA/bf16 execution (this test is CPU-only by construction),
+no `syrinx-eval` hookup, no streaming path (the port has none, so `response_format:
+"stream"` still takes the handler's buffered fallback), and voice *quality* remains
+perceptual and blocked-on-human — WER says the words are right, not that the voice is good.

@@ -435,8 +435,16 @@ syrinx stt — transcribe a WAV to text (pure-Rust Whisper, the TTS test oracle)
             return Err("nothing to speak".to_string());
         }
 
-        // Same crossfade the server uses for multi-segment output, so a cue-driven split
-        // does not announce itself with a click at every boundary.
+        // Crossfade the seams so a cue-driven split does not announce itself with a click.
+        //
+        // NOTE — this DIVERGES from the HTTP path: `QwenSynth::render_all` butt-joins its
+        // segments (`out.extend(...)`), and `tests/qwen_server.rs` pins the body at exactly
+        // `segments * SAMPLES_PER_SEGMENT`, which a crossfade would shorten. So the same
+        // cue-split input yields slightly different audio through `syrinx qwen` than
+        // through `/v1/audio/speech`. Both are defensible and neither is wrong; which one
+        // the product wants is a design question, recorded in QWEN_PORT_STATUS.md rather
+        // than settled unilaterally here. An earlier revision of that doc claimed the
+        // server crossfades — it does not.
         let wav = syrinx_serve::emotion::concat_crossfade(&rendered, 240);
         wavio::write_wav_24k(&out, &wav).map_err(|e| e.to_string())?;
         eprintln!(

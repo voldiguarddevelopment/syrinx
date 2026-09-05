@@ -238,8 +238,11 @@ Narrower entry points (all read the same `test-all.env`):
   **Opt-in tests** are deliberately in no group and no family, so no routine board and no
   full `verify.sh` ever fires them; `--list` prints them in their own table under the
   groups, and you reach one by naming it:
-      ./scripts/test-all.sh --test real_cue_activation       # C4.2 certification run
-      ./scripts/test-all.sh --test real_qwen_greedy_parity   # ~21 min, 1.7B CPU/f32
+      ./scripts/test-all.sh --test real_cue_activation        # C4.2 certification run
+      ./scripts/test-all.sh --test real_qwen_greedy_parity    # ~21 min, 1.7B CPU/f32
+      ./scripts/test-all.sh --test real_qwen_serve            # ~12 min, 0.6B CPU/f32
+      ./scripts/test-all.sh --test real_qwen_eval             # ~37 min, 1.7B CPU/f32
+      SYRINX_FISH_BATCH_PARITY=1 ./scripts/test-all.sh --test real_fish_s2_batch_parity
   `real_qwen_greedy_parity` is the multi-frame greedy-decode anchor for the Qwen3-TTS
   generation loop — the only gate that covers the KV cache, position advancement, the
   per-frame talker→predictor handoff and the trailing-text schedule across many frames.

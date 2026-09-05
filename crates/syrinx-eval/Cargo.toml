@@ -9,9 +9,14 @@ publish = false
 # (CAM++ cosine), RTF, and TTFB computed by running the real CosyVoice2/3
 # `Synthesizer`.
 default = ["real"]
-real = ["dep:syrinx-serve", "syrinx-serve/real"]
+real = ["dep:syrinx-serve", "syrinx-serve/real", "dep:syrinx-stt", "syrinx-stt/real", "dep:syrinx-cue"]
 
 [dependencies]
 # The real synthesizer (+ its WAV resampler) the measured metrics drive. Optional,
 # only pulled in by this crate's `real` feature.
 syrinx-serve = { path = "../syrinx-serve", optional = true }
+# The in-tree Whisper: the NATIVE WER oracle. C4.1 forbids Python at inference, and the
+# CosyVoice-era helpers in `metrics` shell out to scripts/eval_wer.py — this does not.
+syrinx-stt = { path = "../syrinx-stt", optional = true }
+# BackendId / the capability rows the Qwen plan is built against.
+syrinx-cue = { path = "../syrinx-cue", optional = true }

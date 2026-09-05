@@ -332,6 +332,9 @@ impl QwenModelEngine {
     }
 
     /// Replace the whole [`DriveParams`] (frame caps, warpers, greedy decode).
+    ///
+    /// **Whole** means the seed too: this discards anything
+    /// [`with_seed`](Self::with_seed) set before it, so call it *first* when you use both.
     pub fn with_drive_params(mut self, params: DriveParams) -> Self {
         self.params = params;
         self

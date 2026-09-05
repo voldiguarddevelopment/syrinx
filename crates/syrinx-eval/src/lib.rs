@@ -20,6 +20,12 @@ pub mod metrics;
 /// model-free board.
 pub mod activation;
 
+/// Qwen3-TTS evaluation: drives the serve Qwen engine and scores it with the in-tree
+/// Whisper (`syrinx-stt`) rather than shelling out to Python, as C4.1 requires. Behind
+/// `real` because it drives real weights.
+#[cfg(feature = "real")]
+pub mod qwen;
+
 /// Acoustic features and the permutation test that decides whether a cue activated.
 /// Pure DSP and statistics, no model dependency, so it is testable without a GPU.
 pub mod acoustic;
