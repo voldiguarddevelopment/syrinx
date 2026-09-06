@@ -724,3 +724,42 @@ the model saturates so funasr's own softmax is one-hot to float precision — sc
 probabilities would have flattened every delta to 0 or ±1. The judge is anchored and scored
 on **logits**, and the export is capped at 160,079 samples (10.005 s), found by binary
 search and enforced by a test that asserts it errors rather than truncating.
+
+### A29 — 2026-09-06 — **the tuning loop is built and has run once; it proposed nothing, and it raised a better question**
+
+ADR-0004 defines where tuned phrasings live, what may accept one, and the guards. The
+decision is a pure function (`syrinx_eval::tune`) gated on the model-free board by
+`tests/cue_tune_decision.rs` — 22 assertions, 18 mutants all killed, every criterion pinned
+on both sides of its boundary. The human gate (`accepted_by`, without which a row is inert)
+is mutation-checked three ways.
+
+**First round: `[angry]`, 4 candidates, 192 renders, ~40 min. Nothing proposed.** All four
+were rejected at the first criterion — none beat plain acoustically at the corrected
+α = 0.0125. That is the loop working, not failing: a round that proposes nothing when
+nothing is better is the outcome the guards exist to produce.
+
+**The guards reported healthy.** The sham was null on both splits (p=0.25, 0.52), and the
+counter-cue — the *wrong* label's phrase — scored below the incumbent on `angry` and gained
+on `happy` instead, on both splits. That is the judge demonstrating inside the run that it
+tracks the label it is asked about.
+
+**A finding that complicates A28 and is recorded rather than buried.** On the holdout split
+the incumbent scores +2.386 on `angry` with `angry` as top gainer; on the tune split it
+scores +0.577 with `neutral`. Every prior conclusion that "`[angry]` does not take" — four
+independent looks — used the **same single sentence**. The holdout sentences are short
+imperatives, and on those the existing phrase moves the right class.
+
++2.386 against ±4.722 noise is **inside the noise band**, so this is not a result, and n=4
+is loose. But it is a cheap testable hypothesis the earlier framing could not raise:
+`[angry]` may be **sentence-dependent** rather than dead. Until an n=8 run across sentence
+types settles it, the supported claim is narrower than previously written — on *that*
+sentence, `[angry]` does nothing.
+
+Next in cost order: (1) re-measure `[angry]` across sentence types; (2) tune `[sad]`, which
+has a demonstrated effect and therefore a real incumbent to beat — a far better-posed
+optimisation than trying to create an effect from nothing; (3) widen the candidate grammar
+only after those, since more candidates raise the Bonferroni bar and shrinking the search
+is free.
+
+Also landed: `tests/real_cue_activation_qwen.rs`, the C4.2′ runner ADR-0003 specified and
+left outstanding. Opt-in, ~26 min, first run enforces nothing until a sentinel is earned.

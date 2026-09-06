@@ -1,0 +1,38 @@
+[tune] label=angry judge-class=angry n=4/arm
+[tune] incumbent: "Speak in an angry tone"
+[tune] candidate: "Speak as if you are genuinely angry"
+[tune] candidate: "Say this the way someone who is angry would say it"
+[tune] candidate: "You are angry. Speak accordingly"
+[tune] candidate: "Speak in a sharply angry tone"
+[tune] alpha 0.01250 (Bonferroni/4)  renders: 64
+
+[tune] === Tune split ===
+  sham           p_plain=0.2497 p_sham=1.0000 delta=+0.019 +/-3.194 top-gain=neutral
+  incumbent      p_plain=0.0961 p_sham=0.2374 delta=+0.577 +/-3.266 top-gain=neutral
+  counter-cue    p_plain=0.0432 p_sham=0.0332 delta=-0.993 +/-3.714 top-gain=happy
+  cand:Speak as if you ar p_plain=0.0523 p_sham=0.0442 delta=+0.886 +/-3.158 top-gain=unknown
+  cand:Say this the way s p_plain=0.1633 p_sham=0.0799 delta=+0.743 +/-3.436 top-gain=neutral
+  cand:You are angry. Spe p_plain=0.2388 p_sham=0.2058 delta=+0.121 +/-2.857 top-gain=neutral
+  cand:Speak in a sharply p_plain=0.0232 p_sham=0.0745 delta=+0.358 +/-3.754 top-gain=happy
+
+[tune] === Holdout split ===
+  sham           p_plain=0.5247 p_sham=1.0000 delta=-0.173 +/-2.171 top-gain=neutral
+  incumbent      p_plain=0.3256 p_sham=0.0275 delta=+2.386 +/-4.722 top-gain=angry
+  counter-cue    p_plain=0.4866 p_sham=0.0376 delta=-1.341 +/-2.123 top-gain=happy
+  cand:Speak as if you ar p_plain=0.4536 p_sham=0.0772 delta=+2.336 +/-4.952 top-gain=angry
+  cand:Say this the way s p_plain=0.1573 p_sham=0.0139 delta=+2.009 +/-5.281 top-gain=surprised
+  cand:You are angry. Spe p_plain=0.5036 p_sham=0.0319 delta=+1.451 +/-4.526 top-gain=surprised
+  cand:Speak in a sharply p_plain=0.2333 p_sham=0.0082 delta=+1.273 +/-3.454 top-gain=surprised
+
+=== decision ===
+corrected alpha 0.01250
+  rejected  "Speak as if you are genuinely angry"
+            NoAcousticChange { p: 0.05228470546817565, alpha: 0.0125 }
+  rejected  "Say this the way someone who is angry would say it"
+            NoAcousticChange { p: 0.16326203074083004, alpha: 0.0125 }
+  rejected  "You are angry. Speak accordingly"
+            NoAcousticChange { p: 0.23878282170111487, alpha: 0.0125 }
+  rejected  "Speak in a sharply angry tone"
+            NoAcousticChange { p: 0.023185052933336687, alpha: 0.0125 }
+
+No candidate cleared every criterion. The incumbent stands.
