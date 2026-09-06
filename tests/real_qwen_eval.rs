@@ -108,28 +108,41 @@ fn qwen_eval_scores_real_renders_natively() {
         "1.7B-CustomVoice honours instructions, so the cue must have produced one"
     );
 
-    // 3. Activation refuses on a deterministic engine instead of inventing a number.
-    let refused = measure_activation(
+    // 3. Activation now MEASURES, because the engine can vary its draw.
+    //
+    // This assertion used to require the opposite — that `measure_activation` refuse —
+    // and its panic message said what to do when a seed arrived: "delete this assertion
+    // and gate the real numbers instead". Per-render seed control landed in d1d0ceb, so
+    // that is what this now does. The refusal path is still covered, by the engine-side
+    // `honors_seed` contract and its unit tests.
+    let n = 4; // the minimum at which the exact permutation test can reject at alpha=0.05
+    let (m, detail) = measure_activation(
         &engine,
         backend,
         &oracle,
         QwenCase { id: "act", text: CUED, lang: "en" },
-        4,
+        n,
         0.05,
+    )
+    .expect("engine honours seeds, so activation is measurable");
+
+    eprintln!("[qwen-eval] activation: activated={} {}", m.activated, detail);
+    eprintln!("[qwen-eval]   wer cued {:.3} vs plain {:.3}", m.wer, m.baseline_wer);
+
+    // What is asserted is that the measurement is SOUND, not what it concluded. Whether
+    // this checkpoint moves for this cue is a finding, and turning a finding into a
+    // required outcome is how a gate starts lying.
+    assert_eq!(m.case_id, "act");
+    assert_eq!(m.backend, backend.as_str());
+    assert!(m.wer.is_finite() && m.baseline_wer.is_finite(), "non-finite WER");
+    assert!(
+        detail.contains("p="),
+        "the detail line must carry the p-value that justifies the verdict: {detail}"
     );
-    match refused {
-        Ok((m, detail)) => panic!(
-            "measure_activation returned a measurement ({m:?}, {detail}) from an engine \
-             that cannot vary its draws. Either QwenRequest gained a seed — in which case \
-             delete this assertion and gate the real numbers instead — or the degeneracy \
-             check regressed and the harness is now manufacturing activation results."
-        ),
-        Err(e) => {
-            eprintln!("[qwen-eval] activation correctly refused: {e}");
-            assert!(
-                e.contains("bit-identical"),
-                "refused for the wrong reason: {e}"
-            );
-        }
-    }
+    // A cue that "activates" only by destroying intelligibility is not a success.
+    assert!(
+        m.wer <= MAX_WER,
+        "cued render unintelligible (WER {}), so any activation verdict is worthless",
+        m.wer
+    );
 }

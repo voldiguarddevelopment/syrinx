@@ -10,6 +10,11 @@ publish = false
 # `Synthesizer`.
 default = ["real"]
 real = ["dep:syrinx-serve", "syrinx-serve/real", "dep:syrinx-stt", "syrinx-stt/real", "dep:syrinx-cue", "dep:syrinx-qwen", "syrinx-qwen/real"]
+# GPU passthrough. Without this the crate silently has no `cuda` feature at all, so
+# `--features cuda` on a workspace build does not reach it and anything here that loads a
+# model runs on CPU — the same omission that made `syrinx qwen --cuda` fall back silently
+# (fixed 2026-09-06). A crate that gains a model dependency needs BOTH features extended.
+cuda = ["real", "syrinx-serve/cuda", "syrinx-qwen/cuda", "syrinx-stt/cuda"]
 # The affect judge (`affect` module): a speech-emotion model run through ONNX Runtime.
 # OFF BY DEFAULT and it must stay that way — it pulls a 1.3 GB checkpoint and an ONNX
 # Runtime download, neither of which a plain `cargo build` should ever touch. Implies

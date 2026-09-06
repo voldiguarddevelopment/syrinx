@@ -92,3 +92,50 @@ Caveat that applies to all of the above: **n = 1 per condition.** Per-render see
 landed the same day (`d1d0ceb`), so re-running this with 4-8 seeds per condition would
 replace the window-spread floor with a real noise model. Until then these are hypotheses to
 listen against, not results.
+
+## n=8 with real seeds — and it OVERTURNS the n=1 read above
+
+Everything above this heading was n=1 per condition, with a noise floor *simulated* by
+sliding a window over the same render. Per-render seed control (`d1d0ceb`) made the real
+measurement possible: 8 draws per condition, 48 renders, 6.2 min on one GPU.
+
+    cue      delivery changed?          toward the named class?
+    happy    no   p=0.3737 effect 1.76  +0.147 vs seed-noise +/-0.172   cannot tell
+    sad      YES  p=0.0019 effect 2.98  +0.018 vs seed-noise +/-0.045   cannot tell
+    angry    no   p=0.7417 effect 1.40  +0.132 vs seed-noise +/-0.136   cannot tell
+
+**The `[happy]` result above is withdrawn.** At n=1 it read +0.262 against a simulated
+floor of 0.222 and was reported as "moved toward the cued class" — the one apparent
+success. At n=8 the same comparison is +0.147 against a *measured* seed noise of ±0.172,
+i.e. inside it, and the acoustic permutation test cannot distinguish the cued renders from
+the plain ones at all (p=0.37). The n=1 verdict was an artefact of having one draw and a
+stand-in for noise. This is exactly the failure the acoustic module was written to prevent,
+and it still took a real noise model to catch it.
+
+**`[sad]` is the one cue that demonstrably works** — p=0.0019 on the permutation test
+(n=8 resolves to 1/6435, so this is well clear of the floor), effect 2.98. That converges
+with the acoustic proxy, which found textbook sad prosody in that pair: pitch down 43 Hz,
+variability nearly halved, timbre markedly darker. The delivery really does change. Whether
+it changes *into sadness* is still unanswerable here, because sad is the judge's worst
+class (0.17 recall; it hears real acted sadness as happy).
+
+**`[angry]` does not change the delivery at all** (p=0.74). The earlier acoustic reading —
+quieter, less pitch-variable, the wrong direction for arousal 0.90 — is better explained as
+one draw's noise than as a wrong-direction response. Three independent looks now agree the
+angry cue is not taking on this checkpoint.
+
+### What this means, stated carefully
+
+No cue can be shown to move the audio *toward* its named emotion. Every affect delta sits
+inside seed noise. That is a statement about the **experiment**, not a verdict on the cue
+system: the judge is weak on 6 of 8 classes, n=8 is small, and one preset voice on one
+checkpoint is a narrow sample. What can be said is narrower and firmer:
+
+- the cue layer reliably reaches the model (the instruction is built, delivered, and for
+  `[sad]` provably alters the audio);
+- only `[sad]` produces a change larger than the model's own draw-to-draw variation;
+- nothing here establishes that any change is the *named* emotion.
+
+Which is why the six files are still worth your ears. The measurement has become honest
+enough to say "cannot tell" three times, and that is the correct answer to give when it is
+true.

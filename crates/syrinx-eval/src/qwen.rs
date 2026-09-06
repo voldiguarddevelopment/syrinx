@@ -154,9 +154,13 @@ fn render_n<E: QwenEngine>(
     n: usize,
 ) -> Result<Vec<Features>, String> {
     (0..n)
-        .map(|_| {
+        .map(|i| {
             let req = QwenRequest { mode, text, instruct, instruct_effect: effect };
-            let wav = engine.render(&req)?;
+            // `render_seeded`, not `render`: the whole point is n DIFFERENT draws, and
+            // `render` gives the engine's one configured draw n times over. Both
+            // conditions are handed the same seed set, so the instruction is the only
+            // thing that varies between them.
+            let wav = engine.render_seeded(&req, i as u64)?;
             Ok(features(&wav, SAMPLE_RATE))
         })
         .collect()
@@ -185,6 +189,19 @@ pub fn measure_activation<E: QwenEngine>(
 
     // The control is the same sentence with no instruction at all — not a different
     // sentence, so the only thing that varies is the cue.
+    // Ask before paying. An engine that ignores the seed renders n identical takes, and
+    // the degeneracy check below would catch that — but only after n renders. `honors_seed`
+    // is the exact, free answer.
+    if !engine.honors_seed() {
+        return Err(format!(
+            "{}: this engine does not honour a per-render seed (greedy decode, or a \
+             render-only implementation), so every take would be the same draw and there \
+             is no sampling noise to test against. Refusing rather than reporting a \
+             number that would call ANY difference significant.",
+            case.id
+        ));
+    }
+
     // Control first, so the degeneracy check below can refuse before paying for the
     // cued group as well.
     let plain = render_n(engine, p.mode, p.instruct_effect, &clean, None, n)?;
