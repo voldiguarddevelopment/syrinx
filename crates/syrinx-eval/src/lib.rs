@@ -26,6 +26,12 @@ pub mod activation;
 #[cfg(feature = "real")]
 pub mod qwen;
 
+/// The affect judge: what emotion a speech-emotion model hears in a render. Behind the
+/// off-by-default `affect` feature because it needs an ONNX Runtime and a downloaded
+/// checkpoint; a default build must never pull either.
+#[cfg(feature = "affect")]
+pub mod affect;
+
 /// Acoustic features and the permutation test that decides whether a cue activated.
 /// Pure DSP and statistics, no model dependency, so it is testable without a GPU.
 pub mod acoustic;

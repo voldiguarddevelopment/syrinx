@@ -19,6 +19,19 @@ structure of the questions they raise. A real commercial decision needs a lawyer
 | `w2v2-msp-dim` (audEERING) | dimensional affect — **REJECTED 2026-09-06 on licence** | CC-BY-NC-SA-4.0 | **no** |
 | `ehcalabres/wav2vec2-lg-xlsr-en-...` | affect judge (**adopted**): RAVDESS 8-class | **Apache-2.0** | **yes** |
 
+### Datasets
+
+| dataset | used for | licence | commercial |
+|---|---|---|---|
+| CREMA-D (180-clip probe subset) | determining the affect judge's head activation, and calibrating it cross-corpus | **ODbL-1.0** | **yes** |
+| RAVDESS | **deliberately NOT downloaded** | CC-BY-NC-SA-4.0 | no |
+
+RAVDESS is avoided twice over: it is non-commercial, *and* it is the affect judge's own
+training set, so measuring the judge on it would report memorisation as accuracy. CREMA-D
+is both permissively licensed and genuinely held out, which is why the judge's real
+cross-corpus accuracy (0.394) could be established at all against the card's in-domain
+claim of 0.822.
+
 ## The headline — acted on 2026-09-06
 
 This matrix changed the project's direction the day it was written. `CLAUDE.md` had said

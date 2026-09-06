@@ -79,7 +79,7 @@ ALL_GROUPS="unit modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qw
 #
 # They ARE listed by `--list` (list_groups prints this table), because a gate nobody can
 # find is a gate nobody runs. Opt-in, not hidden.
-OPT_IN_TESTS="real_cue_activation real_qwen_greedy_parity real_fish_s2_batch_parity real_qwen_serve real_qwen_eval real_qwen_seed"
+OPT_IN_TESTS="real_cue_activation real_qwen_greedy_parity real_fish_s2_batch_parity real_qwen_serve real_qwen_eval real_qwen_seed real_qwen_affect"
 
 optin_why() {
   case "$1" in
@@ -87,6 +87,8 @@ optin_why() {
       echo "C4.2 cue-activation certification — full render sweep + Whisper scoring" ;;
     real_qwen_greedy_parity)
       echo "Qwen3-TTS multi-frame greedy AR loop vs reference — ~21 min, 1.7B CPU/f32" ;;
+    real_qwen_affect)
+      echo "affect judge (SER) vs its python reference + cue direction report — needs --features affect" ;;
     real_qwen_seed)
       echo "per-render seed control: reproduces, differs, unclobberable — ~6 min, 0.6B CPU/f32" ;;
     real_qwen_eval)
@@ -147,6 +149,7 @@ is_pseudo_test() { case " $PSEUDO_TESTS " in *" $1 "*) return 0 ;; esac; return 
 # array without word-splitting surprises.
 test_cargo_args() {
   case "$1" in
+    real_qwen_affect) printf '%s\n' --features affect --test real_qwen_affect ;;
     # --no-fail-fast because this row is 13 separate binaries: without it cargo
     # stops at the first crate that fails and the crates after it are never run,
     # so the board would say "128 passed in 3 crates" and quietly omit the rest.

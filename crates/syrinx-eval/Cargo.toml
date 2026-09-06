@@ -10,6 +10,12 @@ publish = false
 # `Synthesizer`.
 default = ["real"]
 real = ["dep:syrinx-serve", "syrinx-serve/real", "dep:syrinx-stt", "syrinx-stt/real", "dep:syrinx-cue", "dep:syrinx-qwen", "syrinx-qwen/real"]
+# The affect judge (`affect` module): a speech-emotion model run through ONNX Runtime.
+# OFF BY DEFAULT and it must stay that way — it pulls a 1.3 GB checkpoint and an ONNX
+# Runtime download, neither of which a plain `cargo build` should ever touch. Implies
+# `real` because the judge reuses `syrinx_qwen::speaker::resample` rather than growing a
+# second resampler (see the module docs for why that matters).
+affect = ["real", "dep:ort"]
 
 [dependencies]
 # The real synthesizer (+ its WAV resampler) the measured metrics drive. Optional,
@@ -22,8 +28,18 @@ syrinx-stt = { path = "../syrinx-stt", optional = true }
 syrinx-cue = { path = "../syrinx-cue", optional = true }
 # The anchored speaker encoder, for SIM-o.
 syrinx-qwen = { path = "../syrinx-qwen", optional = true }
+# ONNX Runtime for the affect judge. Same version and feature set as the tree's other
+# `ort` user (`syrinx-frontend`, the CosyVoice prompt speech-token tokenizer), so the two
+# cannot end up wanting different runtimes; `download-binaries` means no system dep.
+ort = { version = "2.0.0-rc.10", optional = true, default-features = false, features = ["std", "ndarray", "download-binaries", "tls-rustls"] }
 
 [dev-dependencies]
 # The SIM-o example reads/writes WAV and drives Candle directly.
 hound = "3"
 candle-core = "0.8"
+
+# The affect-judge report. Behind `required-features` so a default `cargo build --examples`
+# (which has `affect` off) does not try to compile against an absent module.
+[[example]]
+name = "affect_judge"
+required-features = ["affect"]

@@ -109,6 +109,11 @@ real = [
     "dep:syrinx-stt",
     "syrinx-stt/real",
 ]
+# The affect judge (`tests/real_qwen_affect.rs`): enables `syrinx-eval/affect`, which pulls
+# ONNX Runtime and the speech-emotion checkpoint. OFF BY DEFAULT and it must stay off — a
+# plain `cargo build` must never download a 1.3 GB model. The test self-skips (printing a
+# SKIP, never a silent green) when built without it.
+affect = ["real", "dep:syrinx-eval", "syrinx-eval/affect"]
 # Text-normalizer parity track: enables `syrinx-frontend/textnorm` for the root
 # `tests/real_textnorm_parity.rs` test. Lightweight (pure Rust, no model deps), so
 # the text-level parity check builds + runs fast without the `real` model stack.
