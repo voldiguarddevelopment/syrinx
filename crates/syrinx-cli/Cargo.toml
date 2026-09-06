@@ -33,7 +33,7 @@ tn = ["real", "syrinx-serve/tn"]
 # GPU (CUDA) speed path for `--cuda`: pulls syrinx-serve's `cuda` feature so
 # `pick_device`/`load_on_device` can open `cuda:i`. Output is not bit-equal to the
 # CPU reference — CUDA is for speed only.
-cuda = ["real", "syrinx-serve/cuda", "syrinx-fish/cuda", "syrinx-stt/cuda"]
+cuda = ["real", "syrinx-serve/cuda", "syrinx-fish/cuda", "syrinx-stt/cuda", "syrinx-qwen/cuda"]
 
 [dependencies]
 syrinx-cue = { path = "../syrinx-cue" }

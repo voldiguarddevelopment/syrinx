@@ -238,3 +238,47 @@ pub fn measure_activation<E: QwenEngine>(
         detail,
     ))
 }
+
+// ---------------------------------------------------------------- speaker similarity
+
+/// Cosine similarity between two speaker embeddings, i.e. **SIM-o**.
+///
+/// `CLAUDE.md` lists SIM-o among the blocked-on-human perceptual work. That grouping was
+/// right when it was written and is no longer: SIM-o is not perceptual at all — it is a
+/// cosine between speaker embeddings, fully objective — and it was blocked only because
+/// nothing in-tree could produce the embeddings. `syrinx_qwen::speaker::SpeakerEncoder`
+/// now can, anchored to the reference at 1e-6 (2048-wide) and 6e-7 (1024-wide). MOS is
+/// the part that genuinely still needs ears or a MOS-prediction model.
+///
+/// **What this does not give you.** The encoder scoring the clone belongs to the same
+/// family that produced it, so this measures "did the render land where the reference
+/// lands in Qwen's own speaker space" — informative, and enough to catch a clone that
+/// ignored its reference entirely, but weaker than a genuinely independent verifier. The
+/// CosyVoice path in [`crate::metrics`] uses CAM++, a separate model, which is the
+/// stronger arrangement. Read a high score here as "not obviously wrong" rather than as
+/// proof of identity, and do not compare these numbers against CAM++ SIM-o from the
+/// literature — different encoders, different scales.
+///
+/// Both clips must already be at the encoder's rate; `embed` refuses otherwise rather
+/// than resampling silently.
+pub fn speaker_similarity(
+    encoder: &syrinx_qwen::speaker::SpeakerEncoder,
+    reference: &[f32],
+    render: &[f32],
+    sample_rate: u32,
+) -> Result<f64, String> {
+    let a = encoder.embed(reference, sample_rate).map_err(|e| format!("embed reference: {e}"))?;
+    let b = encoder.embed(render, sample_rate).map_err(|e| format!("embed render: {e}"))?;
+    let av: Vec<f32> = a.flatten_all().and_then(|t| t.to_vec1()).map_err(|e| e.to_string())?;
+    let bv: Vec<f32> = b.flatten_all().and_then(|t| t.to_vec1()).map_err(|e| e.to_string())?;
+    if av.len() != bv.len() {
+        return Err(format!("embedding widths differ: {} vs {}", av.len(), bv.len()));
+    }
+    let dot: f64 = av.iter().zip(&bv).map(|(x, y)| f64::from(*x) * f64::from(*y)).sum();
+    let na: f64 = av.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>().sqrt();
+    let nb: f64 = bv.iter().map(|x| f64::from(*x) * f64::from(*x)).sum::<f64>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        return Err("a zero-norm embedding — the clip was probably silent".to_string());
+    }
+    Ok(dot / (na * nb))
+}

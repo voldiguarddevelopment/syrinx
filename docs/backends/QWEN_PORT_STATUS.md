@@ -537,3 +537,25 @@ Still open on this path: no CUDA/bf16 execution (this test is CPU-only by constr
 no `syrinx-eval` hookup, no streaming path (the port has none, so `response_format:
 "stream"` still takes the handler's buffered fallback), and voice *quality* remains
 perceptual and blocked-on-human — WER says the words are right, not that the voice is good.
+
+## GPU, VoiceDesign, the split, and SIM-o — 2026-09-06
+
+Four items were previously listed here as out of reach. Three were not; see
+`renders/2026-09-06-qwen-gpu/FINDINGS.md` for the full write-up.
+
+- **CUDA/bf16 works** — and a real defect blocked it: `syrinx-cli`'s `cuda` feature omitted
+  `syrinx-qwen/cuda`, so `syrinx qwen --cuda` silently fell back to CPU. Fixed.
+- **VoiceDesign renders** (the checkpoint was on disk all along) and **the multi-segment
+  cue split renders end to end**, on both devices.
+- **The cost, quantified:** the same two-segment split is **8.2 s on GPU bf16 vs 486 s on
+  CPU f32 — 59x**. Every "too expensive to run" judgement in the subagent reports reduces
+  to that number, not to a capability gap.
+- **SIM-o is computable and is no longer blocked-on-human.** It is a cosine between speaker
+  embeddings, not a perceptual judgement; it was blocked only for want of an encoder, and
+  `SpeakerEncoder` is now anchored at 1e-6 / 6e-7. Clone renders score **0.985** against a
+  same-speaker ceiling of 0.997 and a different-speaker floor of 0.925. Read the gap, not
+  the absolute number — 0.90 is *below* a different speaker on this encoder.
+
+Still genuinely blocked: **MOS**, which needs ears or a MOS-prediction model. And SIM-o
+here uses Qwen's own encoder, so it is not an independent verifier the way CosyVoice's
+CAM++ path is.
