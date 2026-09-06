@@ -116,8 +116,8 @@ prosody = "unsupported"
 emphasis = "unsupported"
 pause = "unsupported"
 speaker_turn = "unsupported"
-source = "prompt.rs::honors_instruct (true for 1b7) + test `the_17b_custom_voice_checkpoint_is_instructable`; CONTROL_SURVEY.md §1"
-notes = "Natural-language instruct + 9 preset timbres. No inline syntax exists, so cues lower to an utterance-scoped instruction; conflicting cues force a sub-utterance split (C2.3)."
+source = "prompt.rs::honors_instruct (true for 1b7) + test `the_17b_custom_voice_checkpoint_is_instructable`; CONTROL_SURVEY.md §1. NOTE (ADR-0003 §6): this source establishes the instruction is DELIVERED, not that it affects the audio. Measured 2026-09-06 at n=8: of three cues, only [sad] changed the delivery beyond seed noise (p=0.0019); [happy] p=0.37 and [angry] p=0.74 did not. Sham controls were null, so those are real nulls and not prompt perturbation. See renders/2026-09-06-instruct-lang/."
+notes = "Natural-language instruct + 9 preset timbres. No inline syntax exists, so cues lower to an utterance-scoped instruction; conflicting cues force a sub-utterance split (C2.3). `honored` here means the channel exists and the instruction reaches the model — NOT that every label steers delivery. The Support value is deliberately not demoted: `Accepted` lowers exactly like `Unsupported` (caps.rs:34-36), so demoting would silently switch the cue layer off."
 
 [[backend]]
 id = "qwen3-1.7b-voicedesign"

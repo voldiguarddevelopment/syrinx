@@ -633,3 +633,54 @@ entries still read as current:**
 `crates/syrinx-serve/src/lib.rs:765` still defaults the `backend=` query parameter to Fish
 S2-pro, described there as "the primary TTS path". Under a Qwen-only direction the server's
 default points at a research-licensed backend. Flagged for the maintainer.
+
+### A27 — 2026-09-06 — **C4.2's acceptance criterion is rewritten (ADR-0003); the 0.85 event floor is retired**
+
+C4.2's AC gated **event activation ≥ 0.85 on `Inline::Open` backends**. After the Qwen
+redirection that criterion is orphaned: the only `Inline::Open` backend is `fish-s2-pro`,
+which is research-licensed and cannot ship, and every Qwen checkpoint is `inline = none`
+with `event = unsupported`, so an event cue is filtered before a render happens.
+`tests/real_cue_activation.rs:73` hard-wires `const BACKEND = "fish-s2-pro"`. Completing
+the 2.4 h run recorded as outstanding in **A25** would have certified a threshold for a
+backend we do not ship — which is why it was *not* completed, and this replaces it.
+
+**0.85 was never measured.** It was written here before any run existed. Retiring it is
+correcting the record, and it is deliberately **not** replaced by a smaller
+plausible-sounding number: a floor nothing passes is a broken gate, a floor everything
+passes is decoration, and one chosen to sit between the two is threshold-fitting.
+
+The new criterion (C4.2′, ADR-0003) is a falsifiability gate plus a ratchet — four clauses,
+pre-registered:
+
+- **A — negative controls.** A1 the 0.6B renders bit-identically (a control on *our own*
+  `honors_instruct` filter, and the ADR says so rather than calling it a model control);
+  A2 A/A calibration at the nominal alpha; **A3 a sham arm**.
+- **B — one pre-registered sentinel must activate**, earned by replication on a disjoint
+  seed block, with "clause B not enabled" recorded in advance as an acceptable outcome.
+- **C — the WER veto**, `wer_delta ≤ 0.5`, carried over unchanged. The only part of the
+  original C4.2 that survives intact.
+- **D — a provenance-keyed ratchet** rather than a floor.
+
+**A3 is the substantive addition and it has already been run.** `assemble_text_mode`
+prepends the instruct as text tokens, so cued and plain differ in prompt *length*, not only
+meaning — a model treating the instruct as noise would still reject the cued-vs-plain null.
+120 renders on 2026-09-06 (`renders/2026-09-06-instruct-lang/`) put a delivery-neutral
+instruction of comparable length in its own arm per language. **All four shams are null**,
+so the confound is measured and rejected and `[sad]`'s p=0.0019 stands as a measurement of
+content. Recorded blemish: `sham-en`/angry came in at p=0.0325, larger than the real cue on
+that case — inside correction, and the reason the arm stays in every future run.
+
+Also, per ADR-0003 §6: `caps.toml`'s `source`/`notes` for the 1.7B-CustomVoice
+`emotion`/`style` rows are narrowed to say what was actually verified — the instruction is
+*delivered* — with the n=8 nulls cited. The `Support` **values are unchanged**:
+`Accepted` lowers exactly like `Unsupported`, so demoting would silently switch the cue
+layer off, and `tests/expressive_api.rs:155` is frozen on `"honored"`.
+
+Nothing frozen was edited. `evaluate_activation` and its types keep their exact signatures,
+`tests/cue_activation_gate.rs` stays green untouched, and `real_cue_activation` remains the
+fish research run. The new logic is additive (`syrinx_eval::contrast`) and, being pure, is
+gated on the model-free board by `tests/cue_contrast_gate.rs` — 22 assertions, every clause
+pinned on both sides of its boundary.
+
+**Still outstanding for C4.2′:** the run itself (~26 min, opt-in) and clause B's sentinel,
+which cannot be pinned until a first run earns one.

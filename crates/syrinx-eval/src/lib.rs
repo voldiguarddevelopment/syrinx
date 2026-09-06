@@ -20,6 +20,11 @@ pub mod metrics;
 /// model-free board.
 pub mod activation;
 
+/// C4.2' — the arm-contrast decision from ADR-0003: cue vs plain, sham vs plain, cue vs
+/// sham, A vs A. Pure like `activation` and for the same reason — the numbers need a GPU,
+/// the decision logic must stay on the model-free board.
+pub mod contrast;
+
 /// Qwen3-TTS evaluation: drives the serve Qwen engine and scores it with the in-tree
 /// Whisper (`syrinx-stt`) rather than shelling out to Python, as C4.1 requires. Behind
 /// `real` because it drives real weights.
