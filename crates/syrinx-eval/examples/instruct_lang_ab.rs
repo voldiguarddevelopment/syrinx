@@ -36,7 +36,10 @@
 use candle_core::Device;
 use syrinx_cue::BackendId;
 use syrinx_eval::acoustic::{activation_test, features, Features};
-use syrinx_eval::affect::{ravdess8_spec, ravdess_label_for_cue, score_resampled, OnnxJudge};
+use syrinx_eval::affect::{
+    emotion2vec9_spec, emotion2vec_label_for_cue, ravdess8_spec, ravdess_label_for_cue,
+    score_resampled, OnnxJudge,
+};
 use syrinx_serve::qwen::{plan, QwenEngine, QwenRequest};
 use syrinx_serve::synth_qwen::{QwenModelEngine, QwenVoice};
 
@@ -123,13 +126,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ARMS * n * CASES.len()
     );
 
-    let mut judge = match std::env::var("SYRINX_AFFECT_ONNX") {
-        Ok(p) => Some(OnnxJudge::load(&p, ravdess8_spec())?),
-        Err(_) => {
-            eprintln!("[lang-ab] SYRINX_AFFECT_ONNX unset — acoustic question only");
-            None
-        }
+    // emotion2vec+ when available (CREMA-D 0.911, `sad` 0.867); the RAVDESS judge only as
+    // a fallback, and it is worth saying why the choice matters here: that judge scores
+    // `sad` at 0.17 recall, so on the one cue with a demonstrated acoustic effect it had no
+    // standing to say anything at all.
+    let (mut judge, e2v) = match std::env::var("SYRINX_EMOTION2VEC_ONNX") {
+        Ok(p) => (Some(OnnxJudge::load(&p, emotion2vec9_spec())?), true),
+        Err(_) => match std::env::var("SYRINX_AFFECT_ONNX") {
+            Ok(p) => {
+                eprintln!("[lang-ab] falling back to the RAVDESS judge (weak on 6 of 8 classes)");
+                (Some(OnnxJudge::load(&p, ravdess8_spec())?), false)
+            }
+            Err(_) => {
+                eprintln!("[lang-ab] no judge configured — acoustic question only");
+                (None, false)
+            }
+        },
     };
+    if e2v {
+        eprintln!("[lang-ab] judge: emotion2vec+ large (logits, unbounded — NOT probabilities)");
+    }
 
     for (label, cue, text) in CASES {
         let p = plan(backend, &format!("{cue} {text}"))?;
@@ -190,8 +206,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("  {}", contrast("zh vs en", get("zh"), get("en"), alpha));
 
         if let Some(j) = judge.as_mut() {
-            let jl = ravdess_label_for_cue(label)
-                .ok_or_else(|| format!("no RAVDESS class maps to cue {label:?}"))?;
+            let jl = if e2v { emotion2vec_label_for_cue(label) } else { ravdess_label_for_cue(label) }
+                .ok_or_else(|| format!("no judge class maps to cue {label:?}"))?;
             let mut probs = |w: &Vec<Vec<f32>>| -> Result<Vec<f64>, Box<dyn std::error::Error>> {
                 w.iter()
                     .map(|s| {
@@ -202,7 +218,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let base = probs(&arms[0].1)?;
             let (mb, sb) = (mean(&base), sd(&base));
-            println!("  -- judge p({jl}), vs plain {mb:.3} (seed sd {sb:.3}) --");
+            let unit = if e2v { "logit" } else { "p" };
+            println!("  -- judge {unit}({jl}), vs plain {mb:.3} (seed sd {sb:.3}) --");
             for (k, w) in arms.iter().skip(1) {
                 let v = probs(w)?;
                 let noise = (sd(&v).powi(2) + sb * sb).sqrt();

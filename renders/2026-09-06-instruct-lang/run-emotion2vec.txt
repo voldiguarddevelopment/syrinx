@@ -1,0 +1,51 @@
+[lang-ab] device Cuda { gpu_id: 1 }  n=8/arm  5 arms x 3 cases = 120 renders
+[lang-ab] alpha 0.05 Bonferroni/21 = 0.00238
+[lang-ab] judge: emotion2vec+ large (logits, unbounded — NOT probabilities)
+
+[lang-ab] happy: en="Speak in a happy, cheerful tone"  zh="用开心愉悦的语气说"
+
+=== happy ===
+  en vs plain        --    p=0.3737 effect=1.76
+  zh vs plain        --    p=0.0643 effect=2.39
+  sham-en vs plain   --    p=0.3164 effect=1.85
+  sham-zh vs plain   --    p=0.4059 effect=1.70
+  en vs sham-en      --    p=0.1265 effect=2.17
+  zh vs sham-zh      --    p=0.8443 effect=1.24
+  zh vs en           --    p=0.6286 effect=1.49
+  -- judge logit(happy), vs plain 12.040 (seed sd 1.720) --
+     en       13.985  delta +1.946  +/-3.155  inside seed noise
+     zh       15.482  delta +3.443  +/-3.911  inside seed noise
+     sham-en  11.361  delta -0.679  +/-4.298  inside seed noise
+     sham-zh  14.129  delta +2.090  +/-5.100  inside seed noise
+
+[lang-ab] sad: en="Speak in a sad, sorrowful tone"  zh="用悲伤难过的语气说"
+
+=== sad ===
+  en vs plain      CHANGED p=0.0019 effect=2.98
+  zh vs plain        --    p=0.0569 effect=2.42
+  sham-en vs plain   --    p=0.7453 effect=1.41
+  sham-zh vs plain   --    p=0.9091 effect=1.18
+  en vs sham-en      --    p=0.0165 effect=2.61
+  zh vs sham-zh      --    p=0.0429 effect=2.45
+  zh vs en           --    p=0.5566 effect=1.58
+  -- judge logit(sad), vs plain -7.682 (seed sd 0.932) --
+     en       -3.675  delta +4.007  +/-2.926  TOWARD cued class
+     zh       -2.067  delta +5.615  +/-3.072  TOWARD cued class
+     sham-en  -7.773  delta -0.091  +/-1.160  inside seed noise
+     sham-zh  -7.620  delta +0.062  +/-1.239  inside seed noise
+
+[lang-ab] angry: en="Speak in an angry tone"  zh="用愤怒生气的语气说"
+
+=== angry ===
+  en vs plain        --    p=0.7417 effect=1.40
+  zh vs plain        --    p=0.2800 effect=1.90
+  sham-en vs plain   --    p=0.0325 effect=2.54
+  sham-zh vs plain   --    p=0.2862 effect=1.86
+  en vs sham-en      --    p=0.0581 effect=2.37
+  zh vs sham-zh      --    p=0.1049 effect=2.34
+  zh vs en           --    p=0.2522 effect=1.94
+  -- judge logit(angry), vs plain -6.341 (seed sd 4.426) --
+     en       -6.283  delta +0.058  +/-6.394  inside seed noise
+     zh       -9.768  delta -3.426  +/-5.071  inside seed noise
+     sham-en  -8.384  delta -2.042  +/-4.631  inside seed noise
+     sham-zh  -9.605  delta -3.264  +/-4.668  inside seed noise

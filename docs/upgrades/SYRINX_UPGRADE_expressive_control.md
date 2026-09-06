@@ -633,3 +633,44 @@ entries still read as current:**
 `crates/syrinx-serve/src/lib.rs:765` still defaults the `backend=` query parameter to Fish
 S2-pro, described there as "the primary TTS path". Under a Qwen-only direction the server's
 default points at a research-licensed backend. Flagged for the maintainer.
+
+### A28 — 2026-09-06 — **the judge is replaced, and `[sad]` is shown to move the audio toward sadness**
+
+The affect judge was the blocker on the only question that mattered. The RAVDESS 8-class
+model measured **0.394** cross-corpus and **0.17 on `sad`** — and `[sad]` was the one cue
+with a demonstrated acoustic effect (p=0.0019), so the judge had no standing to say whether
+the change was *toward sadness*. Every verdict came back "cannot tell", correctly.
+
+`emotion2vec/emotion2vec_plus_large` (FunASR licence, 42,526 h, dedicated SER) replaces it.
+Same 180-clip CREMA-D probe, same protocol, held out from both models: **0.911** overall,
+**0.867 on `sad`**, 1.000 on `angry`, 0.667 on `fearful` (weakest, confused with sad).
+`surprised`/`other`/`unknown` are not probed and no recall is claimed for them.
+
+**Not SenseVoiceSmall**, which `AFFECT_JUDGES.md` had recommended: it is CTC, so emotion
+arrives as tokens in a `[1,T,vocab]` stream rather than a `[1,labels]` vector; its unique
+offer was audio-event detection, which no Qwen checkpoint supports; and its ASR argument
+double-counted Whisper. The research note is retained with the reversal recorded in it.
+
+**The re-run answers the question.** Identical 120 renders, same seeds, new judge:
+
+- `[sad]`/en **+4.007 logits, p=0.0017**; `[sad]`/zh **+5.615, p=0.00014** — both clear
+  Bonferroni over all 12 comparisons (α=0.00417), while both shams sit flat at |t| < 0.25.
+- Three methods with different failure modes agree: the direction-blind acoustic test says
+  `[sad]` is the only cue that changes delivery, the direction-aware judge says it is the
+  only cue that moves toward its class, and the shams say neither is perturbation.
+- `[angry]` is null for the fourth independent time — and now on a judge with **1.000**
+  recall on `angry`, so this is a real null and not an instrument failure. It is the
+  clearest target the tuning loop has.
+
+**The caveat, recorded so it is not dropped:** `sad` is still not the winning class. Plain
+reads −7.68, cued −3.68/−2.07 — a large reliable move that stays negative; the argmax is
+`surprised` either way. The claim is "the cue adds substantial sadness evidence", not "the
+render reads as sad". Quoting the p-value without that sentence overstates it.
+
+Two defects were caught by anchoring the judge against funasr rather than trusting the
+export, and both would have produced plausible wrong numbers: the dynamo ONNX exporter
+emitted a length-dependent graph (right at the traced length, ~3 logits out elsewhere), and
+the model saturates so funasr's own softmax is one-hot to float precision — scoring on
+probabilities would have flattened every delta to 0 or ±1. The judge is anchored and scored
+on **logits**, and the export is capped at 160,079 samples (10.005 s), found by binary
+search and enforced by a test that asserts it errors rather than truncating.
