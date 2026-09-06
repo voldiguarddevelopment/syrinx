@@ -77,10 +77,26 @@ const SAD: [(&str, &str, &str); 6] = [
      "We used to come here every summer, and now the house belongs to someone else."),
 ];
 
+const HAPPY: [(&str, &str, &str); 6] = [
+    ("anchor-goodnews", "received good news",
+     "We finally heard back, and the news is better than we hoped."),
+    ("confirmation", "disbelieving confirmation",
+     "She said yes, she actually said yes."),
+    ("announcement", "plain announcement",
+     "They are giving us the whole week off."),
+    ("warm-greeting", "warm greeting",
+     "It is so good to see you after all this time."),
+    ("anticipation", "anticipation",
+     "I cannot wait for you to see what we have done with it."),
+    ("terse-triumph", "terse triumph",
+     "We did it. We actually did it."),
+];
+
 fn sentences_for(label: &str) -> Result<&'static [(&'static str, &'static str, &'static str)], String> {
     match label {
         "angry" => Ok(&ANGRY),
         "sad" => Ok(&SAD),
+        "happy" => Ok(&HAPPY),
         // No generic fallback: rendering a cue over text of a different affect measures the
         // text as much as the cue, and silently picking the wrong set would look like a
         // result. Add a set deliberately.

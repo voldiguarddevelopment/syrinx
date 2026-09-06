@@ -28,23 +28,82 @@ use syrinx_eval::tune::{
 use syrinx_serve::qwen::{InstructEffect, QwenEngine, QwenMode, QwenRequest};
 use syrinx_serve::synth_qwen::{QwenModelEngine, QwenVoice};
 
-/// Sentences per split. Sentence and cue are deliberately crossed: a phrase that only works
-/// on one sentence is overfitting, and the holdout is what detects it.
-const TUNE_SET: [&str; 3] = [
-    "You told me it was handled. You looked me in the eye and said it was handled.",
+/// Sentences per split, **per label**. Sentence and cue are deliberately crossed: a phrase
+/// that only works on one sentence is overfitting, and the holdout is what detects it.
+///
+/// Per label and semantically compatible with it, for the same reason
+/// `sentence_dependence.rs` is: rendering `[sad]` over angry text would confound the cue
+/// with the text's own affect in the RENDERER (the judge cannot read words, so it is
+/// unaffected). There is no generic fallback.
+///
+/// **These sentences are fresh.** The `[angry]` round's holdout was measured by
+/// `renders/2026-09-06-angry-sentences/`, which retired it — ADR-0004 §5 requires a new
+/// `holdout_id` once a partition has been looked at, and looking at it is exactly what that
+/// sweep did. None of the twelve below appears in either sentence-dependence sweep.
+type Split3 = [&'static str; 3];
+
+const ANGRY_TUNE: Split3 = [
+    "You promised me this was finished and it is not finished.",
     "I have asked three times now and nobody has given me a straight answer.",
     "That is the second time this week and I am done being polite about it.",
 ];
-const HOLDOUT_SET: [&str; 3] = [
-    "Put it back exactly where you found it, right now.",
-    "Do not tell me to calm down when you are the reason for this.",
-    "I trusted you with one thing and you could not even manage that.",
+const ANGRY_HOLDOUT: Split3 = [
+    "Take your hands off that and step back.",
+    "You do not get to decide that for me.",
+    "I am not asking you again.",
 ];
 
-const SHAM: &str = "Read the sentence that follows";
-/// The WRONG label's phrase. It should lose; if it wins, the round is void.
-const COUNTER: &str = "Speak in a happy, cheerful tone";
+const SAD_TUNE: Split3 = [
+    "The house is quiet now in a way it never used to be.",
+    "I keep forgetting that I cannot just call and tell her.",
+    "There was no one left to turn the lights on.",
+];
+const SAD_HOLDOUT: Split3 = [
+    "I packed the last box and closed the door behind me.",
+    "Nobody came, and after a while I stopped watching the road.",
+    "It rained the whole way home and I did not mind.",
+];
 
+fn splits_for(label: &str) -> Result<(Split3, Split3), String> {
+    match label {
+        "angry" => Ok((ANGRY_TUNE, ANGRY_HOLDOUT)),
+        "sad" => Ok((SAD_TUNE, SAD_HOLDOUT)),
+        other => Err(format!(
+            "no sentence splits for cue {other:?} — add them to tune_instruct.rs rather than \
+             reusing another cue's, which would confound the cue with the text"
+        )),
+    }
+}
+
+/// The counter-cue phrase per label: the phrasing for a DIFFERENT label, which should lose.
+/// For `[sad]` the opposite pole is `happy`; for `[angry]` likewise, since a phrase that
+/// merely raises arousal would otherwise look like anger.
+/// The judge's measured cross-corpus recall on this class (CREMA-D, 180 clips,
+/// `scripts/calibrate-emotion2vec.py`). ADR-0004 makes this mandatory on a tuned row: a
+/// verdict quoted without it is not a verdict, and hardcoding one class's value onto
+/// another's row would be worse than omitting it.
+fn judge_recall_for(label: &str) -> f64 {
+    match label {
+        "angry" => 1.000,
+        "neutral" => 1.000,
+        "happy" => 0.967,
+        "disgusted" => 0.967,
+        "sad" => 0.867,
+        "afraid" | "fearful" => 0.667,
+        // Not probed by CREMA-D. NaN rather than a guess: it will show up in the proposal
+        // as `NaN` and force whoever signs it to go and measure.
+        _ => f64::NAN,
+    }
+}
+
+fn counter_cue_for(label: &str) -> &'static str {
+    match label {
+        "sad" => "Speak in a happy, cheerful tone",
+        _ => "Speak in a sad, sorrowful tone",
+    }
+}
+
+const SHAM: &str = "Read the sentence that follows";
 fn mean(v: &[f64]) -> f64 {
     v.iter().sum::<f64>() / v.len().max(1) as f64
 }
@@ -82,6 +141,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jl = emotion2vec_label_for_cue(&label)
         .ok_or_else(|| format!("the judge has no class for cue {label:?}"))?;
 
+    let (tune_set, holdout_set) = splits_for(&label)?;
+    let counter = counter_cue_for(&label);
     let table = InstructTable::shared();
     let lang = InstructLang::En;
     let incumbent = table
@@ -110,14 +171,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         th.corrected_alpha(),
         candidates.len(),
         // 2 splits x (plain + incumbent + sham + counter + candidates) arms
-        // x TUNE_SET.len() sentences x n seeds. The sentence factor is easy to forget and
+        // x sentences-per-split x n seeds. The sentence factor is easy to forget and
         // it is a 3x error in the estimate when you do.
-        2 * n * (4 + candidates.len()) * TUNE_SET.len()
+        2 * n * (4 + candidates.len()) * tune_set.len()
     );
 
     let mut out: Vec<TuneMeasurement> = Vec::new();
 
-    for (split, sentences) in [(Split::Tune, TUNE_SET), (Split::Holdout, HOLDOUT_SET)] {
+    for (split, sentences) in [(Split::Tune, tune_set), (Split::Holdout, holdout_set)] {
         eprintln!("\n[tune] === {split:?} split ===");
         // Render one arm across all this split's sentences, n seeds each.
         let render = |ins: Option<&str>| -> Result<Vec<Vec<f32>>, String> {
@@ -219,8 +280,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         arm!("sham", TuneArm::Sham, None, sham);
         let inc_w = render(Some(&incumbent))?;
         arm!("incumbent", TuneArm::Incumbent, Some(incumbent.as_str()), inc_w);
-        let cc_w = render(Some(COUNTER))?;
-        arm!("counter-cue", TuneArm::CounterCue, Some(COUNTER), cc_w);
+        let cc_w = render(Some(counter))?;
+        arm!("counter-cue", TuneArm::CounterCue, Some(counter), cc_w);
         for c in &candidates {
             let w = render(Some(c))?;
             arm!(&format!("cand:{}", &c[..18.min(c.len())]), TuneArm::Candidate, Some(c.as_str()), w);
@@ -243,19 +304,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(c) => {
             let path = std::env::var("SYRINX_TUNE_OUT")
                 .unwrap_or_else(|_| format!(".opt-reports/tuned-{label}.toml"));
+            // The margin is the real one, measured on the HOLDOUT split -- the split the
+            // candidate was not selected on. Writing 0.0 here (as a first draft did) would
+            // put a placeholder into a provenance field whose entire purpose is to record
+            // what was actually measured.
+            let hd = |phrase: &str| {
+                out.iter()
+                    .find(|m| {
+                        m.split == Split::Holdout
+                            && m.phrase.as_deref() == Some(phrase)
+                    })
+                    .map(|m| m.cued_delta)
+            };
+            let margin = match (hd(&c.phrase), hd(&incumbent)) {
+                (Some(a), Some(b)) => a - b,
+                _ => f64::NAN,
+            };
             let row = format!(
                 "# PROPOSAL — inert until a human adds `accepted_by`. ADR-0004.\n\
                  [[tuned]]\nlabel = {:?}\nlang = {:?}\nbackend = \"qwen3-1.7b-customvoice\"\n\
                  phrase = {:?}\n# accepted_by = \"\"   # <- listen first, then sign\n\
                  measured_on = \"2026-09-06\"\nincumbent = {:?}\nmargin = {:.3}\n\
-                 judge = \"emotion2vec/emotion2vec_plus_large\"\njudge_recall_on_class = 1.0\n\
-                 holdout_id = \"h1-2026-09-06\"\nholdout_uses = 0\n\
+                 judge = \"emotion2vec/emotion2vec_plus_large\"\njudge_recall_on_class = {:.3}\n\
+                 holdout_id = {:?}\nholdout_uses = 0\n\
                  notes = \"proposed by examples/tune_instruct.rs\"\n",
                 c.label,
                 lang_code(lang),
                 c.phrase,
                 incumbent,
-                0.0,
+                margin,
+                judge_recall_for(&label),
+                format!("{label}-2026-09-06-a"),
             );
             std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).ok();
             std::fs::write(&path, &row)?;

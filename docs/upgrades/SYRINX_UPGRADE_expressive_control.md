@@ -841,3 +841,32 @@ is 0.867 on this class, not 1.0.
 Next: `[happy]` is the remaining cue whose verdict ("cannot tell") rests on a single
 sentence, and the sweep deliberately refuses to run without a purpose-built sentence set for
 it. Tuning is now well-posed for `[sad]` — a real, general incumbent to beat.
+
+### A32 — 2026-09-06 — **`[happy]` does not work; sentence-dependence is NOT a property of the channel**
+
+The third and last cue whose verdict rested on one sentence. n=8, six sentences, 144 renders.
+
+Nothing clears the acoustic bar (smallest p 0.1977), and the one judge-significant cell is
+`anticipation` at **−4.198** — significant in the **wrong direction**, top gain `unknown`.
+`[happy]`'s "cannot tell" upgrades to *does not work*, on six sentences instead of one.
+
+With all three swept, the structural question A30 raised is answered:
+
+| cue | acoustic | judge sig | top-gain == cue | both |
+|---|:-:|:-:|:-:|:-:|
+| `[sad]` | 2/6 | 3/6 | **5/6** | 2/6 |
+| `[angry]` | 0/6 | 1/6 | 2/6 | 1/6 |
+| `[happy]` | 0/6 | 1/6 *(wrong way)* | 3/6 | 0/6 |
+
+**Sentence-dependence is not a general property of the instruct channel.** `[sad]` works
+broadly, `[angry]` narrowly, `[happy]` not at all. Had all three degraded together the
+honest conclusion would have been that no per-cue claim survives sentence variation; they
+did not, so the instrument resolves real differences *between cues*, and `[sad]`'s result is
+a property of the cue rather than of its sentence.
+
+Fourth exact reproduction: `anchor-goodnews` returns p=0.3737 and Δ+1.946, matching the
+instruct-lang run digit for digit from a different worktree.
+
+Not claimed: any mechanism, and **not** that `[happy]` is unreachable — this measures the
+shipped phrase, not the concept. That makes `[happy]` the best-motivated tuning target after
+`[sad]`: a clear deficit, and a judge with 0.967 recall to detect a fix.
