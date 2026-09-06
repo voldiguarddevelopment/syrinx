@@ -327,12 +327,15 @@ Narrower entry points (all read the same `test-all.env`):
       ./scripts/test-all.sh --test real_qwen_eval             # ~37 min, 1.7B CPU/f32
       ./scripts/test-all.sh --test real_qwen_seed             # ~6 min, 0.6B CPU/f32
       ./scripts/test-all.sh --test real_qwen_affect           # needs --features affect
+      ./scripts/test-all.sh --test real_emotion2vec           # judge vs its funasr reference
+      ./scripts/test-all.sh --test real_cue_activation_qwen   # C4.2' (ADR-0003), ~26 min GPU
       SYRINX_FISH_BATCH_PARITY=1 ./scripts/test-all.sh --test real_fish_s2_batch_parity
-  That is all seven of `OPT_IN_TESTS`; keep this list and `scripts/test-groups.sh` in step,
+  That is all nine of `OPT_IN_TESTS`; keep this list and `scripts/test-groups.sh` in step,
   because an opt-in test nobody knows about is an unrun gate, and an unrun gate is dead.
   `real_cue_activation` is hard-wired to `fish-s2-pro` (`const BACKEND`) and gates event
-  activation, which **no Qwen checkpoint has** — so it certifies the research path only,
-  and cannot be pointed at the shipping one without redefining the criterion.
+  activation, which **no Qwen checkpoint has** — so it certifies the research path only.
+  ADR-0003 redefined the criterion for the shipping path and `real_cue_activation_qwen` is
+  that run; both are kept, because the Fish one still certifies in-tree code that builds.
   `real_qwen_greedy_parity` is the multi-frame greedy-decode anchor for the Qwen3-TTS
   generation loop — the only gate that covers the KV cache, position advancement, the
   per-frame talker→predictor handoff and the trailing-text schedule across many frames.
