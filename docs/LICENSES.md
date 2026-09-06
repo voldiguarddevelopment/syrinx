@@ -50,6 +50,15 @@ having invested its effort in the unlicensable half. **Decision (2026-09-06): Qw
 TTS path; `syrinx-fish` is deprecated** — code and results stay, no new work, never a
 shipping path.
 
+### Candidate affect judges (researched 2026-09-06, see backends/AFFECT_JUDGES.md)
+
+| model | licence | commercial | note |
+|---|---|---|---|
+| `FunAudioLLM/SenseVoiceSmall` | FunASR Model Open Source License | **yes**, attribution required | ASR + SER + audio-event detection in one pass. Licence read in full: grants use/copy/modify/share, requires attribution and model-name retention, does NOT restrict commercial use. Bespoke rather than OSI — wants a lawyer's glance, but it is not NonCommercial. |
+| `Qwen/Qwen2-Audio-7B-Instruct` | **Apache-2.0** | yes | audio LLM; good development instrument, poor gate (see the research note) |
+| `Qwen/Qwen2.5-Omni-7B`, `Qwen3-Omni-30B-A3B` | Apache-2.0 (tagged `other`, `license_name: apache-2.0`) | yes | heavier; same caveat |
+| `emotion2vec/emotion2vec_plus_large` | FunASR licence | yes, attribution | dedicated affect representation |
+
 ### Candidate second family
 
 | model | licence | notes |
