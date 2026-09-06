@@ -5,7 +5,12 @@ voice-cloning engine. A Rust workspace of focused crates implements a determinis
 text frontend, a Rust inference runtime over an adopted open base (Path A), an
 editable prosody control surface, speaker-latent blend/morph, paralinguistic
 control, streaming, and an OpenAI-compatible server. This file is the standing law.
-`DESIGN.md` is the full plan; `plan.md`/`spec.md`/`list.md` are the derived task trio.
+
+`DESIGN.md` and the `plan.md`/`list.md` task ledger are **historical** — the Ratchet loop
+they drove is finished (92 tasks, none `open`), and `spec.md` was a byte-identical copy of
+`plan.md` that has been reduced to a pointer. Current work lives in
+`docs/upgrades/SYRINX_UPGRADE_expressive_control.md`; decisions live in `adr/`. This file
+plus those two are what is authoritative.
 
 Context is thrown away every pass and re-derived from disk. **Disk and git history
 are the only memory.** Re-read the relevant files at the start of work; write your
@@ -49,10 +54,17 @@ so corner-cutting in one pass cannot poison the next.
 
 Syrinx is an ML system. A large fraction of its work — training, GPU inference,
 numerical parity against a Python reference, corpus collection/annotation, and
-**perceptual** judgments ("sounds natural", "intended emotion", SIM-o/MOS) — is **NOT
+**perceptual** judgments ("sounds natural", "intended emotion", MOS) — is **NOT
 expressible as a frozen-test + mutation gate**. The Ratchet loop must NEVER attempt
 those tasks, because the only way to "pass" them without the model/GPU/data/ears is
 to fake a green — the one outcome this system exists to prevent.
+
+**SIM-o is no longer on that list** (corrected 2026-09-06). It was grouped with MOS, but it
+is a cosine between speaker embeddings — objective, not perceptual — and
+`syrinx_eval::qwen::speaker_similarity` computes it today against a measured ceiling (0.997,
+same speaker different clip) and floor (0.925, a different speaker). The general test is
+whether a number needs *ears*, not whether it is about audio; apply that test rather than
+this list when something looks blocked.
 
 Those tasks are marked **`status: blocked`** in `list.md` with a human/GPU blocker.
 **If you are ever handed a blocked task: do not implement it, do not fabricate an
@@ -68,9 +80,13 @@ are deliberately off the autonomous path, exactly like a manual prerequisite.
   models + a GPU → blocked).
 - **Phase 1 (entire):** the deterministic text frontend — normalization, numeric/date
   expansion, lexicon/acronym overrides, the G2P/phonemizer interface, custom
-  pronunciation maps, the heteronym resolver, the SSML parser, punctuation→prosody,
+  pronunciation maps, the heteronym resolver, punctuation→prosody,
   context windowing, pacing/breath intervals, the test suite, the frontend→LM contract.
   This is the deterministic Rust win; everything here is golden-file / unit-test gated.
+  **The SSML parser is NOT in this list** — Phase 1 originally claimed it, and D6 moved it
+  to `syrinx-cue` on 2026-09-03 (see the crate contracts below). A second producer of
+  `CueDoc` is precisely what D6 forbids; do not build one here on the strength of an old
+  phase listing.
 - **Phase 3 (partial):** the editable prosody-plan **data model** (T-03.01, serialize /
   round-trip), volume-automation curves as a deterministic transform. **NOT** the
   predictors, emotion steering, or anything judged by ear → blocked.
@@ -82,10 +98,17 @@ are deliberately off the autonomous path, exactly like a manual prerequisite.
   wiring or release-with-model-card (need the whole engine → blocked).
 
 **Blocked-on-human (NOT loop tasks):** Phase 2 (Rust inference parity, quantization,
-SIM-o, watermark detection — needs weights + GPU + Python reference), most of Phase 3
+watermark detection — needs weights + GPU + Python reference), most of Phase 3
 (predictors/emotion/perceptual), Phase 4 (blend/morph — perceptual), Phase 5 (corpus +
 annotation + LoRA training, except the taxonomy/sourcing **docs** T-05.01/T-05.02),
 Phase 6 (adversarial disentanglement training), most of Phase 7, and Phase 8 wiring.
+
+What is blocked in Phase 2 is *parity* — comparing this runtime's tensors against a Python
+reference — and that blocker is real but no longer absolute: the box now has the weights and
+a GPU, and the Qwen stack has been anchored end to end. Phase 2's **weight-free substrate**
+(tensor ops, attention, SwiGLU, forward logits over name-seeded weights) was always
+buildable and was built; `list.md` marking seven Phase-2 tasks done is not a contradiction
+of this section.
 
 When the substrate is green and a human has done the ML work (trained/ported the
 model, built the corpus), the blocked tasks can be unblocked and given criteria that
@@ -102,16 +125,24 @@ versioned interfaces (never reach into another crate's internals):
 |-------|----------------|
 | `syrinx-frontend` | normalization, G2P, lexicon, heteronyms, context windowing |
 | `syrinx-cue` | **the sole owner of expressive-cue syntax**: bracket cues, SSML subset, the `CueDoc` IR, the label vocabulary, backend `ControlCaps`, and every lowering pass |
-| `syrinx-core` | tensor-ops glue, weight loading, quantization, device mgmt |
+| `syrinx-qwen` | **the TTS path** — Qwen3-TTS port: talker, predictor, Mimi codec, generation loop |
+| `syrinx-fish` | Fish Audio port (s1-mini, s2-pro) — **deprecated, research-licence only** |
+| `syrinx-stt` | Whisper ASR — the native WER oracle used to score renders |
 | `syrinx-lm` | AR semantic LM forward pass + paralinguistic tokens |
 | `syrinx-speaker` | speaker encoder, embedding store, blend/morph, attributes |
 | `syrinx-acoustic` | flow-matching decoder (DiT + ODE solver), chunk-aware streaming |
 | `syrinx-vocoder` | HiFi-GAN/Vocos waveform synthesis, 48kHz/8kHz paths |
 | `syrinx-prosody` | editable prosody-plan model + override API |
-| `syrinx-stream` | packet streaming, ring buffer, `cpal` out, TTFB path |
 | `syrinx-serve` | Axum server, OpenAI-compatible `/v1/audio`, watermarking |
 | `syrinx-eval` | MOS/SIM-o/WER/latency harness, frozen-eval-set runner |
 | `syrinx-cli` | local runner / dev harness |
+
+That is the whole workspace — **13 crates**. `syrinx-core` (tensor glue, weight loading,
+device management) and `syrinx-stream` (packet streaming, ring buffer, `cpal`) were deleted
+in `d09b11e`: each backend port turned out to need its own weight loading and device
+handling rather than a shared layer, so the responsibility moved into `syrinx-qwen` and
+`syrinx-fish`. Streaming is unbuilt — `syrinx-serve` currently answers
+`response_format: "stream"` from its buffered fallback.
 
 The deterministic frontend (`syrinx-frontend`), the cue layer (`syrinx-cue`), the
 prosody data model (`syrinx-prosody`), the eval-harness skeleton (`syrinx-eval`), and
@@ -123,8 +154,8 @@ one `CueDoc` IR. A second producer of that IR would mean two places to enforce t
 invariant below and two scoping implementations to keep in agreement, so `syrinx-frontend`
 *consumes* `CueDoc` and never parses cue syntax itself. No backend crate may parse cue
 syntax either. The model crates
-(`syrinx-lm`, `syrinx-acoustic`, `syrinx-vocoder`, `syrinx-speaker`, `syrinx-core`
-weight loading) are human-and-GPU territory — their tasks are blocked.
+(`syrinx-qwen`, `syrinx-fish`, `syrinx-lm`, `syrinx-acoustic`, `syrinx-vocoder`,
+`syrinx-speaker`) are human-and-GPU territory — their tasks are blocked.
 
 ---
 
@@ -238,15 +269,19 @@ weights + parity fixtures present. They SIGILL on the dev box (a pre-existing CP
 issue), so OFF-box you get compile-checks only — never a real pass. One command runs the
 whole verification on the box:
 
-    ./scripts/verify.sh --download        # first time — also pulls the Fish weights from HF
+    ./scripts/verify.sh --download        # first time — also pulls the weights from HF
     ./scripts/verify.sh                   # weights already in place
 
 It chains, in order: preflight → `cargo build --features real` (compile gate) →
-create/read `scripts/test-all.env` → download the Fish weights (`--download`) →
-`gen-fish-ref.py` (parity fixtures) → run every group (CV2 · CV3 · Fish s1-mini ·
-Fish s2-pro · voice · emotion) → a `PASS / SKIP / MISSING / FAIL` board. Exit 0 unless
-something FAILED; SKIP = that group's weights/fixtures aren't configured, MISSING = the
-test file isn't built yet.
+create/read `scripts/test-all.env` → download weights (`--download`) → `gen-fish-ref.py`
+(Fish parity fixtures) → run every group → a `PASS / SKIP / MISSING / FAIL` board. Exit 0
+unless something FAILED; SKIP = that group's weights/fixtures aren't configured, MISSING =
+the test file isn't built yet.
+
+The groups are defined once in `scripts/test-groups.sh` and that file is the authority —
+`ALL_GROUPS` is currently `unit modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2
+stt qwen_ckpt`, and `ALL_FAMILIES` is `fish qwen3 cosyvoice cosyvoice2 cosyvoice3 whisper
+free weights all`. Read it rather than trusting a list in prose, this one included.
 
 **GPU prerequisite (Blackwell / RTX 50-series boxes):** run
 `./scripts/setup-cuda-blackwell.sh` ONCE before any `--features cuda` build. candle 0.8.4
@@ -286,11 +321,18 @@ Narrower entry points (all read the same `test-all.env`):
   **Opt-in tests** are deliberately in no group and no family, so no routine board and no
   full `verify.sh` ever fires them; `--list` prints them in their own table under the
   groups, and you reach one by naming it:
-      ./scripts/test-all.sh --test real_cue_activation        # C4.2 certification run
+      ./scripts/test-all.sh --test real_cue_activation        # C4.2 run — fish-s2-pro ONLY
       ./scripts/test-all.sh --test real_qwen_greedy_parity    # ~21 min, 1.7B CPU/f32
       ./scripts/test-all.sh --test real_qwen_serve            # ~12 min, 0.6B CPU/f32
       ./scripts/test-all.sh --test real_qwen_eval             # ~37 min, 1.7B CPU/f32
+      ./scripts/test-all.sh --test real_qwen_seed             # ~6 min, 0.6B CPU/f32
+      ./scripts/test-all.sh --test real_qwen_affect           # needs --features affect
       SYRINX_FISH_BATCH_PARITY=1 ./scripts/test-all.sh --test real_fish_s2_batch_parity
+  That is all seven of `OPT_IN_TESTS`; keep this list and `scripts/test-groups.sh` in step,
+  because an opt-in test nobody knows about is an unrun gate, and an unrun gate is dead.
+  `real_cue_activation` is hard-wired to `fish-s2-pro` (`const BACKEND`) and gates event
+  activation, which **no Qwen checkpoint has** — so it certifies the research path only,
+  and cannot be pointed at the shipping one without redefining the criterion.
   `real_qwen_greedy_parity` is the multi-frame greedy-decode anchor for the Qwen3-TTS
   generation loop — the only gate that covers the KV cache, position advancement, the
   per-frame talker→predictor handoff and the trailing-text schedule across many frames.

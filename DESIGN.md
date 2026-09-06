@@ -9,11 +9,12 @@
 
 > **Current state (see [`README.md`](README.md) for the authoritative snapshot).** This is
 > the original build plan; the shipped engine has since grown beyond it. Syrinx is now
-> **bidirectional and pure-Rust both ways**: TTS via a **Fish Audio dual-AR** port
-> (`s2-pro` 5B — verified on GPU; `s1-mini` 0.5B — code-complete, HF-gated, not yet run)
-> *and* the original **CosyVoice2/3** ports, plus **STT** via a pure-Rust Candle **Whisper**
-> (`syrinx-stt`, verified) that also serves as the native WER oracle. The sections below are
-> retained as historical design context.
+> **bidirectional and pure-Rust both ways**: TTS via a **Qwen3-TTS** port (`syrinx-qwen`,
+> Apache-2.0 — the active path, anchored to the reference and verified on GPU), with the
+> **Fish Audio** and **CosyVoice2/3** ports retained but **deprecated**; plus **STT** via a
+> pure-Rust Candle **Whisper** (`syrinx-stt`, verified) that also serves as the native WER
+> oracle. Expressive cues live in **`syrinx-cue`**, which did not exist when this was
+> written. The sections below are retained as historical design context.
 
 ---
 

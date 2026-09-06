@@ -27,14 +27,20 @@ Syrinx is a **bidirectional** speech engine designed to run **entirely on your o
 machine**, both directions in **pure Rust** ([Candle](https://github.com/huggingface/candle)),
 no Python in the inference path:
 
-- **TTS (`text + voice → audio`)** — two model families. The primary path is a pure-Rust
-  port of **Fish Audio's dual-AR TTS** (`s2-pro` 5B / `s1-mini` 0.5B): a semantic AR
-  transformer + a fast AR head over an RVQ codec at **44.1 kHz**, with zero-shot voice
-  cloning and inline, model-native **emotion/style tags** (`[happy]`, `[whispers]`).
-  **Fish is the only TTS path under active development.** The original stack — pure-Rust
-  ports of **CosyVoice2-0.5B / CosyVoice3-0.5B** (AR Qwen2 LM → flow-matching mel → HiFT
-  vocoder, 24 kHz) — is **DEPRECATED**: the code stays in-tree and its parity results
-  stand, but it is no longer developed, tested on-box, or accepting new work.
+- **TTS (`text + voice → audio`)** — three model families, one of them live. The path under
+  active development is a pure-Rust port of **Qwen3-TTS** (`syrinx-qwen`): a talker +
+  predictor over a Mimi codec, with zero-shot voice cloning and utterance-scoped
+  **instruction** control. It is the shipping path for one reason above all — **every
+  Qwen3-TTS checkpoint is Apache-2.0**, so it can actually be used.
+  **Fish Audio** (`s2-pro` 5B / `s1-mini` 0.5B — dual-AR over an RVQ codec at 44.1 kHz,
+  with inline model-native tags) and **CosyVoice2/3-0.5B** (AR Qwen2 LM → flow-matching mel
+  → HiFT vocoder, 24 kHz) are both **DEPRECATED**: the code stays in-tree and their parity
+  results stand, but they get no new work. Fish is deprecated on **licence**, not quality —
+  every Fish checkpoint is research-only. See [docs/LICENSES.md](docs/LICENSES.md).
+- **Expressive cues (`syrinx-cue`)** — the sole owner of cue syntax: bracket cues
+  (`[happy]`, `[whispers]`) and an SSML subset both lower to one `CueDoc` IR, which is then
+  lowered per backend against its declared capabilities. Cue markup **never** reaches a
+  model as literal text; that invariant is enforced by property test, not by review.
 - **STT (`audio → text`)** — **`syrinx-stt`**, a pure-Rust **Candle Whisper**. It makes
   Syrinx bidirectional and doubles as the **native WER oracle**: synthesize, transcribe,
   compare — which is how the TTS is objectively verified, with no external `faster-whisper`.
@@ -355,9 +361,11 @@ the harness will not mark a task done on belief.
 
 ## Roadmap
 
-> **Direction:** **Fish Audio is the only TTS path under active development.** The
-> CosyVoice2/CosyVoice3 ports below are **deprecated** — frozen in-tree with their parity
-> results intact, but no longer developed or tested on-box.
+> **Direction (2026-09-06):** **Qwen3-TTS is the only TTS path under active development.**
+> The Fish Audio and CosyVoice2/CosyVoice3 ports below are **deprecated** — frozen in-tree
+> with their parity results intact, but no longer developed. Fish was deprecated on
+> **licence**: every Fish checkpoint is research-only, every Qwen3-TTS checkpoint is
+> Apache-2.0. See [docs/LICENSES.md](docs/LICENSES.md).
 
 **Done (real, verified):**
 - [x] Eleven-crate workspace + CI (the real ports are the default build)

@@ -86,14 +86,18 @@ this pass would put unverified rows on the board.
 
 ### 2.3 Not verified at all — needs weights, and in most cases a GPU
 
+> **Four of these seven rows closed on 2026-09-03/06** and are struck through below;
+> later sections of this same file contradicted them for days. Only the three
+> un-struck rows are still open.
+
 | what | why it is unverified | what it needs |
 |------|----------------------|---------------|
-| End-to-end synthesis (`examples/synth.rs`) | never executed | talker (1.8/3.9 GB) + tokenizer (682 MB) checkpoints; CPU/f32 will work but is slow, CUDA/bf16 is the intended path |
-| Numerical parity of the **talker + code predictor** against `Qwen3TTSModel` | there is no Python reference dump for this crate at all — nothing like `scripts/gen-fish-ref.py` exists for Qwen | a reference-dump script + `~/.venvs/qwen`; then a `real_qwen_*_parity.rs` |
+| ~~End-to-end synthesis (`examples/synth.rs`)~~ | **CLOSED 2026-09-03** — see "First end-to-end renders" below; many renders since, on CPU and GPU. Original note: | talker (1.8/3.9 GB) + tokenizer (682 MB) checkpoints; CPU/f32 will work but is slow, CUDA/bf16 is the intended path |
+| ~~Numerical parity of the **talker + code predictor** against `Qwen3TTSModel`~~ | **CLOSED 2026-09-03** — four generators now exist and the whole stack is anchored; see §5 gap 3 and the Parity status table. Original note: | a reference-dump script + `~/.venvs/qwen`; then a `real_qwen_*_parity.rs` |
 | Audio quality / intelligibility of the port's output | perceptual + WER; blocked-on-human per `CLAUDE.md` | rendered audio + the `syrinx-stt` WER oracle |
 | ~~The **voice-clone path** end to end (`-Base`)~~ | **CLOSED 2026-09-03.** `crates/syrinx-qwen/examples/clone.rs` drives it: WAV → `speaker::resample` → `SpeakerEncoder::embed` → (`MimiEncoder::encode` for ICL) → `build_voice_clone` → `realize_plan` → generate → codec → WAV. Both reference modes render at WER 0.000 on CPU (renders under `renders/2026-09-03-qwen-base-clone/`) | — |
-| Any CUDA execution | nothing in this crate has ever run on a GPU | a Blackwell-prepared box (`scripts/setup-cuda-blackwell.sh`) |
-| Any bf16 execution | `Qwen3Tts::load` (`src/model.rs:164`) picks bf16 on CUDA; only the f32 CPU path has been exercised | GPU |
+| ~~Any CUDA execution~~ | **CLOSED 2026-09-06** — see "GPU, VoiceDesign, the split, and SIM-o". Original note: | a Blackwell-prepared box (`scripts/setup-cuda-blackwell.sh`) |
+| ~~Any bf16 execution~~ | **CLOSED 2026-09-06**, same run. Original note: | GPU |
 | Memory figures in the doc comments (283 MB encode chunk, ~700 MB wave chunk, 3.8 GiB one-shot) | derived from candle's `im2col` sizing, never measured | a run with RSS instrumentation |
 
 ### 2.4 Explicit `// PARITY:` markers (the crate's own "unconfirmed off-box" flags)

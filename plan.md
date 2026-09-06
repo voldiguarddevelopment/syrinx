@@ -1,3 +1,15 @@
+> **HISTORICAL — the Ratchet task ledger, frozen 2026-06-16.**
+>
+> All 92 tasks here are `done`, `blocked`, or `split`; **none is `open`**, so this is a
+> record of a finished loop, not a work queue. It predates `syrinx-cue`, `syrinx-qwen`,
+> `syrinx-stt` and every ADR, and it is deliberately **not** being retrofitted — IDs are
+> immutable and the stale criteria are evidence of what was believed when. Read
+> `T-00.01`'s crate list as history: it names `syrinx-core` and `syrinx-stream`, both since
+> deleted.
+>
+> Current work: [`docs/upgrades/SYRINX_UPGRADE_expressive_control.md`](docs/upgrades/SYRINX_UPGRADE_expressive_control.md).
+> Standing law: [`CLAUDE.md`](CLAUDE.md). Decisions: [`adr/`](adr/).
+
 ### T-00.01  Scaffold the Cargo workspace
 id: T-00.01
 phase: 0

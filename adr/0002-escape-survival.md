@@ -48,7 +48,7 @@ assert_eq!(pass_strip(&pass_strip(r"a \[b\] c")), "a b c");
 second pass. The test that documents the constraint is passing; the constraint is violated
 one layer up, where nothing checks it.
 
-## Why the obvious fix is blocked
+## Why the obvious fix is blocked *(historical — this ADR chose option 1 instead; see Decision)*
 
 The natural fix is to make the parser preserve the escape (`text.push(c); text.push(n);`)
 and let `pass_strip` resolve it as designed. **Tried, and it does fix the defect** — but it
@@ -134,7 +134,7 @@ Both backend kinds (`Inline::Open` and `Inline::None`) behave identically, all n
 0 SKIP, 0 FAIL. The dangerous direction of the invariant is unchanged — nothing leaks, and
 the property test still bounds output brackets by source escapes.
 
-## Impact while unfixed
+## Impact while unfixed *(historical — RESOLVED 2026-09-05 by the Decision above; retained as the record of what the defect cost)*
 
 Low but not zero, and it is a correctness claim rather than a crash: any text that needs to
 *say* a bracket silently loses it. Under D5 every unescaped `[...]` is cue syntax, so

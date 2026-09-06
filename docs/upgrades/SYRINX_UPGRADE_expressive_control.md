@@ -586,3 +586,50 @@ WER 0.000 in both conditions. Two cases cannot distinguish "s2-pro barely moves 
 cues" from noise. It is recorded only so the full run has something to be compared against,
 and it is the reason the thresholds are not yet an assertion. **No claim is made about real
 activation rates until the full 54-case run completes.**
+
+### A26 — 2026-09-06 — **documentation reconciled; two superseding amendments recorded**
+
+A full sweep of every doc, ADR and `FINDINGS.md` found **17 contradictions**. Most were
+harmless staleness; six were `CLAUDE.md` — the file every pass reads in full — being *wrong
+about the current tree*, which misdirects work rather than merely aging. Corrected:
+
+- **The crate table listed `syrinx-core` and `syrinx-stream`**, both deleted in `d09b11e`,
+  and omitted `syrinx-qwen`, `syrinx-fish`, `syrinx-stt`. The workspace has **13** crates;
+  the table now says so, and records where the two deleted crates' responsibilities went.
+- **BUILD SCOPE Phase 1 still claimed the SSML parser** for `syrinx-frontend`, contradicting
+  D6 *in the same file*. A second `CueDoc` producer is exactly what D6 forbids.
+- **SIM-o was listed as blocked-on-human.** It is a cosine between speaker embeddings —
+  objective, and computed today by `syrinx_eval::qwen::speaker_similarity` against a
+  measured ceiling (0.997) and floor (0.925). Removed from the blocked list, with the
+  general test stated instead: does the number need *ears*?
+- **The opt-in test list named five of seven.** `real_qwen_seed` and `real_qwen_affect` were
+  missing. By this file's own rule — an unrun gate is a dead gate — that is a defect.
+- **"Verifying the build" described a Fish-only board** and omitted `qwen`, `qwen_ckpt`,
+  `cue`, `unit`. It now defers to `scripts/test-groups.sh` as the authority.
+- **Phase 2's blocker was imprecise.** *Parity* is what is blocked; the weight-free
+  substrate was always buildable and was built. `list.md`'s seven done Phase-2 tasks are
+  not a contradiction, and a reader concluding "one of these is lying" was reasonable.
+
+Also: `README.md` still said "Fish Audio is the only TTS path under active development" in
+two places — the most misleading text left in the tree — and `DESIGN.md`'s own current-state
+banner was Fish-centric. Both now say Qwen and cite `docs/LICENSES.md`. `spec.md` was a
+byte-identical copy of `plan.md` (md5 `12c5b94…`) and is now a pointer; `plan.md` and
+`list.md` carry a HISTORICAL banner. `QWEN_PORT_STATUS.md` §2.3 had four rows the same file
+later contradicted (e2e synthesis, the Python reference dump, CUDA, bf16) — struck through
+with their closing dates. `adr/0002`'s "Impact while unfixed" and "Why the obvious fix is
+blocked" now say *historical*; they read as a live defect on a skim.
+
+**Two superseding amendments, recorded because this ledger is append-only and its earlier
+entries still read as current:**
+
+- **A6 is superseded.** Worktree-per-task was suspended there; `CLAUDE.md` reinstated it on
+  2026-09-06 after a `git add -A` in the shared checkout swept two subagents' in-progress
+  files into an unrelated commit. `scripts/worktree.sh` exists to make it cheap.
+- **A24 is superseded.** "Model direction: Fish only" was reversed on 2026-09-06 on
+  **licence**: every Fish checkpoint is research-only, every Qwen3-TTS checkpoint is
+  Apache-2.0. See `docs/LICENSES.md`.
+
+**Not changed, because it is a behavioural decision and not a doc fix:**
+`crates/syrinx-serve/src/lib.rs:765` still defaults the `backend=` query parameter to Fish
+S2-pro, described there as "the primary TTS path". Under a Qwen-only direction the server's
+default points at a research-licensed backend. Flagged for the maintainer.
