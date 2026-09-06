@@ -1,0 +1,50 @@
+[lang-ab] device Cuda { gpu_id: 1 }  n=8/arm  5 arms x 3 cases = 120 renders
+[lang-ab] alpha 0.05 Bonferroni/21 = 0.00238
+
+[lang-ab] happy: en="Speak in a happy, cheerful tone"  zh="用开心愉悦的语气说"
+
+=== happy ===
+  en vs plain        --    p=0.3737 effect=1.76
+  zh vs plain        --    p=0.0643 effect=2.39
+  sham-en vs plain   --    p=0.3164 effect=1.85
+  sham-zh vs plain   --    p=0.4059 effect=1.70
+  en vs sham-en      --    p=0.1265 effect=2.17
+  zh vs sham-zh      --    p=0.8443 effect=1.24
+  zh vs en           --    p=0.6286 effect=1.49
+  -- judge p(happy), vs plain 0.256 (seed sd 0.057) --
+     en       0.403  delta +0.147  +/-0.172  inside seed noise
+     zh       0.384  delta +0.128  +/-0.101  TOWARD cued class
+     sham-en  0.292  delta +0.036  +/-0.149  inside seed noise
+     sham-zh  0.339  delta +0.082  +/-0.121  inside seed noise
+
+[lang-ab] sad: en="Speak in a sad, sorrowful tone"  zh="用悲伤难过的语气说"
+
+=== sad ===
+  en vs plain      CHANGED p=0.0019 effect=2.98
+  zh vs plain        --    p=0.0569 effect=2.42
+  sham-en vs plain   --    p=0.7453 effect=1.41
+  sham-zh vs plain   --    p=0.9091 effect=1.18
+  en vs sham-en      --    p=0.0165 effect=2.61
+  zh vs sham-zh      --    p=0.0429 effect=2.45
+  zh vs en           --    p=0.5566 effect=1.58
+  -- judge p(sad), vs plain 0.042 (seed sd 0.024) --
+     en       0.060  delta +0.018  +/-0.045  inside seed noise
+     zh       0.111  delta +0.068  +/-0.062  TOWARD cued class
+     sham-en  0.044  delta +0.002  +/-0.039  inside seed noise
+     sham-zh  0.024  delta -0.019  +/-0.026  inside seed noise
+
+[lang-ab] angry: en="Speak in an angry tone"  zh="用愤怒生气的语气说"
+
+=== angry ===
+  en vs plain        --    p=0.7417 effect=1.40
+  zh vs plain        --    p=0.2800 effect=1.90
+  sham-en vs plain   --    p=0.0325 effect=2.54
+  sham-zh vs plain   --    p=0.2862 effect=1.86
+  en vs sham-en      --    p=0.0581 effect=2.37
+  zh vs sham-zh      --    p=0.1049 effect=2.34
+  zh vs en           --    p=0.2522 effect=1.94
+  -- judge p(angry), vs plain 0.172 (seed sd 0.088) --
+     en       0.304  delta +0.132  +/-0.136  inside seed noise
+     zh       0.312  delta +0.140  +/-0.155  inside seed noise
+     sham-en  0.143  delta -0.029  +/-0.113  inside seed noise
+     sham-zh  0.180  delta +0.008  +/-0.110  inside seed noise

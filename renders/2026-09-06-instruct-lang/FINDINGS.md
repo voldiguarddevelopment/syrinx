@@ -2,7 +2,7 @@
 
 2026-09-06. `Qwen3-TTS-12Hz-1.7B-CustomVoice`, GPU bf16, voice `serena`, n=8 seeds/arm,
 5 arms x 3 cases = **120 renders**, ~22 min on one RTX 5070.
-Driver: `crates/syrinx-eval/examples/instruct_lang_ab.rs`. Raw output: `run.log`.
+Driver: `crates/syrinx-eval/examples/instruct_lang_ab.rs`. Raw output: `run.txt`.
 
 Two questions in one run, because they share their renders.
 
