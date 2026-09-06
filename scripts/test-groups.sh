@@ -79,7 +79,7 @@ ALL_GROUPS="unit modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qw
 #
 # They ARE listed by `--list` (list_groups prints this table), because a gate nobody can
 # find is a gate nobody runs. Opt-in, not hidden.
-OPT_IN_TESTS="real_cue_activation real_qwen_greedy_parity real_fish_s2_batch_parity real_qwen_serve real_qwen_eval real_qwen_seed real_qwen_affect real_emotion2vec"
+OPT_IN_TESTS="real_cue_activation real_qwen_greedy_parity real_fish_s2_batch_parity real_qwen_serve real_qwen_eval real_qwen_seed real_qwen_affect real_emotion2vec real_cue_activation_qwen"
 
 optin_why() {
   case "$1" in
@@ -87,6 +87,8 @@ optin_why() {
       echo "C4.2 cue-activation certification — full render sweep + Whisper scoring" ;;
     real_qwen_greedy_parity)
       echo "Qwen3-TTS multi-frame greedy AR loop vs reference — ~21 min, 1.7B CPU/f32" ;;
+    real_cue_activation_qwen)
+      echo "C4.2' certification on the Qwen shipping path (ADR-0003) — ~26 min GPU, set SYRINX_C42_OUT" ;;
     real_emotion2vec)
       echo "emotion2vec+ judge vs its funasr reference — needs --features affect + SYRINX_EMOTION2VEC_{ONNX,REF}" ;;
     real_qwen_affect)
