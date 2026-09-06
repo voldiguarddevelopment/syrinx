@@ -1,5 +1,31 @@
 # Judging affect: what could replace the current judge
 
+> **RESOLVED 2026-09-06 — `emotion2vec_plus_large` adopted, NOT SenseVoiceSmall.**
+> This note recommended SenseVoice; building it changed the answer, and the reasons are
+> worth keeping rather than quietly overwriting:
+>
+> 1. **SenseVoice is CTC.** Emotion arrives as special tokens in a `[1, T, vocab]` stream,
+>    not a `[1, labels]` vector. It does not drop into the `OnnxJudgeSpec` seam; it needs
+>    position-hunting in a token stream to recover a score.
+> 2. **Its unique offer was audio-event detection** (laughter, cough) — and every Qwen
+>    checkpoint has `event = unsupported`, so those cues are filtered before a render
+>    happens. We cannot test them on the shipping path, so the capability buys nothing now.
+> 3. **The ASR argument was double-counting.** We already have Whisper for WER; a judge does
+>    not need to transcribe.
+> 4. **emotion2vec+ is a dedicated classifier trained on 42,526 h** and measures **0.911**
+>    cross-corpus on CREMA-D against the incumbent's 0.394 — with `sad` at **0.867** vs
+>    **0.17**, which is exactly the class the whole exercise was blocked on.
+>
+> Two defects were caught by anchoring against funasr rather than trusting the export, and
+> both would have produced plausible wrong numbers: the dynamo exporter emitted a
+> length-dependent graph that agreed at the traced length and was ~3 logits out elsewhere,
+> and the model **saturates** (logit spread 12-51), so funasr's own softmax returns one-hot
+> to float precision — scoring on probabilities would have made every A/B delta 0 or +/-1.
+> The judge is therefore anchored and scored on **logits**. The exported graph is capped at
+> 160,079 samples (10.005 s), measured by binary search and enforced by test.
+>
+> The rest of this note is retained as the survey that led here.
+
 Research note, 2026-09-06. Prompted by "is there an STT model that could do it itself?"
 after the RAVDESS 8-class judge came back weak on 6 of 8 classes.
 

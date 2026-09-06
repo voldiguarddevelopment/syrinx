@@ -268,6 +268,80 @@ pub fn ravdess_label_for_cue(cue_id: &str) -> Option<&'static str> {
     }
 }
 
+/// The 9 emotion2vec+ classes, in `tokens.txt` order.
+///
+/// `other` and `unknown` are the model's own escape hatches and map to no cue. They are
+/// kept in the vocabulary because the graph emits them and dropping a column would
+/// misalign every index after it.
+pub const EMOTION2VEC9_LABELS: [&str; 9] = [
+    "angry",
+    "disgusted",
+    "fearful",
+    "happy",
+    "neutral",
+    "other",
+    "sad",
+    "surprised",
+    "unknown",
+];
+
+/// The spec for `emotion2vec/emotion2vec_plus_large`, as exported by
+/// `scripts/export-emotion2vec-onnx.py`.
+///
+/// **The graph emits logits and this spec does NOT soften them.** funasr's own inference
+/// ends in a softmax, but the model is saturated — on real speech the logit spread is
+/// 19–26, so softmax returns a one-hot vector to float precision. The whole measurement is
+/// "cued mean minus plain mean against seed noise", and a one-hot score makes every delta
+/// 0 or ±1. `docs/LICENSES.md` already carries the rule this follows — "use the full
+/// probability vector, never the argmax" — and a saturated softmax *is* an argmax.
+///
+/// **The exported graph accepts at most 160,079 samples (10.005 s @ 16 kHz).** The AUDIO
+/// encoder's position-bias buffer is 499 frames and the export bakes it; beyond that,
+/// `OnnxJudge::read` returns an `ort` error rather than a wrong number. Measured by binary
+/// search, not assumed — see `scripts/export-emotion2vec-onnx.py`. Renders scored by this
+/// judge are 3–6 s, so the limit is not in the way; anything longer must be chunked by the
+/// caller, deliberately, because chunking changes what "the emotion of this clip" means.
+///
+/// The consequence is that a reading is [`ScoreKind::Dimensional`], not `Categorical`: the
+/// numbers are unbounded per-class evidence, they do not sum to 1, and a rise in one class
+/// does not imply a fall in another. Anything comparing these across clips must difference
+/// them, never treat them as probabilities.
+pub fn emotion2vec9_spec() -> OnnxJudgeSpec {
+    OnnxJudgeSpec {
+        name: "emotion2vec/emotion2vec_plus_large".to_string(),
+        labels: EMOTION2VEC9_LABELS.iter().map(|s| s.to_string()).collect(),
+        kind: ScoreKind::Dimensional,
+        sample_rate: 16_000,
+        input: "signal".to_string(),
+        output: "logits".to_string(),
+        embedding: None,
+        activation: OutputActivation::None,
+    }
+}
+
+/// The emotion2vec+ class each cue id corresponds to, or `None` when the judge has no
+/// counterpart for it.
+///
+/// Seven of the nine classes are reachable from the cue vocabulary — one more than the
+/// RAVDESS judge, and without RAVDESS's `calm`, which the vocab has but this model does
+/// not. As with [`ravdess_label_for_cue`], a cue with no counterpart returns `None` rather
+/// than being mapped onto the nearest class: "no reading available for `[sarcastic]`" is
+/// the honest answer and "it looks a bit angry" is not.
+pub fn emotion2vec_label_for_cue(cue_id: &str) -> Option<&'static str> {
+    match cue_id {
+        "happy" => Some("happy"),
+        "sad" => Some("sad"),
+        "angry" => Some("angry"),
+        "afraid" => Some("fearful"),
+        "surprised" => Some("surprised"),
+        "disgusted" => Some("disgusted"),
+        // The vocab has no `neutral` cue — an absent cue IS neutral — but the class is
+        // reachable as a *reference* level, so it is named here for lookups that want it.
+        "neutral" => Some("neutral"),
+        _ => None,
+    }
+}
+
 /// An [`AffectJudge`] backed by an ONNX graph, run through `ort` on the CPU.
 pub struct OnnxJudge {
     session: Session,
