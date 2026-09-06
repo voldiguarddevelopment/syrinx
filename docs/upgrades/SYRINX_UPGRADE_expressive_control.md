@@ -763,3 +763,42 @@ is free.
 
 Also landed: `tests/real_cue_activation_qwen.rs`, the C4.2′ runner ADR-0003 specified and
 left outstanding. Opt-in, ~26 min, first run enforces nothing until a sentinel is earned.
+
+### A30 — 2026-09-06 — **`[angry]` is sentence-dependent; the four-times-repeated verdict was about one sentence**
+
+A29 raised this as a hypothesis from an n=4 side-observation. Measured properly — n=8, six
+sentences, per sentence, three arms each, 144 renders:
+
+| sentence | acoustic p | judge Δ | judge p | top gain |
+|---|---:|---:|---:|---|
+| accusatory-long (the one all four prior runs used) | 0.7417 | +0.058 | 0.980 | happy |
+| **new-command** ("Stop talking and listen to me for once.") | **0.0045** | **+10.179** | **0.0010** | **angry** |
+
+On a terse second-person command the cue **works**: the largest judge delta in the table,
+t=4.16, clearing the Bonferroni-corrected threshold (α=0.05/6), with `angry` as the
+top-gaining class — on the judge's *best* class (CREMA-D recall 1.000). The acoustic test
+misses its stricter 12-comparison bar by 8% (0.0045 vs 0.00417).
+
+On the sentence every previous run used, it is dead: t=0.03.
+
+**So "`[angry]` does not take on this checkpoint" was never supported.** What was measured,
+four times, is that it does nothing *on that one sentence*. The record is corrected here
+rather than quietly restated.
+
+Two things this does NOT establish, stated so they are not read in: no mechanism (the
+obvious "imperatives work" story fails — `holdout-imperative` reads `surprised` at p=0.81,
+and n=1 sentence per cell cannot separate confrontation from length or lexis), and no
+general claim about `[angry]`, only that the variance across sentences is large enough to
+flip the verdict.
+
+The run's own conjunctive flag printed `0 of 6`, because ADR-0004 requires both bars to
+accept a phrase. That is the right gate for *accepting* and the wrong summary of what was
+*learned*; both numbers are reported.
+
+**Consequences.** The `[angry]` tuning round (A29) pooled sentences per split and is not
+interpretable as run — "no candidate cleared" may be about the sentence mix. The tuning
+holdout partition is retired, since its sentences were measured here; ADR-0004 §5's
+`holdout_id` expiry existed before it was needed and now applies. And the caveat
+generalises: **`[sad]`'s result also came from one sentence.** It is stronger and
+triangulated by three methods, but the same six-sentence sweep is owed before `[sad]` is
+described as working generally.
