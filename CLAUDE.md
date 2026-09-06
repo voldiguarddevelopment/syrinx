@@ -174,14 +174,35 @@ passing test — never because you believe it is. A blocked task is "done" only 
 human removes its blocker and it earns a real gate. When in doubt: re-read from disk,
 do the smallest honest thing, write the result down, and let the next pass check you.
 
-## Model direction — Fish only (CosyVoice is deprecated)
+## Model direction — Qwen only (Fish and CosyVoice are both deprecated)
 
-**Fish Audio (`syrinx-fish`) is the TTS path.** The CosyVoice2 / CosyVoice3 ports are
-**deprecated**: the code stays in-tree and their parity results stand, but they get no new
-work, and the on-box `scripts/test-all.env` deliberately leaves the `cv2`/`cv2e2e`/`cv3`/
-`cv3e2e` groups UNSET so those groups report **SKIP**, never FAIL. Do not fill them in, and
-do not "fix" a CosyVoice SKIP by pointing it at weights — the SKIP is the intended state.
-`syrinx-stt` (Whisper) stays active: it is the native WER oracle used to score Fish renders.
+**Qwen3-TTS (`syrinx-qwen`) is the TTS path**, decided 2026-09-06 on licensing.
+
+The deciding fact is in `docs/LICENSES.md`: **every Qwen3-TTS checkpoint is Apache-2.0**,
+while **every Fish checkpoint is research-only** (`s2-pro` under Fish Audio's own research
+licence, `openaudio-s1-mini` under CC-BY-NC-SA-4.0). Fish cannot ship. Qwen can — use,
+modify, distribute, sell and fine-tune, attribution and NOTICE preserved. No amount of
+engineering changes that, and it had gone unrecorded while the effort went into Fish.
+
+- **`syrinx-fish` is deprecated.** Its code stays in-tree and its results stand — including
+  the two real codec defects found and fixed on 2026-09-04 (a bf16-rounded RoPE table and
+  missing sliding-window attention), which is exactly the evidence that would be lost by
+  deleting it. It gets **no new work**. It is research-only and must never be a shipping
+  path.
+- **CosyVoice2 / CosyVoice3 remain deprecated**, as before: code in-tree, results stand, no
+  new work, `cv2`/`cv2e2e`/`cv3`/`cv3e2e` deliberately UNSET in `scripts/test-all.env` so
+  they report **SKIP**, never FAIL. Do not "fix" a CosyVoice SKIP by pointing it at weights.
+- **Deprecated does not mean untested.** Unlike CosyVoice, Fish has working parity fixtures
+  and green gates, and the crate is still compiled into the workspace. Its *cheap* gates
+  stay on the board so in-tree code cannot rot unnoticed; only the heavyweight runs are
+  opt-in. Deleting a passing gate for a crate that still builds discards evidence and buys
+  nothing.
+- **`syrinx-stt` (Whisper, Apache-2.0) stays active** as the native WER oracle — now scoring
+  Qwen renders. `syrinx-eval`'s Qwen path uses it directly, with no Python at inference.
+- **Any new backend is a licence question first.** Add its row to `docs/LICENSES.md` before
+  building on it. `ResembleAI/chatterbox` (**MIT**, 23 languages, voice cloning) is the
+  leading candidate for a second family precisely because its licence is clean; it is a
+  candidate, not an adopted path.
 
 ## Verifying the build (on the model box)
 
