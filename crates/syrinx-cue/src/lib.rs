@@ -11,6 +11,7 @@
 
 pub mod caps;
 pub mod hoist;
+pub mod instruct;
 pub mod ir;
 pub mod legacy_emotion;
 pub mod lower;

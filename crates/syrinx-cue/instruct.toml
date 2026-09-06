@@ -1,0 +1,83 @@
+# instruct.toml — the natural-language phrasing for each cue label.
+#
+# Backends with `Inline::None` (every Qwen3-TTS checkpoint) have exactly one expressive
+# channel: an utterance-scoped instruction in plain prose. `hoist::instruct_for` turns a
+# label into that prose, and this file is where the prose lives.
+#
+# WHY THIS FILE EXISTS, rather than the table it replaces:
+#
+#   1. The previous table was `legacy_emotion::DEFAULT_EMOTIONS`, inside the module
+#      CLAUDE.md quarantines as the deprecated CosyVoice-era parser ("the exception dies
+#      with CosyVoice"). The shipping Qwen path should not depend on a module scheduled
+#      for deletion.
+#   2. It was keyed on legacy CosyVoice tag names while `instruct_for` looks up canonical
+#      `vocab.toml` ids, so 38 of 51 labels missed and fell through to a generic
+#      `format!("Speak in a {label} tone")` — which produced "Speak in a anxious tone",
+#      "Speak in a authoritative tone", and "Speak in a quick_breath tone". Nine had the
+#      wrong article and several were not delivery instructions at all.
+#
+# This file is keyed on canonical `vocab.toml` ids. Synonyms are resolved upstream (a cue
+# is canonicalized to `e.id` during parse), so only ids appear here.
+#
+# NOT COVERED, deliberately: the 13 `event` labels (laugh, cough, sigh, ...). An event is a
+# point sound, not a manner of speaking; "Speak in a cough tone" is meaningless. Backends
+# that support events carry them inline, and `pass_hoist` filters a cue out before
+# `instruct_for` ever sees it when `caps.can_express` says the kind is unsupported — which
+# it is for events on every Qwen checkpoint. `instruct_for` keeps a deterministic fallback
+# so it stays total; that fallback now agrees with its article.
+#
+# LANGUAGE. `en` and `zh` are both authored because Qwen3-TTS is a Chinese-lab model whose
+# upstream instruct examples are overwhelmingly Chinese, and the on-box A/B of 2026-09-06
+# found the Chinese phrasing moved the audio toward the named class on cases where the
+# English phrasing did not. See renders/2026-09-06-instruct-lang/.
+#
+# These phrases are HAND-AUTHORED, which is why they are here and not in `vocab.toml`:
+# that file's header promises its content is derived from verified upstream sources and
+# "NOT invented", and mixing authored prose into it would destroy the property that makes
+# it auditable.
+
+# ------------------------------------------------------------------ emotions (25)
+[emotion]
+happy        = { en = "Speak in a happy, cheerful tone",            zh = "用开心愉悦的语气说" }
+excited      = { en = "Speak in an excited, enthusiastic tone",     zh = "用兴奋激动的语气说" }
+sad          = { en = "Speak in a sad, sorrowful tone",             zh = "用悲伤难过的语气说" }
+angry        = { en = "Speak in an angry tone",                     zh = "用愤怒生气的语气说" }
+afraid       = { en = "Speak in a fearful, frightened tone",        zh = "用害怕恐惧的语气说" }
+surprised    = { en = "Speak in a surprised tone",                  zh = "用惊讶吃惊的语气说" }
+anxious      = { en = "Speak in an anxious, uneasy tone",           zh = "用焦虑不安的语气说" }
+calm         = { en = "Speak in a calm tone",                       zh = "用平静冷静的语气说" }
+confused     = { en = "Speak in a confused, puzzled tone",          zh = "用困惑不解的语气说" }
+curious      = { en = "Speak in a curious, inquisitive tone",       zh = "用好奇探询的语气说" }
+disgusted    = { en = "Speak in a disgusted tone",                  zh = "用厌恶嫌弃的语气说" }
+proud        = { en = "Speak in a proud tone",                      zh = "用自豪骄傲的语气说" }
+grateful     = { en = "Speak in a grateful, appreciative tone",     zh = "用感激感谢的语气说" }
+guilty       = { en = "Speak in a guilty, remorseful tone",         zh = "用愧疚自责的语气说" }
+sarcastic    = { en = "Speak in a sarcastic tone",                  zh = "用讽刺挖苦的语气说" }
+impatient    = { en = "Speak in an impatient tone",                 zh = "用不耐烦的语气说" }
+confident    = { en = "Speak in a confident, assured tone",         zh = "用自信笃定的语气说" }
+empathetic   = { en = "Speak in an empathetic, understanding tone", zh = "用共情体谅的语气说" }
+serious      = { en = "Speak in a serious tone",                    zh = "用严肃认真的语气说" }
+amused       = { en = "Speak in an amused tone",                    zh = "用觉得好笑的语气说" }
+hesitant     = { en = "Speak hesitantly, as if unsure",             zh = "用犹豫迟疑的语气说" }
+disdainful   = { en = "Speak in a disdainful, scornful tone",       zh = "用轻蔑不屑的语气说" }
+panicked     = { en = "Speak in a panicked tone",                   zh = "用惊慌失措的语气说" }
+moved        = { en = "Speak in a moved, touched tone",             zh = "用深受感动的语气说" }
+painful      = { en = "Speak as if in pain",                        zh = "用痛苦的语气说" }
+
+# ------------------------------------------------------------------ styles (13)
+# These describe manner or persona rather than affect, so several are imperative sentences
+# instead of "Speak in a ... tone" — "Speak in a narrator tone" is not English.
+[style]
+whisper       = { en = "Say this in a soft whisper",                zh = "用气声小声地耳语" }
+shout         = { en = "Shout this loudly",                         zh = "提高音量大声喊着说" }
+scream        = { en = "Scream this",                               zh = "尖声大叫着说" }
+soft          = { en = "Speak in a soft, mellow tone",              zh = "用柔和轻柔的语气说" }
+broadcast     = { en = "Speak like a news broadcaster",             zh = "用新闻播报的语气说" }
+narrator      = { en = "Speak like a narrator reading aloud",       zh = "用旁白朗读的语气说" }
+singing       = { en = "Speak in a singsong, lilting voice",        zh = "用唱歌般的腔调说" }
+authoritative = { en = "Speak in an authoritative, commanding tone", zh = "用威严命令的语气说" }
+warm          = { en = "Speak in a warm, friendly tone",            zh = "用温暖亲切的语气说" }
+fast          = { en = "Speak quickly",                             zh = "语速加快地说" }
+child         = { en = "Speak like a young child",                  zh = "用小孩子的声音说" }
+elderly       = { en = "Speak like an elderly person",              zh = "用老年人的声音说" }
+accented      = { en = "Speak with a noticeable accent",            zh = "用带口音的方式说" }

@@ -15,7 +15,8 @@
 
 use crate::caps::{ControlCaps, Granularity, Inline};
 use crate::ir::{Cue, CueKind};
-use crate::legacy_emotion::{EmotionRegistry, InstructLang};
+use crate::instruct::InstructTable;
+use crate::legacy_emotion::InstructLang;
 use crate::lower::{Action, DropReason, Lowered, LoweringReport};
 
 /// Splitting policy.
@@ -61,14 +62,21 @@ pub fn instruct_for(cue: &Cue, lang: InstructLang) -> Option<String> {
         return (!raw.is_empty()).then(|| raw.to_string());
     }
     let label = label_of(&cue.kind)?;
-    // 2. A known label with a curated phrase.
-    let reg = EmotionRegistry::default().with_lang(lang);
-    if let Some(phrase) = reg.instruct(label) {
+    // 2. A curated phrase, keyed on the CANONICAL vocab id. Synonyms were resolved to that
+    //    id during parse, so a lookup here either hits the authored prose or the label has
+    //    none. The table used to live in `legacy_emotion` keyed on legacy CosyVoice tag
+    //    names, which missed 38 of 51 ids and sent them all to the fallback below.
+    if let Some(phrase) = InstructTable::shared().phrase(label, lang) {
         return Some(phrase.to_string());
     }
-    // 3. Otherwise a deterministic phrasing, so the function is total.
+    // 3. Otherwise a deterministic phrasing, so the function is total. Reached only by the
+    //    `event` labels, which `pass_hoist` filters out before this on every backend that
+    //    cannot express them — "Speak in a cough tone" is not an instruction anyone wants,
+    //    and the article at least agrees.
     Some(match lang {
-        InstructLang::En => format!("Speak in a {label} tone"),
+        InstructLang::En => {
+            format!("Speak in {} {label} tone", crate::instruct::indefinite_article(label))
+        }
         InstructLang::Zh => format!("用{label}的语气说"),
     })
 }
