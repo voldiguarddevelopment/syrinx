@@ -56,18 +56,64 @@ impl Phrasing {
     }
 }
 
+/// A phrasing found by the tuning loop rather than authored by hand.
+///
+/// It carries its whole provenance because it has a genuinely new KIND of provenance for
+/// this crate. `vocab.toml`'s header promises its content is derived from verified upstream
+/// sources and "NOT invented"; a tuned phrase is neither — it was *found by automated
+/// search against a measurement, on one box, on one checkpoint, on one date, and signed off
+/// by a person*. That is why tuned rows live in their own table with these fields and not
+/// beside the curated ones.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct TunedPhrase {
+    pub label: String,
+    pub lang: String,
+    /// Which checkpoint it was tuned for. Instruct semantics are per checkpoint (ADR-0001
+    /// §2.3): CustomVoice's instruct describes delivery, VoiceDesign's describes the voice.
+    pub backend: String,
+    pub phrase: String,
+    /// **The gate.** A row without a human signature is INERT — present in the file,
+    /// returned by no lookup. The loop proposes; a person listens and signs. Per CLAUDE.md,
+    /// "intended emotion" is not expressible as a frozen-test gate, and no measurement
+    /// changes that.
+    #[serde(default)]
+    pub accepted_by: Option<String>,
+    pub measured_on: String,
+    /// The phrase this one beat, and by how much, in the judge's units.
+    pub incumbent: String,
+    pub margin: f64,
+    /// The judge that measured it, and its recall on THIS class. A verdict quoted without
+    /// the second number is not a verdict.
+    pub judge: String,
+    pub judge_recall_on_class: f64,
+    /// Which holdout partition confirmed it, and how many decisions that partition had
+    /// already served. A holdout used repeatedly stops being one.
+    pub holdout_id: String,
+    pub holdout_uses: usize,
+    #[serde(default)]
+    pub notes: String,
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct RawTable {
     #[serde(default)]
     emotion: BTreeMap<String, Phrasing>,
     #[serde(default)]
     style: BTreeMap<String, Phrasing>,
+    /// Tuned rows, in a flat list because they are keyed on (label, lang, backend).
+    #[serde(default)]
+    tuned: Vec<TunedPhrase>,
 }
 
 /// Canonical-id keyed instruct phrasings.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct InstructTable {
     entries: BTreeMap<String, Phrasing>,
+    /// Keyed `(backend, lang, label)`. Only ACCEPTED rows reach this map; an unsigned row
+    /// is parsed, validated, and then deliberately dropped.
+    tuned: BTreeMap<(String, String, String), TunedPhrase>,
+    /// Every tuned row as written, accepted or not, for reporting.
+    all_tuned: Vec<TunedPhrase>,
 }
 
 impl InstructTable {
@@ -101,12 +147,59 @@ impl InstructTable {
             }
             entries.insert(label, p);
         }
-        Ok(InstructTable { entries })
+
+        let mut tuned = BTreeMap::new();
+        for t in &raw.tuned {
+            if t.phrase.trim().is_empty() {
+                return Err(InstructError::Empty { label: t.label.clone(), lang: "tuned" });
+            }
+            // An unsigned row is inert. It is still validated, so a malformed proposal
+            // cannot sit in the file unnoticed until the day someone signs it.
+            match t.accepted_by.as_deref().map(str::trim) {
+                Some(sig) if !sig.is_empty() => {
+                    tuned.insert(
+                        (t.backend.clone(), t.lang.clone(), t.label.clone()),
+                        t.clone(),
+                    );
+                }
+                _ => {}
+            }
+        }
+        Ok(InstructTable { entries, tuned, all_tuned: raw.tuned })
     }
 
     /// The curated phrase for a canonical label, if there is one.
     pub fn phrase(&self, label: &str, lang: InstructLang) -> Option<&str> {
         self.entries.get(label).map(|p| p.get(lang))
+    }
+
+    /// The phrase to use for a label on a specific backend: an **accepted** tuned row if
+    /// one exists, otherwise the curated one.
+    ///
+    /// Tuned rows are strictly additive — one never deletes or overwrites a curated phrase,
+    /// so removing a tuned row restores the previous behaviour exactly. Reversibility is
+    /// what makes the loop safe to run at all.
+    pub fn phrase_for_backend(
+        &self,
+        label: &str,
+        lang: InstructLang,
+        backend: &str,
+    ) -> Option<&str> {
+        let key = (backend.to_string(), lang_code(lang).to_string(), label.to_string());
+        if let Some(t) = self.tuned.get(&key) {
+            return Some(t.phrase.as_str());
+        }
+        self.phrase(label, lang)
+    }
+
+    /// Every tuned row in the file, accepted or not.
+    pub fn tuned_rows(&self) -> &[TunedPhrase] {
+        &self.all_tuned
+    }
+
+    /// How many tuned rows are live (signed).
+    pub fn accepted_tuned(&self) -> usize {
+        self.tuned.len()
     }
 
     /// Every label this table covers.
@@ -122,6 +215,14 @@ impl InstructTable {
     /// Is the table empty?
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+}
+
+/// The `lang` key a [`TunedPhrase`] row uses.
+pub fn lang_code(lang: InstructLang) -> &'static str {
+    match lang {
+        InstructLang::En => "en",
+        InstructLang::Zh => "zh",
     }
 }
 

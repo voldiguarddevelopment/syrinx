@@ -46,7 +46,7 @@ GROUP_stt="real_stt"
 
 # Expressive control (the cue layer: syrinx-cue + its wiring). Model-free and
 # deterministic — these run everywhere and must never SKIP.
-GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate cue_activation_measure instruct_phrases cue_contrast_gate"
+GROUP_cue="control_survey_gate claude_md_invariant_gate cue_token_alignment prosody_cue_overrides expressive_api cue_activation_gate cue_activation_measure instruct_phrases cue_contrast_gate cue_tune_decision"
 
 # Qwen3-TTS port (syrinx-qwen). Model-FREE half only: the geometry contract, the
 # loader's tensor manifest against the published safetensors HEADERS (checked in

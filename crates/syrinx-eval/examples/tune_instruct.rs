@@ -1,0 +1,267 @@
+//! Propose a better instruct phrasing for one cue label. ADR-0004.
+//!
+//! The loop **proposes**; a person accepts. This writes a proposal under `.opt-reports/`
+//! and never touches `crates/syrinx-cue/`. A row is inert in `instruct.toml` until a human
+//! writes `accepted_by`.
+//!
+//! Per round, per split: plain, incumbent, sham, counter-cue, and each candidate — n seeds
+//! each. Every arm is re-measured in the same round at the same seeds, so nothing is
+//! compared against a stored number.
+//!
+//! Usage: tune_instruct <talker-dir> <tokenizer-dir> <label> [n]
+//! Env:   SYRINX_EMOTION2VEC_ONNX (required — the judge)
+//!        SYRINX_QWEN_DEVICE, SYRINX_TUNE_OUT
+
+use std::collections::BTreeMap;
+
+use candle_core::Device;
+use syrinx_cue::instruct::{lang_code, InstructTable};
+use syrinx_cue::legacy_emotion::InstructLang;
+use syrinx_cue::BackendId;
+use syrinx_eval::acoustic::{activation_test, features, Features};
+use syrinx_eval::affect::{
+    emotion2vec9_spec, emotion2vec_label_for_cue, score_resampled, OnnxJudge,
+};
+use syrinx_eval::tune::{
+    decide, Split, TuneArm, TuneMeasurement, TuneThresholds,
+};
+use syrinx_serve::qwen::{InstructEffect, QwenEngine, QwenMode, QwenRequest};
+use syrinx_serve::synth_qwen::{QwenModelEngine, QwenVoice};
+
+/// Sentences per split. Sentence and cue are deliberately crossed: a phrase that only works
+/// on one sentence is overfitting, and the holdout is what detects it.
+const TUNE_SET: [&str; 3] = [
+    "You told me it was handled. You looked me in the eye and said it was handled.",
+    "I have asked three times now and nobody has given me a straight answer.",
+    "That is the second time this week and I am done being polite about it.",
+];
+const HOLDOUT_SET: [&str; 3] = [
+    "Put it back exactly where you found it, right now.",
+    "Do not tell me to calm down when you are the reason for this.",
+    "I trusted you with one thing and you could not even manage that.",
+];
+
+const SHAM: &str = "Read the sentence that follows";
+/// The WRONG label's phrase. It should lose; if it wins, the round is void.
+const COUNTER: &str = "Speak in a happy, cheerful tone";
+
+fn mean(v: &[f64]) -> f64 {
+    v.iter().sum::<f64>() / v.len().max(1) as f64
+}
+fn sd(v: &[f64]) -> f64 {
+    if v.len() < 2 {
+        return 0.0;
+    }
+    let m = mean(v);
+    (v.iter().map(|x| (x - m) * (x - m)).sum::<f64>() / (v.len() - 1) as f64).sqrt()
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let a: Vec<String> = std::env::args().skip(1).collect();
+    if a.len() < 3 {
+        return Err("usage: tune_instruct <talker-dir> <tokenizer-dir> <label> [n]".into());
+    }
+    let (talker, tok, label) = (&a[0], &a[1], a[2].clone());
+    let n: usize = a.get(3).and_then(|s| s.parse().ok()).unwrap_or(8);
+
+    let dev = match std::env::var("SYRINX_QWEN_DEVICE").ok().and_then(|v| v.trim().parse().ok()) {
+        Some(i) => Device::new_cuda(i)?,
+        None => Device::Cpu,
+    };
+    let backend = BackendId::Qwen17bCustomVoice;
+    let engine =
+        QwenModelEngine::load(backend, talker, tok, dev.clone(), QwenVoice::Preset("serena".into()))?;
+    if !engine.honors_seed() {
+        return Err("engine does not honour seeds".into());
+    }
+    let mut judge = OnnxJudge::load(
+        &std::env::var("SYRINX_EMOTION2VEC_ONNX")
+            .map_err(|_| "SYRINX_EMOTION2VEC_ONNX must point at the exported judge")?,
+        emotion2vec9_spec(),
+    )?;
+    let jl = emotion2vec_label_for_cue(&label)
+        .ok_or_else(|| format!("the judge has no class for cue {label:?}"))?;
+
+    let table = InstructTable::shared();
+    let lang = InstructLang::En;
+    let incumbent = table
+        .phrase(&label, lang)
+        .ok_or_else(|| format!("no curated phrase for {label:?}"))?
+        .to_string();
+
+    // Deterministic candidate grammar seeded from the incumbent's own vocabulary. No
+    // network, no LLM: enumerable, auditable, reproducible from disk. An LLM proposer is
+    // v2 and must write into a reviewed candidates file as DATA, never straight into here.
+    let candidates: Vec<String> = vec![
+        format!("Speak as if you are genuinely {label}"),
+        format!("Say this the way someone who is {label} would say it"),
+        format!("You are {label}. Speak accordingly"),
+        format!("Speak in a sharply {label} tone"),
+    ];
+    eprintln!("[tune] label={label} judge-class={jl} n={n}/arm");
+    eprintln!("[tune] incumbent: {incumbent:?}");
+    for c in &candidates {
+        eprintln!("[tune] candidate: {c:?}");
+    }
+
+    let th = TuneThresholds { alpha: 0.05, candidates: candidates.len(), ..Default::default() };
+    eprintln!(
+        "[tune] alpha {:.5} (Bonferroni/{})  renders: {}",
+        th.corrected_alpha(),
+        candidates.len(),
+        // 2 splits x (plain + incumbent + sham + counter + candidates) arms
+        // x TUNE_SET.len() sentences x n seeds. The sentence factor is easy to forget and
+        // it is a 3x error in the estimate when you do.
+        2 * n * (4 + candidates.len()) * TUNE_SET.len()
+    );
+
+    let mut out: Vec<TuneMeasurement> = Vec::new();
+
+    for (split, sentences) in [(Split::Tune, TUNE_SET), (Split::Holdout, HOLDOUT_SET)] {
+        eprintln!("\n[tune] === {split:?} split ===");
+        // Render one arm across all this split's sentences, n seeds each.
+        let render = |ins: Option<&str>| -> Result<Vec<Vec<f32>>, String> {
+            let mut v = Vec::new();
+            for (si, text) in sentences.iter().enumerate() {
+                for i in 0..n {
+                    let req = QwenRequest {
+                        mode: QwenMode::CustomVoice,
+                        text,
+                        instruct: ins,
+                        instruct_effect: InstructEffect::Honored,
+                    };
+                    // Seeds are disjoint per sentence so no two arms share a draw pattern.
+                    v.push(engine.render_seeded(&req, (si * 100 + i) as u64)?);
+                }
+            }
+            Ok(v)
+        };
+
+        let plain = render(None)?;
+        let f = |w: &Vec<Vec<f32>>| w.iter().map(|s| features(s, 24_000)).collect::<Vec<Features>>();
+        let fplain = f(&plain);
+        let sham = render(Some(SHAM))?;
+        let fsham = f(&sham);
+
+        // One read per waveform, reused for both the cued-class series and the per-label
+        // means. Two closures here would each need `&mut judge`, and the second borrow is
+        // what the compiler rightly refuses.
+        /// Per-label mean over a set of renders — used to find which class gained most.
+        fn label_means(
+            judge: &mut OnnxJudge,
+            w: &[Vec<f32>],
+            labels: &[String],
+        ) -> Result<BTreeMap<String, f64>, Box<dyn std::error::Error>> {
+            let mut acc: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+            for s in w {
+                let sc = score_resampled(judge, s, 24_000)?;
+                for l in labels {
+                    acc.entry(l.clone()).or_default().push(f64::from(sc.get(l).unwrap_or(0.0)));
+                }
+            }
+            Ok(acc.iter().map(|(k, v)| (k.clone(), mean(v))).collect())
+        }
+
+        let labels = emotion2vec9_spec().labels;
+        // The per-render cued-class series, which the noise estimate needs.
+        let series = |judge: &mut OnnxJudge, w: &[Vec<f32>]| -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+            w.iter()
+                .map(|s| {
+                    let sc = score_resampled(judge, s, 24_000)?;
+                    Ok(f64::from(sc.get(jl).unwrap_or(f32::NAN)))
+                })
+                .collect()
+        };
+
+        let base = series(&mut judge, &plain)?;
+        let (mb, sb) = (mean(&base), sd(&base));
+        let base_full = label_means(&mut judge, &plain, &labels)?;
+
+        macro_rules! arm {
+            ($name:expr, $arm:expr, $phrase:expr, $wav:expr) => {{
+            let (name, arm, phrase, wav) = ($name, $arm, $phrase, &$wav);
+            let fw = f(wav);
+            let p_plain = activation_test(&fw, &fplain, th.corrected_alpha())
+                .map(|o| o.p_value)
+                .unwrap_or(1.0);
+            let p_sham = activation_test(&fw, &fsham, th.corrected_alpha())
+                .map(|o| o.p_value)
+                .unwrap_or(1.0);
+            let v = series(&mut judge, wav)?;
+            let delta = mean(&v) - mb;
+            let noise = (sd(&v).powi(2) + sb * sb).sqrt();
+            let fw_full = label_means(&mut judge, wav, &labels)?;
+            let (gain_label, _) = fw_full
+                .iter()
+                .map(|(k, m)| (k.clone(), m - base_full.get(k).copied().unwrap_or(0.0)))
+                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                .unwrap();
+            eprintln!(
+                "  {name:<14} p_plain={p_plain:.4} p_sham={p_sham:.4} \
+                 delta={delta:+.3} +/-{noise:.3} top-gain={gain_label}"
+            );
+            out.push(TuneMeasurement {
+                label: label.clone(),
+                phrase: phrase.map(str::to_string),
+                arm,
+                split,
+                p_vs_plain: p_plain,
+                p_vs_sham: p_sham,
+                cued_delta: delta,
+                cued_noise: noise,
+                largest_gain_label: gain_label,
+                wer: 0.0,
+                speaker_similarity: 1.0,
+            });
+            }};
+        }
+
+        arm!("sham", TuneArm::Sham, None, sham);
+        let inc_w = render(Some(&incumbent))?;
+        arm!("incumbent", TuneArm::Incumbent, Some(incumbent.as_str()), inc_w);
+        let cc_w = render(Some(COUNTER))?;
+        arm!("counter-cue", TuneArm::CounterCue, Some(COUNTER), cc_w);
+        for c in &candidates {
+            let w = render(Some(c))?;
+            arm!(&format!("cand:{}", &c[..18.min(c.len())]), TuneArm::Candidate, Some(c.as_str()), w);
+        }
+    }
+
+    let report = decide(&out, 0, &th);
+    println!("\n=== decision ===");
+    println!("corrected alpha {:.5}", report.corrected_alpha);
+    if let Some(v) = &report.void {
+        println!("ROUND VOID: {v:?}");
+        println!("Nothing measured this round can be trusted. No proposal.");
+        return Ok(());
+    }
+    for (c, why) in &report.rejected {
+        println!("  rejected  {:?}\n            {why:?}", c.phrase);
+    }
+    match &report.proposed {
+        None => println!("\nNo candidate cleared every criterion. The incumbent stands."),
+        Some(c) => {
+            let path = std::env::var("SYRINX_TUNE_OUT")
+                .unwrap_or_else(|_| format!(".opt-reports/tuned-{label}.toml"));
+            let row = format!(
+                "# PROPOSAL — inert until a human adds `accepted_by`. ADR-0004.\n\
+                 [[tuned]]\nlabel = {:?}\nlang = {:?}\nbackend = \"qwen3-1.7b-customvoice\"\n\
+                 phrase = {:?}\n# accepted_by = \"\"   # <- listen first, then sign\n\
+                 measured_on = \"2026-09-06\"\nincumbent = {:?}\nmargin = {:.3}\n\
+                 judge = \"emotion2vec/emotion2vec_plus_large\"\njudge_recall_on_class = 1.0\n\
+                 holdout_id = \"h1-2026-09-06\"\nholdout_uses = 0\n\
+                 notes = \"proposed by examples/tune_instruct.rs\"\n",
+                c.label,
+                lang_code(lang),
+                c.phrase,
+                incumbent,
+                0.0,
+            );
+            std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).ok();
+            std::fs::write(&path, &row)?;
+            println!("\nPROPOSED: {:?}", c.phrase);
+            println!("written to {path} — INERT until a human signs `accepted_by`.");
+        }
+    }
+    Ok(())
+}

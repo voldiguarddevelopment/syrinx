@@ -25,6 +25,11 @@ pub mod activation;
 /// the decision logic must stay on the model-free board.
 pub mod contrast;
 
+/// Cue-phrasing tuning: the conjunctive accept criteria and the Goodhart guards, as pure
+/// functions. Pure for the same reason as `contrast` — the numbers need a GPU, the
+/// decision must stay frozen-tested on the model-free board.
+pub mod tune;
+
 /// Qwen3-TTS evaluation: drives the serve Qwen engine and scores it with the in-tree
 /// Whisper (`syrinx-stt`) rather than shelling out to Python, as C4.1 requires. Behind
 /// `real` because it drives real weights.

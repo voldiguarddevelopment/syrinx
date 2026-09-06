@@ -272,3 +272,132 @@ fn the_embedded_table_loads_and_is_shared() {
     assert!(!fresh.is_empty());
     assert_eq!(fresh.len(), 38, "25 emotions + 13 styles");
 }
+
+// ---------------------------------------------------------------- tuned rows (ADR-0004)
+
+/// **The human gate.** A tuned row without a signature is inert: parsed, validated, and
+/// then not returned by any lookup. This is the single assertion standing between "the
+/// loop proposed a phrase" and "the product says it", and CLAUDE.md is explicit that
+/// intended emotion is not expressible as a frozen-test gate.
+#[test]
+fn an_unsigned_tuned_row_is_inert() {
+    const ROW: &str = r#"
+[emotion]
+angry = { en = "Speak in an angry tone", zh = "用愤怒生气的语气说" }
+
+[[tuned]]
+label = "angry"
+lang = "en"
+backend = "qwen3-1.7b-customvoice"
+phrase = "TUNED PHRASE"
+measured_on = "2026-09-06"
+incumbent = "Speak in an angry tone"
+margin = 3.0
+judge = "emotion2vec+ large"
+judge_recall_on_class = 1.0
+holdout_id = "h1"
+holdout_uses = 0
+"#;
+    let t = InstructTable::from_toml(ROW).expect("must parse");
+    assert_eq!(t.tuned_rows().len(), 1, "the row is present in the file");
+    assert_eq!(t.accepted_tuned(), 0, "but it is not live");
+    assert_eq!(
+        t.phrase_for_backend("angry", InstructLang::En, "qwen3-1.7b-customvoice"),
+        Some("Speak in an angry tone"),
+        "an unsigned row must not shadow the curated phrase"
+    );
+
+    // The same row, signed, IS live. Both sides of the gate.
+    let signed = ROW.replace("holdout_uses = 0", "holdout_uses = 0\naccepted_by = \"floofy\"");
+    let t2 = InstructTable::from_toml(&signed).expect("must parse");
+    assert_eq!(t2.accepted_tuned(), 1);
+    assert_eq!(
+        t2.phrase_for_backend("angry", InstructLang::En, "qwen3-1.7b-customvoice"),
+        Some("TUNED PHRASE")
+    );
+
+    // An empty signature is not a signature.
+    let blank = ROW.replace("holdout_uses = 0", "holdout_uses = 0\naccepted_by = \"  \"");
+    assert_eq!(InstructTable::from_toml(&blank).expect("parses").accepted_tuned(), 0);
+}
+
+/// A tuned row is scoped to one backend and one language, because instruct semantics are
+/// per checkpoint (ADR-0001 §2.3) — CustomVoice's instruct describes delivery, VoiceDesign's
+/// describes the voice. A row must not leak across either axis.
+#[test]
+fn a_tuned_row_does_not_leak_across_backend_or_language() {
+    const ROW: &str = r#"
+[emotion]
+angry = { en = "Speak in an angry tone", zh = "用愤怒生气的语气说" }
+
+[[tuned]]
+label = "angry"
+lang = "en"
+backend = "qwen3-1.7b-customvoice"
+phrase = "TUNED"
+accepted_by = "floofy"
+measured_on = "2026-09-06"
+incumbent = "Speak in an angry tone"
+margin = 3.0
+judge = "emotion2vec+ large"
+judge_recall_on_class = 1.0
+holdout_id = "h1"
+holdout_uses = 0
+"#;
+    let t = InstructTable::from_toml(ROW).expect("parses");
+    // Its own (backend, lang): tuned.
+    assert_eq!(
+        t.phrase_for_backend("angry", InstructLang::En, "qwen3-1.7b-customvoice"),
+        Some("TUNED")
+    );
+    // A different backend: curated.
+    assert_eq!(
+        t.phrase_for_backend("angry", InstructLang::En, "qwen3-voicedesign"),
+        Some("Speak in an angry tone")
+    );
+    // A different language: curated.
+    assert_eq!(
+        t.phrase_for_backend("angry", InstructLang::Zh, "qwen3-1.7b-customvoice"),
+        Some("用愤怒生气的语气说")
+    );
+}
+
+/// Tuned rows are additive: with none present, `phrase_for_backend` is exactly `phrase`.
+/// Deleting a tuned row therefore restores the previous behaviour precisely, which is what
+/// makes running the loop reversible and therefore safe.
+#[test]
+fn with_no_tuned_rows_the_backend_lookup_equals_the_curated_lookup() {
+    let t = InstructTable::shared();
+    assert_eq!(t.accepted_tuned(), 0, "the shipped table has no tuned rows yet");
+    for label in t.labels() {
+        for lang in [InstructLang::En, InstructLang::Zh] {
+            assert_eq!(
+                t.phrase_for_backend(label, lang, "qwen3-1.7b-customvoice"),
+                t.phrase(label, lang),
+                "{label}: additive lookup must fall through to curated"
+            );
+        }
+    }
+}
+
+/// An empty tuned phrase is a load error, signed or not — a blank instruction must never
+/// be shippable by signing it.
+#[test]
+fn an_empty_tuned_phrase_is_rejected_even_when_signed() {
+    const ROW: &str = r#"
+[[tuned]]
+label = "angry"
+lang = "en"
+backend = "b"
+phrase = "   "
+accepted_by = "floofy"
+measured_on = "2026-09-06"
+incumbent = "x"
+margin = 3.0
+judge = "j"
+judge_recall_on_class = 1.0
+holdout_id = "h1"
+holdout_uses = 0
+"#;
+    assert!(InstructTable::from_toml(ROW).is_err());
+}
