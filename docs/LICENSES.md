@@ -17,7 +17,8 @@ structure of the questions they raise. A real commercial decision needs a lawyer
 | `s2-pro` | Fish TTS path | `fish-audio-research-license` ("other") | **no — research only** |
 | `openaudio-s1-mini` | Fish TTS path | CC-BY-NC-SA-4.0 | **no** |
 | `w2v2-msp-dim` (audEERING) | dimensional affect — **REJECTED 2026-09-06 on licence** | CC-BY-NC-SA-4.0 | **no** |
-| `ehcalabres/wav2vec2-lg-xlsr-en-...` | affect judge (**adopted**): RAVDESS 8-class | **Apache-2.0** | **yes** |
+| `emotion2vec/emotion2vec_plus_large` | affect judge (**adopted 2026-09-06**): 9-class SER | FunASR Model Open Source License | **yes**, attribution required |
+| `ehcalabres/wav2vec2-lg-xlsr-en-...` | affect judge (**superseded 2026-09-06**): RAVDESS 8-class | **Apache-2.0** | yes |
 
 ### Datasets
 
@@ -68,6 +69,30 @@ shipping path.
 MIT is if anything cleaner than Apache-2.0 here (no patent grant, but no NOTICE obligation
 either). It is the right shape for a second family; adopting it is a scope decision, not a
 licence one.
+
+## The judge was replaced again, 2026-09-06 — measured, not assumed
+
+`emotion2vec/emotion2vec_plus_large` replaces the RAVDESS fine-tune. Both are permissive,
+so this was a **capability** decision, and it was made on a measurement rather than a card:
+
+| judge | CREMA-D overall | `sad` | `angry` | `happy` | `fearful` |
+|---|---|---|---|---|---|
+| `ehcalabres` (RAVDESS 8-class) | 0.394 | 0.17 | 0.80 | — | 0.10 |
+| **`emotion2vec+ large`** | **0.911** | **0.867** | **1.000** | 0.967 | 0.667 |
+
+Same corpus, same protocol (`scripts/calibrate-emotion2vec.py`, 180 clips, ODbL, held out
+from both models). The decisive cell is `sad`: 0.17 -> 0.867. `[sad]` is the one cue with a
+demonstrated acoustic effect (p=0.0019) and the old judge had no standing to say whether the
+change was *toward sadness*. This one does.
+
+`fearful` (0.667, confused with `sad`) is the weakest class and the one to quote a caveat
+against. `surprised`, `other` and `unknown` are **not probed** — CREMA-D has no such clips,
+so no recall is claimed for them.
+
+Licence note: FunASR's is bespoke rather than OSI-approved. It grants use, copy, modify and
+share, requires attribution and model-name retention, and does **not** restrict commercial
+use. It wants the same lawyer's glance as anything non-standard, but it is not
+NonCommercial — unlike audEERING's, which was rejected outright.
 
 ## Measurement tools are a separate question from shipped artifacts
 
