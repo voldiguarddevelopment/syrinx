@@ -35,7 +35,19 @@ use syrinx_serve::synth_qwen::{QwenModelEngine, QwenVoice};
 /// entries are the tuning holdout set, included because the hypothesis was raised ON them
 /// and a confirmation that avoids them would prove nothing. That retires the partition for
 /// tuning purposes: ADR-0004 §5 requires a fresh `holdout_id` before the next round.
-const SENTENCES: [(&str, &str, &str); 6] = [
+/// `(id, kind, text)` per label. Chosen to span a spectrum rather than sampled at random:
+/// if the effect is sentence-dependent, the axis it depends on should be visible in the
+/// ordering.
+///
+/// The sets are **per label and semantically compatible with it**, deliberately. Rendering
+/// `[sad]` over angry text would confound the cue with the text's own affect. That is safe
+/// for the *judge* — emotion2vec reads audio only and cannot see the words, which is
+/// exactly why `docs/backends/AFFECT_JUDGES.md` rules out audio LLMs here — but it is not
+/// safe for the *renderer*, which does see them.
+///
+/// The first entry of each set is the sentence every previous run of that cue used, kept as
+/// an anchor so this run can be compared to those directly rather than by assertion.
+const ANGRY: [(&str, &str, &str); 6] = [
     ("accusatory-long", "long accusation",
      "You told me it was handled. You looked me in the eye and said it was handled."),
     ("holdout-imperative", "short imperative",
@@ -49,6 +61,35 @@ const SENTENCES: [(&str, &str, &str); 6] = [
     ("new-command", "terse command",
      "Stop talking and listen to me for once."),
 ];
+
+const SAD: [(&str, &str, &str); 6] = [
+    ("anchor-vigil", "quiet narrative",
+     "I waited by the window until the last light went out."),
+    ("loss-short", "plain statement of loss",
+     "She left before I could say goodbye."),
+    ("resignation", "resignation",
+     "I suppose there is nothing more to be done about it."),
+    ("wistful-question", "wistful question",
+     "Do you ever think about how things might have gone?"),
+    ("terse-finality", "terse finality",
+     "It is over. There is nothing left."),
+    ("reflective-long", "long reflection",
+     "We used to come here every summer, and now the house belongs to someone else."),
+];
+
+fn sentences_for(label: &str) -> Result<&'static [(&'static str, &'static str, &'static str)], String> {
+    match label {
+        "angry" => Ok(&ANGRY),
+        "sad" => Ok(&SAD),
+        // No generic fallback: rendering a cue over text of a different affect measures the
+        // text as much as the cue, and silently picking the wrong set would look like a
+        // result. Add a set deliberately.
+        other => Err(format!(
+            "no sentence set for cue {other:?} — add one to sentence_dependence.rs rather \
+             than reusing another cue's, which would confound the cue with the text"
+        )),
+    }
+}
 
 const SHAM: &str = "Read the sentence that follows";
 
@@ -93,8 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| format!("no curated phrase for {label:?}"))?
         .to_string();
 
+    let sentences = sentences_for(&label)?;
     // Two acoustic contrasts per sentence.
-    let comparisons = SENTENCES.len() * 2;
+    let comparisons = sentences.len() * 2;
     let alpha = 0.05 / comparisons as f64;
     let floor = min_n_for_alpha(alpha);
     if n < floor {
@@ -107,16 +149,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "[sent] label={label} judge-class={jl} phrase={instruct:?}\n\
          [sent] n={n}  {} sentences x 3 arms = {} renders\n\
          [sent] alpha 0.05/{comparisons} = {alpha:.5} (n floor {floor})",
-        SENTENCES.len(),
-        SENTENCES.len() * 3 * n
+        sentences.len(),
+        sentences.len() * 3 * n
     );
 
     println!(
-        "\n{:<20}{:<22}{:>10}{:>10}{:>10}{:>9}  {}",
+        "\n{:<20}{:<24}{:>11}{:>12}{:>10}{:>10}  {}",
         "sentence", "kind", "cue/plain", "sham/plain", "delta", "+/-noise", "top-gain"
     );
     let mut hits = 0usize;
-    for (id, kind, text) in SENTENCES {
+    for &(id, kind, text) in sentences {
         let render = |ins: Option<&str>| -> Result<Vec<Vec<f32>>, String> {
             (0..n)
                 .map(|i| {
@@ -171,19 +213,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             hits += 1;
         }
         println!(
-            "{id:<20}{kind:<22}{p_cue:>10.4}{p_sham:>10.4}{delta:>+10.3}{noise:>9.3}  {}{flag}",
+            "{id:<20}{kind:<24}{p_cue:>11.4}{p_sham:>12.4}{delta:>+10.3}{noise:>10.3}  {}{flag}",
             best.0
         );
     }
     println!(
         "\n{hits} of {} sentences show BOTH an acoustic change and a judge move toward `{label}`.",
-        SENTENCES.len()
+        sentences.len()
     );
     println!(
         "A cue that were simply dead would show 0. A cue that were unconditionally live would\n\
          show all {}. Anything between is sentence-dependence, and says the earlier verdict\n\
          was a property of the sentence it was measured on.",
-        SENTENCES.len()
+        sentences.len()
     );
     Ok(())
 }
