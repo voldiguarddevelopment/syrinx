@@ -204,6 +204,33 @@ engineering changes that, and it had gone unrecorded while the effort went into 
   leading candidate for a second family precisely because its licence is clean; it is a
   candidate, not an adopted path.
 
+## Working in a git worktree (the default for any change)
+
+**Make changes in a worktree, not in the main checkout.** `scripts/worktree.sh new <name>`
+creates one, wires it up, and prints the two commands you need; `list` and `rm` do the
+obvious. When dispatching a subagent, prefer the Agent tool's `isolation: "worktree"` for
+the same reason.
+
+The reason is not tidiness. On 2026-09-06 a `git add -A` in the shared checkout swept two
+subagents' in-progress files into a commit about something else entirely — one of them
+still being actively edited, and one targeting a model a licence review had just rejected.
+Nothing was lost, but the commit lied about its contents and had to be split back apart.
+Concurrent work in one checkout makes `git add -A` unsafe, and `git add -A` is what
+everyone types.
+
+Two things do NOT come with a plain `git worktree add`, which is why the helper exists:
+
+- **`scripts/test-all.env` is gitignored** (`*.env`), because it holds this box's absolute
+  weight and fixture paths. A worktree without it does not fail — every weight-backed test
+  SKIPs, the board prints green, and you conclude the suite passed when it tested almost
+  nothing. The helper symlinks it back to the main tree, so the box's paths have one
+  source of truth.
+- **`target/` must not be shared.** Cargo fingerprints path dependencies by path, so two
+  worktrees at different paths rebuild rather than reuse; a shared dir thrashes. Each gets
+  its own under `<wt-root>/.targets/<name>`. A cold build is the price of isolation.
+
+Both are added to `.git/info/exclude` (local) rather than the shared `.gitignore`.
+
 ## Verifying the build (on the model box)
 
 Verification is hardware-bound: the `real`-feature binaries need a GPU box with the
