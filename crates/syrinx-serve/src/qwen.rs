@@ -48,6 +48,16 @@
 //!   requests. On VoiceDesign the instruction designs the *timbre*, so splitting would
 //!   change **who is speaking** mid-line. `SplitOptions { allow_split: false }` keeps one
 //!   voice for the whole utterance and reports the cues it could not honour.
+//!
+//! # Choosing the draw
+//!
+//! Qwen3-TTS samples. Which of its possible renderings of one request you get is chosen by
+//! the PRNG seed, and [`QwenRequest`] deliberately does not carry it: the request says what
+//! to say, [`QwenEngine::render_seeded`] says which draw to take. That split is what lets a
+//! caller obtain the several independent renders needed to estimate sampling noise (see
+//! `syrinx-eval`'s activation test) without a seed field that would invalidate every
+//! existing `QwenRequest` literal — and, because the seed is an argument rather than engine
+//! state, no configuration call can overwrite it after the fact.
 
 use std::sync::Arc;
 
@@ -208,6 +218,11 @@ pub struct QwenRequest<'a> {
     pub instruct: Option<&'a str>,
     /// What this checkpoint will do with `instruct`.
     pub instruct_effect: InstructEffect,
+    // NOTE: the sampling draw is deliberately NOT a field here. A request says *what* to
+    // say; which of the model's many possible renderings of it you want is a separate
+    // axis, and it is chosen per call by [`QwenEngine::render_seeded`]. Keeping it out of
+    // the struct is also what lets a seed exist at all without breaking every existing
+    // `QwenRequest { .. }` literal in the workspace and in the frozen tests.
 }
 
 /// The thing that actually turns a [`QwenRequest`] into audio.
@@ -217,7 +232,48 @@ pub struct QwenRequest<'a> {
 /// [`crate::synth_qwen::QwenModelEngine`] (feature `real`).
 pub trait QwenEngine: Send + Sync {
     /// Render one request to 24 kHz mono `f32` samples, or describe why it failed.
+    ///
+    /// The draw is whatever the engine is configured for, so repeated calls with the same
+    /// request are the same audio on a seeded sampler. Use [`render_seeded`](Self::render_seeded)
+    /// when you need to choose the draw.
     fn render(&self, req: &QwenRequest<'_>) -> Result<Vec<f32>, String>;
+
+    /// Render one request at a **specific sampling draw**.
+    ///
+    /// Anything that has to tell a real difference from a lucky one — `syrinx-eval`'s
+    /// activation test above all — needs several *independent* renders of one condition to
+    /// estimate the backend's own sampling noise. [`render`](Self::render) cannot supply
+    /// them: it repeats one draw. This is how a caller asks for the others.
+    ///
+    /// The seed is an **argument, not engine state**, and that is the load-bearing part of
+    /// the design. Engine state can be overwritten by a later builder call —
+    /// [`QwenModelEngine::with_drive_params`](crate::synth_qwen::QwenModelEngine::with_drive_params)
+    /// really does discard a seed set by `with_seed` before it — whereas a per-render
+    /// argument has no builder that could reach it. No ordering of any configuration call
+    /// can silently change which draw this render produces.
+    ///
+    /// The default implementation **discards** `seed` and delegates to `render`, so no
+    /// existing engine has to change: an engine that does not sample (a recorder, a
+    /// fixture, a playback stub) has no draw to select, and handing it a number does not
+    /// make it vary. That default is a real answer, not a lie, only because it is
+    /// advertised: an engine whose renders genuinely follow `seed` must also override
+    /// [`honors_seed`](Self::honors_seed), and a caller that needs variance must ask.
+    fn render_seeded(&self, req: &QwenRequest<'_>, seed: u64) -> Result<Vec<f32>, String> {
+        let _ = seed;
+        self.render(req)
+    }
+
+    /// Whether [`render_seeded`](Self::render_seeded) actually selects the draw on this
+    /// engine, i.e. whether two seeds can produce two different renders.
+    ///
+    /// `false` by default — the honest answer for the default `render_seeded`, which
+    /// throws the seed away. A caller that needs several draws of one condition should
+    /// check this **before** paying for them, rather than discovering identical renders
+    /// afterwards and having to guess whether the engine ignored the seed or the model
+    /// simply agreed with itself.
+    fn honors_seed(&self) -> bool {
+        false
+    }
 }
 
 /// The Qwen [`Synth`]: plans a [`SpeechRequest`] for one checkpoint and renders every
@@ -339,4 +395,47 @@ pub fn encode_wav24(samples: &[f32]) -> Vec<u8> {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An engine that implements only `render` — the shape every pre-seed engine has,
+    /// including the recorder in the frozen `tests/qwen_server.rs`. It exists to pin the
+    /// two defaults on [`QwenEngine`], which are the whole reason adding a seed did not
+    /// have to touch a single existing implementation.
+    struct RenderOnly;
+
+    impl QwenEngine for RenderOnly {
+        fn render(&self, req: &QwenRequest<'_>) -> Result<Vec<f32>, String> {
+            Ok(vec![req.text.len() as f32])
+        }
+    }
+
+    fn req() -> QwenRequest<'static> {
+        QwenRequest {
+            mode: QwenMode::CustomVoice,
+            text: "hello",
+            instruct: None,
+            instruct_effect: InstructEffect::Honored,
+        }
+    }
+
+    /// The default `render_seeded` delegates to `render`, so an engine that never heard of
+    /// seeds still compiles and still answers — with the same audio for every seed.
+    #[test]
+    fn the_default_render_seeded_delegates_to_render() {
+        let e = RenderOnly;
+        let plain = e.render(&req()).expect("render");
+        assert_eq!(e.render_seeded(&req(), 0).expect("seed 0"), plain);
+        assert_eq!(e.render_seeded(&req(), 9_999).expect("seed 9999"), plain);
+    }
+
+    /// …and it says so, rather than letting a caller mistake identical renders for a
+    /// backend that ignores cues.
+    #[test]
+    fn an_engine_that_ignores_the_seed_reports_that_it_does() {
+        assert!(!RenderOnly.honors_seed());
+    }
 }

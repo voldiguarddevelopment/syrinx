@@ -324,8 +324,15 @@ impl QwenModelEngine {
         self
     }
 
-    /// Set the sampling seed (default `0`). `(seed, weights, prompt)` reproduces
+    /// Set the **configured** sampling seed (default `0`) — the draw
+    /// [`render`](QwenEngine::render) takes. `(seed, weights, prompt)` reproduces
     /// bit-for-bit.
+    ///
+    /// This is engine state, and therefore clobberable: see
+    /// [`with_drive_params`](Self::with_drive_params). To choose a draw for **one** render
+    /// without any of that hazard, pass it to
+    /// [`render_seeded`](QwenEngine::render_seeded) instead, which takes the seed as an
+    /// argument and leaves this value untouched.
     pub fn with_seed(mut self, seed: u64) -> Self {
         self.params.seed = seed;
         self
@@ -335,6 +342,9 @@ impl QwenModelEngine {
     ///
     /// **Whole** means the seed too: this discards anything
     /// [`with_seed`](Self::with_seed) set before it, so call it *first* when you use both.
+    /// The hazard is confined to the *configured* seed — a seed handed to
+    /// [`render_seeded`](QwenEngine::render_seeded) is an argument to that call and no
+    /// builder, in any order, can overwrite it.
     pub fn with_drive_params(mut self, params: DriveParams) -> Self {
         self.params = params;
         self
@@ -410,7 +420,17 @@ impl QwenModelEngine {
         }
     }
 
-    fn render_inner(&self, req: &QwenRequest<'_>) -> Result<Vec<f32>, QwenEngineError> {
+    /// Render `req` under exactly `params`.
+    ///
+    /// `params` is passed in rather than read from `self` so that the per-render seed of
+    /// [`QwenEngine::render_seeded`] has a way through that does not touch the configured
+    /// [`DriveParams`] — no interior mutability, no lock ordering, nothing another
+    /// concurrent request could observe half-applied.
+    fn render_inner(
+        &self,
+        req: &QwenRequest<'_>,
+        params: &DriveParams,
+    ) -> Result<Vec<f32>, QwenEngineError> {
         if req.mode != self.mode() {
             return Err(QwenEngineError(format!(
                 "request is {:?} but this engine drives {:?}",
@@ -429,7 +449,7 @@ impl QwenModelEngine {
             Err(poisoned) => poisoned.into_inner(),
         };
         let prompt = model.realize_plan(&plan, xvector, ref_frames)?;
-        let generated = model.generate(&prompt, &self.params)?;
+        let generated = model.generate(&prompt, params)?;
         drop(model);
         if generated.frames.is_empty() {
             return Err(QwenEngineError("no frames generated".to_string()));
@@ -456,7 +476,30 @@ impl QwenModelEngine {
 
 impl QwenEngine for QwenModelEngine {
     fn render(&self, req: &QwenRequest<'_>) -> Result<Vec<f32>, String> {
-        self.render_inner(req).map_err(|e| e.0)
+        self.render_inner(req, &self.params).map_err(|e| e.0)
+    }
+
+    /// Render at `seed`, leaving every other knob as configured.
+    ///
+    /// The seed arrives as an argument and is applied to a throwaway copy of the engine's
+    /// [`DriveParams`], so this render **cannot** be affected by the ordering trap on
+    /// [`with_drive_params`](Self::with_drive_params): there is no builder that can reach
+    /// a value that only exists for the duration of the call. `render_seeded(req, s)` is
+    /// the same audio for the same `s` whatever `with_seed` / `with_drive_params` were
+    /// called before it, and equals [`render`](QwenEngine::render) exactly when `s` is the
+    /// configured seed. `tests/real_qwen_seed.rs` holds both properties on real weights.
+    fn render_seeded(&self, req: &QwenRequest<'_>, seed: u64) -> Result<Vec<f32>, String> {
+        let params = DriveParams { seed, ..self.params.clone() };
+        self.render_inner(req, &params).map_err(|e| e.0)
+    }
+
+    /// True unless this engine was configured for greedy decode.
+    ///
+    /// `DriveParams::greedy` turns every draw into an argmax and, in the port's own words,
+    /// "the run stops depending on `seed`". Reporting `true` there would promise a caller
+    /// variance that a greedy engine physically cannot produce.
+    fn honors_seed(&self) -> bool {
+        !self.params.greedy
     }
 }
 
