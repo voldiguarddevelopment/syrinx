@@ -802,3 +802,42 @@ holdout partition is retired, since its sentences were measured here; ADR-0004 �
 generalises: **`[sad]`'s result also came from one sentence.** It is stronger and
 triangulated by three methods, but the same six-sentence sweep is owed before `[sad]` is
 described as working generally.
+
+### A31 — 2026-09-06 — **`[sad]` generalises across sentences; `[angry]` does not. The anchor was the least representative sentence.**
+
+A30 showed a cue's verdict can be a property of the sentence it was measured on, so `[sad]`
+owed the same six-sentence sweep. n=8, 144 renders, per sentence.
+
+| | `[sad]` | `[angry]` |
+|---|:-:|:-:|
+| top-gain == the cued class | **5 / 6** | 2 / 6 |
+| judge move significant after Bonferroni | **3 / 6** | 1 / 6 |
+| both | 2 / 6 | 1 / 6 |
+| acoustic clears the corrected bar | 2 / 6 | 0 / 6 |
+
+**`[sad]` is a real and reasonably general capability on this checkpoint.** `[angry]` is
+sentence-specific: it works on a terse command and nowhere else measured.
+
+**The anchor turned out to be the least representative sentence in its set.** *"I waited by
+the window…"* — the source of every prior `[sad]` conclusion — is the only one of six where
+`sad` is not the top-gaining class (`other` is). A28 is not overturned: the `sad` delta
+there is +4.007 at p=0.0017. But A28 could not say whether that generalised, and it does —
+*better* than the anchor implied. This is also the concrete answer to the caveat A28
+recorded against itself ("sad is still not the winning class"): true on the anchor, false
+on four of the other five.
+
+**ADR-0004's "the two measures fail differently" is now demonstrated rather than asserted.**
+`resignation` clears the acoustic bar (p=0.0003) with its judge move inside noise;
+`reflective-long` is the strongest judge result (p=0.00001) and misses the acoustic bar.
+They coincide on exactly one sentence. A conjunctive gate over two measures that agreed
+would be redundant; over two that disagree this often it is doing real work — and it is why
+the strict flag reads 0/6, which stays the right gate for *accepting* a phrase and the wrong
+summary of what was learned.
+
+Not claimed: any mechanism (one sentence per cell cannot separate content from length or
+prosodic shape), anything beyond `serena`/1.7B/English, and nothing perceptual — the judge
+is 0.867 on this class, not 1.0.
+
+Next: `[happy]` is the remaining cue whose verdict ("cannot tell") rests on a single
+sentence, and the sweep deliberately refuses to run without a purpose-built sentence set for
+it. Tuning is now well-posed for `[sad]` — a real, general incumbent to beat.
