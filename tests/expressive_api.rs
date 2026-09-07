@@ -73,7 +73,16 @@ async fn explain_returns_the_full_report_instead_of_audio() {
     assert!(ct.starts_with("application/json"), "explain must return JSON, got {ct}");
     let v: Value = serde_json::from_slice(&body).unwrap();
 
-    assert_eq!(v["backend"], "fish-s2-pro", "default backend");
+    // UNFREEZE, 2026-09-07, maintainer-authorised. This asserted `fish-s2-pro` — the
+    // default when Fish was the primary path. Fish was deprecated on LICENCE on 2026-09-06
+    // (every Fish checkpoint is research-only, every Qwen3-TTS checkpoint is Apache-2.0),
+    // and a server defaulting to a backend that can never ship is a trap for the first
+    // caller who omits the parameter. Ledger A26 flagged it as a behavioural decision
+    // rather than a documentation fix, and A33 records the decision.
+    //
+    // The assertion is kept, not deleted: what the default IS still matters, and a silent
+    // change to it should still fail here.
+    assert_eq!(v["backend"], "qwen3-1.7b-customvoice", "default backend");
     // The spoken text carries no cue markup — the hard invariant, over the wire.
     let text = v["text"].as_str().unwrap();
     assert!(!text.contains('['), "cue markup reached the API response: {text:?}");

@@ -22,8 +22,9 @@ use syrinx_eval::acoustic::{activation_test, features, Features};
 use syrinx_eval::affect::{
     emotion2vec9_spec, emotion2vec_label_for_cue, score_resampled, OnnxJudge,
 };
+use syrinx_eval::candidates::candidates_for;
 use syrinx_eval::tune::{
-    decide, Split, TuneArm, TuneMeasurement, TuneThresholds,
+    decide_per_sentence, SentenceMeasurement, Split, TuneArm, TuneMeasurement, TuneThresholds,
 };
 use syrinx_serve::qwen::{InstructEffect, QwenEngine, QwenMode, QwenRequest};
 use syrinx_serve::synth_qwen::{QwenModelEngine, QwenVoice};
@@ -150,15 +151,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or_else(|| format!("no curated phrase for {label:?}"))?
         .to_string();
 
-    // Deterministic candidate grammar seeded from the incumbent's own vocabulary. No
-    // network, no LLM: enumerable, auditable, reproducible from disk. An LLM proposer is
-    // v2 and must write into a reviewed candidates file as DATA, never straight into here.
-    let candidates: Vec<String> = vec![
-        format!("Speak as if you are genuinely {label}"),
-        format!("Say this the way someone who is {label} would say it"),
-        format!("You are {label}. Speak accordingly"),
-        format!("Speak in a sharply {label} tone"),
-    ];
+    // Candidates from the enumerable grammar (`syrinx_eval::candidates`), whose entire
+    // output space is walked by `tests/cue_candidate_grammar.rs`. The previous inline
+    // templates assumed every label was a predicate adjective and were 32% malformed.
+    let vocab = syrinx_cue::vocab::Vocab::embedded()?;
+    let candidates: Vec<String> = candidates_for(&label, &vocab, table)
+        .into_iter()
+        .filter(|c| c != &incumbent)
+        .collect();
+    if candidates.is_empty() {
+        return Err(format!("the grammar produced no candidates for {label:?}").into());
+    }
     eprintln!("[tune] label={label} judge-class={jl} n={n}/arm");
     eprintln!("[tune] incumbent: {incumbent:?}");
     for c in &candidates {
@@ -176,128 +179,143 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         2 * n * (4 + candidates.len()) * tune_set.len()
     );
 
-    let mut out: Vec<TuneMeasurement> = Vec::new();
+    // PER SENTENCE, never pooled. The first two rounds pooled 3 sentences x n seeds into
+    // one permutation test and the INCUMBENT could not clear the acoustic bar (p=0.0166 /
+    // 0.3580) while the same phrase scores 0.0003-0.0057 measured per sentence. Twelve
+    // pooled samples doing worse than eight per-sentence samples is inflated variance, and
+    // the sentence-dependence sweeps say where it comes from.
+    let mut out: Vec<SentenceMeasurement> = Vec::new();
+    let labels = emotion2vec9_spec().labels;
 
     for (split, sentences) in [(Split::Tune, tune_set), (Split::Holdout, holdout_set)] {
         eprintln!("\n[tune] === {split:?} split ===");
-        // Render one arm across all this split's sentences, n seeds each.
-        let render = |ins: Option<&str>| -> Result<Vec<Vec<f32>>, String> {
-            let mut v = Vec::new();
-            for (si, text) in sentences.iter().enumerate() {
-                for i in 0..n {
-                    let req = QwenRequest {
-                        mode: QwenMode::CustomVoice,
-                        text,
-                        instruct: ins,
-                        instruct_effect: InstructEffect::Honored,
-                    };
-                    // Seeds are disjoint per sentence so no two arms share a draw pattern.
-                    v.push(engine.render_seeded(&req, (si * 100 + i) as u64)?);
-                }
-            }
-            Ok(v)
-        };
+        for (si, text) in sentences.iter().enumerate() {
+            let sid = format!("{split:?}-s{si}").to_lowercase();
+            eprintln!("  [{sid}] {text:?}");
 
-        let plain = render(None)?;
-        let f = |w: &Vec<Vec<f32>>| w.iter().map(|s| features(s, 24_000)).collect::<Vec<Features>>();
-        let fplain = f(&plain);
-        let sham = render(Some(SHAM))?;
-        let fsham = f(&sham);
+            let render = |ins: Option<&str>| -> Result<Vec<Vec<f32>>, String> {
+                (0..n)
+                    .map(|i| {
+                        let req = QwenRequest {
+                            mode: QwenMode::CustomVoice,
+                            text,
+                            instruct: ins,
+                            instruct_effect: InstructEffect::Honored,
+                        };
+                        // Seeds disjoint per sentence so no two sentences share a draw.
+                        engine.render_seeded(&req, (si * 1000 + i) as u64)
+                    })
+                    .collect()
+            };
+            let f = |w: &Vec<Vec<f32>>| {
+                w.iter().map(|s| features(s, 24_000)).collect::<Vec<Features>>()
+            };
 
-        // One read per waveform, reused for both the cued-class series and the per-label
-        // means. Two closures here would each need `&mut judge`, and the second borrow is
-        // what the compiler rightly refuses.
-        /// Per-label mean over a set of renders — used to find which class gained most.
-        fn label_means(
-            judge: &mut OnnxJudge,
-            w: &[Vec<f32>],
-            labels: &[String],
-        ) -> Result<BTreeMap<String, f64>, Box<dyn std::error::Error>> {
-            let mut acc: BTreeMap<String, Vec<f64>> = BTreeMap::new();
-            for s in w {
-                let sc = score_resampled(judge, s, 24_000)?;
-                for l in labels {
-                    acc.entry(l.clone()).or_default().push(f64::from(sc.get(l).unwrap_or(0.0)));
-                }
-            }
-            Ok(acc.iter().map(|(k, v)| (k.clone(), mean(v))).collect())
-        }
+            let plain = render(None)?;
+            let fplain = f(&plain);
+            let sham = render(Some(SHAM))?;
+            let fsham = f(&sham);
 
-        let labels = emotion2vec9_spec().labels;
-        // The per-render cued-class series, which the noise estimate needs.
-        let series = |judge: &mut OnnxJudge, w: &[Vec<f32>]| -> Result<Vec<f64>, Box<dyn std::error::Error>> {
-            w.iter()
-                .map(|s| {
+            let series = |judge: &mut OnnxJudge, w: &[Vec<f32>]| -> Result<Vec<f64>, Box<dyn std::error::Error>> {
+                w.iter()
+                    .map(|s| {
+                        Ok(f64::from(
+                            score_resampled(judge, s, 24_000)?.get(jl).unwrap_or(f32::NAN),
+                        ))
+                    })
+                    .collect()
+            };
+            let mut label_means = |judge: &mut OnnxJudge, w: &[Vec<f32>]| -> Result<BTreeMap<String, f64>, Box<dyn std::error::Error>> {
+                let mut acc: BTreeMap<String, Vec<f64>> = BTreeMap::new();
+                for s in w {
                     let sc = score_resampled(judge, s, 24_000)?;
-                    Ok(f64::from(sc.get(jl).unwrap_or(f32::NAN)))
-                })
-                .collect()
-        };
+                    for l in &labels {
+                        acc.entry(l.clone()).or_default().push(f64::from(sc.get(l).unwrap_or(0.0)));
+                    }
+                }
+                Ok(acc.iter().map(|(k, v)| (k.clone(), mean(v))).collect())
+            };
 
-        let base = series(&mut judge, &plain)?;
-        let (mb, sb) = (mean(&base), sd(&base));
-        let base_full = label_means(&mut judge, &plain, &labels)?;
+            let base = series(&mut judge, &plain)?;
+            let (mb, sb) = (mean(&base), sd(&base));
+            let base_full = label_means(&mut judge, &plain)?;
 
-        macro_rules! arm {
-            ($name:expr, $arm:expr, $phrase:expr, $wav:expr) => {{
-            let (name, arm, phrase, wav) = ($name, $arm, $phrase, &$wav);
-            let fw = f(wav);
-            let p_plain = activation_test(&fw, &fplain, th.corrected_alpha())
-                .map(|o| o.p_value)
-                .unwrap_or(1.0);
-            let p_sham = activation_test(&fw, &fsham, th.corrected_alpha())
-                .map(|o| o.p_value)
-                .unwrap_or(1.0);
-            let v = series(&mut judge, wav)?;
-            let delta = mean(&v) - mb;
-            let noise = (sd(&v).powi(2) + sb * sb).sqrt();
-            let fw_full = label_means(&mut judge, wav, &labels)?;
-            let (gain_label, _) = fw_full
-                .iter()
-                .map(|(k, m)| (k.clone(), m - base_full.get(k).copied().unwrap_or(0.0)))
-                .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
-                .unwrap();
-            eprintln!(
-                "  {name:<14} p_plain={p_plain:.4} p_sham={p_sham:.4} \
-                 delta={delta:+.3} +/-{noise:.3} top-gain={gain_label}"
-            );
-            out.push(TuneMeasurement {
-                label: label.clone(),
-                phrase: phrase.map(str::to_string),
-                arm,
-                split,
-                p_vs_plain: p_plain,
-                p_vs_sham: p_sham,
-                cued_delta: delta,
-                cued_noise: noise,
-                largest_gain_label: gain_label,
-                wer: 0.0,
-                speaker_similarity: 1.0,
-            });
-            }};
-        }
+            let mut measure = |name: &str,
+                               arm: TuneArm,
+                               phrase: Option<&str>,
+                               wav: &Vec<Vec<f32>>|
+             -> Result<(), Box<dyn std::error::Error>> {
+                let fw = f(wav);
+                let p_plain =
+                    activation_test(&fw, &fplain, th.corrected_alpha()).map(|o| o.p_value).unwrap_or(1.0);
+                let p_sham =
+                    activation_test(&fw, &fsham, th.corrected_alpha()).map(|o| o.p_value).unwrap_or(1.0);
+                let v = series(&mut judge, wav)?;
+                let delta = mean(&v) - mb;
+                let noise = (sd(&v).powi(2) + sb * sb).sqrt();
+                let full = label_means(&mut judge, wav)?;
+                let (gain, _) = full
+                    .iter()
+                    .map(|(k, m)| (k.clone(), m - base_full.get(k).copied().unwrap_or(0.0)))
+                    .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                    .unwrap();
+                eprintln!(
+                    "     {name:<22} p_plain={p_plain:.4} p_sham={p_sham:.4} \
+                     delta={delta:+.3} +/-{noise:.3} top={gain}"
+                );
+                out.push(SentenceMeasurement {
+                    sentence: sid.clone(),
+                    m: TuneMeasurement {
+                        label: label.clone(),
+                        phrase: phrase.map(str::to_string),
+                        arm,
+                        split,
+                        p_vs_plain: p_plain,
+                        p_vs_sham: p_sham,
+                        cued_delta: delta,
+                        cued_noise: noise,
+                        largest_gain_label: gain,
+                        wer: 0.0,
+                        speaker_similarity: 1.0,
+                    },
+                });
+                Ok(())
+            };
 
-        arm!("sham", TuneArm::Sham, None, sham);
-        let inc_w = render(Some(&incumbent))?;
-        arm!("incumbent", TuneArm::Incumbent, Some(incumbent.as_str()), inc_w);
-        let cc_w = render(Some(counter))?;
-        arm!("counter-cue", TuneArm::CounterCue, Some(counter), cc_w);
-        for c in &candidates {
-            let w = render(Some(c))?;
-            arm!(&format!("cand:{}", &c[..18.min(c.len())]), TuneArm::Candidate, Some(c.as_str()), w);
+            measure("sham", TuneArm::Sham, None, &sham)?;
+            let inc_w = render(Some(&incumbent))?;
+            measure("incumbent", TuneArm::Incumbent, Some(&incumbent), &inc_w)?;
+            let cc_w = render(Some(counter))?;
+            measure("counter-cue", TuneArm::CounterCue, Some(counter), &cc_w)?;
+            for c in &candidates {
+                let w = render(Some(c))?;
+                measure(&format!("cand:{}", &c[..22.min(c.len())]), TuneArm::Candidate, Some(c), &w)?;
+            }
         }
     }
 
-    let report = decide(&out, 0, &th);
+    // A candidate must clear the criteria on a MAJORITY of sentences on each split.
+    // Pre-registered here, not chosen after seeing the numbers.
+    let min_sentences = tune_set.len() / 2 + 1;
+    let report = decide_per_sentence(&out, 0, &th, min_sentences);
     println!("\n=== decision ===");
-    println!("corrected alpha {:.5}", report.corrected_alpha);
+    println!(
+        "corrected alpha {:.5}   must clear {min_sentences} of {} sentences",
+        report.corrected_alpha,
+        tune_set.len()
+    );
     if let Some(v) = &report.void {
         println!("ROUND VOID: {v:?}");
         println!("Nothing measured this round can be trusted. No proposal.");
         return Ok(());
     }
-    for (c, why) in &report.rejected {
-        println!("  rejected  {:?}\n            {why:?}", c.phrase);
+    for (c, cleared, per) in &report.detail {
+        println!("  {:<44} cleared {cleared}/{} tune sentences", format!("{:?}", c.phrase), tune_set.len());
+        for p in per.iter().filter(|p| !p.passed) {
+            if let Some(r) = &p.reject {
+                println!("      {:<14} {r:?}", p.sentence);
+            }
+        }
     }
     match &report.proposed {
         None => println!("\nNo candidate cleared every criterion. The incumbent stands."),
@@ -308,13 +326,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // candidate was not selected on. Writing 0.0 here (as a first draft did) would
             // put a placeholder into a provenance field whose entire purpose is to record
             // what was actually measured.
+            // Mean holdout delta across the sentences it was measured on -- per sentence,
+            // so this is an average of independent measurements rather than one pooled
+            // number, which is the whole point of the restructure.
             let hd = |phrase: &str| {
-                out.iter()
-                    .find(|m| {
-                        m.split == Split::Holdout
-                            && m.phrase.as_deref() == Some(phrase)
+                let v: Vec<f64> = out
+                    .iter()
+                    .filter(|s| {
+                        s.m.split == Split::Holdout && s.m.phrase.as_deref() == Some(phrase)
                     })
-                    .map(|m| m.cued_delta)
+                    .map(|s| s.m.cued_delta)
+                    .collect();
+                (!v.is_empty()).then(|| mean(&v))
             };
             let margin = match (hd(&c.phrase), hd(&incumbent)) {
                 (Some(a), Some(b)) => a - b,

@@ -368,3 +368,231 @@ pub fn decide(
         rejected,
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// Per-sentence decisions (added 2026-09-07)
+// ---------------------------------------------------------------------------------------
+//
+// `decide` above evaluates one pooled measurement per arm. That is what the first two
+// tuning rounds did, and it does not work: the tuner pooled 3 sentences x 4 seeds into a
+// single permutation test, and **the incumbent itself could not clear the acoustic bar**
+// (p=0.0166 on the tune split, 0.3580 on the holdout) — while the same phrase, measured
+// per sentence at n=8, scores 0.0003 to 0.0057.
+//
+// More samples (12 pooled vs 8 per sentence) producing WORSE significance is the signature
+// of inflated variance, and the three sentence-dependence sweeps say exactly where it comes
+// from: sentences differ enough to swamp the cue. Pooling buries the signal it is meant to
+// measure, and a gate the incumbent cannot pass can accept nothing — the failure ADR-0003
+// named for the 0.85 activation floor, arrived at from the other direction.
+//
+// So the renders are no longer pooled. Each sentence is tested on its own and the
+// DECISIONS are aggregated: a candidate must clear every criterion on at least
+// `min_sentences` of them. That also makes "works on some sentences" expressible, which
+// the sweeps showed is the actual shape of the phenomenon.
+//
+// Everything here is additive. `decide`, `TuneMeasurement` and `TuneThresholds` keep their
+// exact signatures, so `tests/cue_tune_decision.rs` stays frozen and green.
+
+/// One arm's measurement on one specific sentence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SentenceMeasurement {
+    /// Sentence id. Grouping key — never pooled across.
+    pub sentence: String,
+    pub m: TuneMeasurement,
+}
+
+/// A per-sentence verdict for one candidate.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PerSentence {
+    pub sentence: String,
+    pub passed: bool,
+    pub reject: Option<Reject>,
+}
+
+/// What a per-sentence round concluded.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PerSentenceReport {
+    pub corrected_alpha: f64,
+    pub void: Option<Void>,
+    pub proposed: Option<Candidate>,
+    /// Every candidate, with how many sentences it cleared and why it failed the rest.
+    pub detail: Vec<(Candidate, usize, Vec<PerSentence>)>,
+    /// How many sentences a candidate had to clear.
+    pub required: usize,
+}
+
+impl PerSentenceReport {
+    pub fn has_proposal(&self) -> bool {
+        self.proposed.is_some()
+    }
+}
+
+fn arm_on<'a>(
+    ms: &'a [SentenceMeasurement],
+    sentence: &str,
+    arm: TuneArm,
+    split: Split,
+) -> Option<&'a TuneMeasurement> {
+    ms.iter()
+        .find(|s| s.sentence == sentence && s.m.arm == arm && s.m.split == split)
+        .map(|s| &s.m)
+}
+
+/// Decide a round from per-sentence measurements.
+///
+/// `min_sentences` is how many sentences a candidate must clear on **each** split. It is
+/// pre-registered like everything else: choosing it after seeing the results would be
+/// picking the threshold that admits the answer you liked.
+pub fn decide_per_sentence(
+    ms: &[SentenceMeasurement],
+    holdout_uses: usize,
+    th: &TuneThresholds,
+    min_sentences: usize,
+) -> PerSentenceReport {
+    let alpha = th.corrected_alpha();
+    let void = |v: Void| PerSentenceReport {
+        corrected_alpha: alpha,
+        void: Some(v),
+        proposed: None,
+        detail: Vec::new(),
+        required: min_sentences,
+    };
+
+    if holdout_uses >= th.max_holdout_uses {
+        return void(Void::HoldoutExpired { uses: holdout_uses, budget: th.max_holdout_uses });
+    }
+
+    let mut sentences: Vec<&str> = ms.iter().map(|s| s.sentence.as_str()).collect();
+    sentences.sort_unstable();
+    sentences.dedup();
+
+    // ---- round-level voids, evaluated per sentence. A sham that activates ANYWHERE at the
+    // corrected alpha voids the round: multiplicity is already paid for in the correction,
+    // so one hit is one hit too many.
+    for s in &sentences {
+        if let Some(sh) = arm_on(ms, s, TuneArm::Sham, Split::Tune) {
+            if sh.p_vs_plain <= alpha {
+                return void(Void::ShamActivated { p: sh.p_vs_plain, alpha });
+            }
+        }
+        if arm_on(ms, s, TuneArm::Incumbent, Split::Tune).is_none() {
+            return void(Void::IncumbentNotRemeasured);
+        }
+    }
+    // The counter-cue must lose on a majority. Requiring it to lose everywhere would let a
+    // single noisy sentence discard an otherwise sound round.
+    let cc_wins = sentences
+        .iter()
+        .filter(|s| {
+            match (
+                arm_on(ms, s, TuneArm::CounterCue, Split::Tune),
+                arm_on(ms, s, TuneArm::Incumbent, Split::Tune),
+            ) {
+                (Some(c), Some(i)) => c.cued_delta > i.cued_delta,
+                _ => false,
+            }
+        })
+        .count();
+    if cc_wins * 2 > sentences.len() {
+        return void(Void::CounterCueWon {
+            counter_delta: cc_wins as f64,
+            incumbent_delta: sentences.len() as f64,
+        });
+    }
+
+    // ---- score each candidate, per sentence, per split.
+    let mut phrases: Vec<&str> = ms
+        .iter()
+        .filter(|s| s.m.arm == TuneArm::Candidate)
+        .filter_map(|s| s.m.phrase.as_deref())
+        .collect();
+    phrases.sort_unstable();
+    phrases.dedup();
+
+    let mut detail = Vec::new();
+    let mut winners: Vec<(Candidate, usize, f64)> = Vec::new();
+    for phrase in phrases {
+        let cand = Candidate {
+            label: ms
+                .iter()
+                .find(|s| s.m.phrase.as_deref() == Some(phrase))
+                .map(|s| s.m.label.clone())
+                .unwrap_or_default(),
+            phrase: phrase.to_string(),
+        };
+        if let Err(why) = phrase_is_safe(phrase) {
+            detail.push((cand, 0, vec![PerSentence {
+                sentence: "*".into(),
+                passed: false,
+                reject: Some(Reject::UnsafePhrase { why }),
+            }]));
+            continue;
+        }
+
+        let mut per = Vec::new();
+        let (mut tune_ok, mut hold_ok, mut hold_total) = (0usize, 0usize, 0.0f64);
+        for s in &sentences {
+            let tune = arm_on(ms, s, TuneArm::Candidate, Split::Tune)
+                .filter(|m| m.phrase.as_deref() == Some(phrase))
+                .or_else(|| {
+                    ms.iter()
+                        .find(|x| {
+                            x.sentence == **s
+                                && x.m.arm == TuneArm::Candidate
+                                && x.m.split == Split::Tune
+                                && x.m.phrase.as_deref() == Some(phrase)
+                        })
+                        .map(|x| &x.m)
+                });
+            let inc = arm_on(ms, s, TuneArm::Incumbent, Split::Tune).map(|m| m.cued_delta);
+            let r = match (tune, inc) {
+                (Some(t), Some(i)) => check(t, i, th).err(),
+                _ => Some(Reject::NotConfirmedOnHoldout),
+            };
+            per.push(PerSentence {
+                sentence: (*s).to_string(),
+                passed: r.is_none(),
+                reject: r,
+            });
+            if per.last().unwrap().passed {
+                tune_ok += 1;
+            }
+
+            // Holdout, same sentence.
+            let hm = ms.iter().find(|x| {
+                x.sentence == **s
+                    && x.m.arm == TuneArm::Candidate
+                    && x.m.split == Split::Holdout
+                    && x.m.phrase.as_deref() == Some(phrase)
+            });
+            let hi = arm_on(ms, s, TuneArm::Incumbent, Split::Holdout).map(|m| m.cued_delta);
+            if let (Some(h), Some(i)) = (hm, hi) {
+                if check(&h.m, i, th).is_ok() {
+                    hold_ok += 1;
+                    hold_total += h.m.cued_delta;
+                }
+            }
+        }
+        let passed = tune_ok >= min_sentences && hold_ok >= min_sentences;
+        detail.push((cand.clone(), tune_ok, per));
+        if passed {
+            winners.push((cand, hold_ok, hold_total));
+        }
+    }
+
+    // Rank by holdout breadth first, then holdout magnitude — both from the split that was
+    // not selected on.
+    winners.sort_by(|a, b| {
+        b.1.cmp(&a.1)
+            .then(b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal))
+            .then(a.0.cmp(&b.0))
+    });
+
+    PerSentenceReport {
+        corrected_alpha: alpha,
+        void: None,
+        proposed: winners.first().map(|(c, _, _)| c.clone()),
+        detail,
+        required: min_sentences,
+    }
+}

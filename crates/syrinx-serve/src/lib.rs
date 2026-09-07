@@ -762,9 +762,19 @@ fn explain_requested(uri: &axum::http::Uri) -> bool {
     query_value(uri, "explain").is_some_and(|v| v == "1" || v == "true")
 }
 
-/// The `backend=` query parameter, defaulting to Fish S2-pro (the primary TTS path).
+/// The `backend=` query parameter.
+///
+/// Defaults to `qwen3-1.7b-customvoice`. It used to default to `fish-s2-pro`, described
+/// here as "the primary TTS path" — which stopped being true on 2026-09-06, when Fish was
+/// deprecated on **licence**: every Fish checkpoint is research-only and every Qwen3-TTS
+/// checkpoint is Apache-2.0 (`docs/LICENSES.md`). A server whose default points at a
+/// backend that can never ship is a trap for the first caller who omits the parameter.
+///
+/// This is a behavioural change to a shipped surface, flagged in ledger A26 and made
+/// deliberately rather than as a side effect of the deprecation. An explicit
+/// `backend=fish-s2-pro` still works; the research path is deprecated, not removed.
 fn backend_of(uri: &axum::http::Uri) -> String {
-    query_value(uri, "backend").unwrap_or_else(|| "fish-s2-pro".to_string())
+    query_value(uri, "backend").unwrap_or_else(|| "qwen3-1.7b-customvoice".to_string())
 }
 
 fn query_value(uri: &axum::http::Uri, key: &str) -> Option<String> {

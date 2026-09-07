@@ -870,3 +870,37 @@ instruct-lang run digit for digit from a different worktree.
 Not claimed: any mechanism, and **not** that `[happy]` is unreachable — this measures the
 shipped phrase, not the concept. That makes `[happy]` the best-motivated tuning target after
 `[sad]`: a clear deficit, and a judge with 0.967 recall to detect a fix.
+
+### A33 — 2026-09-07 — **the tuner pooled sentences and could accept nothing; and the server's default backend moves to Qwen**
+
+**The pooling defect.** The first two tuning rounds pooled 3 sentences x n seeds into one
+permutation test per arm. The `[sad]` round exposed it: **the incumbent itself could not
+clear the acoustic bar** — p=0.0166 on the tune split, 0.3580 on the holdout — while the
+same phrase scores 0.0003–0.0057 measured per sentence at n=8. Twelve pooled samples doing
+worse than eight per-sentence samples is the signature of inflated variance, and A30–A32
+say exactly where it comes from: sentences differ enough to swamp the cue.
+
+A gate the incumbent cannot pass can accept nothing. That is the failure ADR-0003 named for
+the 0.85 activation floor, reached from the other side, and it explains both "no candidate
+cleared" results without needing the candidates to have been bad.
+
+Fixed additively: `decide_per_sentence` tests each sentence on its own and aggregates the
+**decisions** — a candidate must clear every criterion on a majority of sentences, on each
+split. `decide`, `TuneMeasurement` and `TuneThresholds` keep their signatures, so
+`tests/cue_tune_decision.rs` stays frozen and green. New frozen companion
+`tests/cue_tune_per_sentence.rs`, 12 assertions, 8 mutants all killed. This also makes
+"works on some sentences" expressible, which A30–A32 showed is the actual shape of the
+phenomenon.
+
+**The server default.** `crates/syrinx-serve/src/lib.rs` defaulted `backend=` to
+`fish-s2-pro`, described in the code as "the primary TTS path". That stopped being true on
+2026-09-06. A26 flagged it and deliberately did not change it, because it is a behavioural
+change to a shipped surface rather than a documentation fix. **Changed now, on maintainer
+instruction:** the default is `qwen3-1.7b-customvoice`. An explicit `backend=fish-s2-pro`
+still works — the research path is deprecated, not removed.
+
+That required a **maintainer-authorised unfreeze**: `tests/expressive_api.rs` asserted the
+old default explicitly, which is what a frozen test is for. The assertion was updated rather
+than deleted — what the default *is* still matters, and a silent change should still fail
+there — with the authorisation and reason recorded in the test itself, following the
+ADR-0002 precedent.
