@@ -23,6 +23,11 @@ pub mod activation;
 /// C4.2' — the arm-contrast decision from ADR-0003: cue vs plain, sham vs plain, cue vs
 /// sham, A vs A. Pure like `activation` and for the same reason — the numbers need a GPU,
 /// the decision logic must stay on the model-free board.
+/// Deterministic, ENUMERABLE candidate phrasings for the tuning loop. Enumerable is the
+/// load-bearing word: the generator it replaces had a 32% malformed output space that
+/// nothing had ever walked.
+pub mod candidates;
+
 pub mod contrast;
 
 /// Cue-phrasing tuning: the conjunctive accept criteria and the Goodhart guards, as pure

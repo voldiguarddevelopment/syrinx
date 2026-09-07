@@ -31,6 +31,19 @@
 # found the Chinese phrasing moved the audio toward the named class on cases where the
 # English phrasing did not. See renders/2026-09-06-instruct-lang/.
 #
+# `form` is the label's GRAMMATICAL ROLE, and it exists because a candidate generator that
+# treats every label as a predicate adjective emits "Speak in a sharply narrator tone". Three
+# of these 38 labels are adjectives in the way that template assumes; 32% of the generator's
+# output space was malformed and nobody noticed, because nothing had ever enumerated it.
+#
+#   adjective  sad, angry, calm      -> "Speak in a {syn}, {syn} tone"
+#   manner     whisper, shout, fast  -> an imperative; there is no adjective slot
+#   persona    narrator, child       -> "Speak like a {label}"
+#
+# It is a fact about English rather than a judgement call, which is why it is data. A row
+# that omits it is `unspecified` and generates NOTHING — an inert default rather than a
+# plausible-looking wrong one — and a frozen test asserts no shipped row is inert.
+#
 # These phrases are HAND-AUTHORED, which is why they are here and not in `vocab.toml`:
 # that file's header promises its content is derived from verified upstream sources and
 # "NOT invented", and mixing authored prose into it would destroy the property that makes
@@ -38,46 +51,46 @@
 
 # ------------------------------------------------------------------ emotions (25)
 [emotion]
-happy        = { en = "Speak in a happy, cheerful tone",            zh = "用开心愉悦的语气说" }
-excited      = { en = "Speak in an excited, enthusiastic tone",     zh = "用兴奋激动的语气说" }
-sad          = { en = "Speak in a sad, sorrowful tone",             zh = "用悲伤难过的语气说" }
-angry        = { en = "Speak in an angry tone",                     zh = "用愤怒生气的语气说" }
-afraid       = { en = "Speak in a fearful, frightened tone",        zh = "用害怕恐惧的语气说" }
-surprised    = { en = "Speak in a surprised tone",                  zh = "用惊讶吃惊的语气说" }
-anxious      = { en = "Speak in an anxious, uneasy tone",           zh = "用焦虑不安的语气说" }
-calm         = { en = "Speak in a calm tone",                       zh = "用平静冷静的语气说" }
-confused     = { en = "Speak in a confused, puzzled tone",          zh = "用困惑不解的语气说" }
-curious      = { en = "Speak in a curious, inquisitive tone",       zh = "用好奇探询的语气说" }
-disgusted    = { en = "Speak in a disgusted tone",                  zh = "用厌恶嫌弃的语气说" }
-proud        = { en = "Speak in a proud tone",                      zh = "用自豪骄傲的语气说" }
-grateful     = { en = "Speak in a grateful, appreciative tone",     zh = "用感激感谢的语气说" }
-guilty       = { en = "Speak in a guilty, remorseful tone",         zh = "用愧疚自责的语气说" }
-sarcastic    = { en = "Speak in a sarcastic tone",                  zh = "用讽刺挖苦的语气说" }
-impatient    = { en = "Speak in an impatient tone",                 zh = "用不耐烦的语气说" }
-confident    = { en = "Speak in a confident, assured tone",         zh = "用自信笃定的语气说" }
-empathetic   = { en = "Speak in an empathetic, understanding tone", zh = "用共情体谅的语气说" }
-serious      = { en = "Speak in a serious tone",                    zh = "用严肃认真的语气说" }
-amused       = { en = "Speak in an amused tone",                    zh = "用觉得好笑的语气说" }
-hesitant     = { en = "Speak hesitantly, as if unsure",             zh = "用犹豫迟疑的语气说" }
-disdainful   = { en = "Speak in a disdainful, scornful tone",       zh = "用轻蔑不屑的语气说" }
-panicked     = { en = "Speak in a panicked tone",                   zh = "用惊慌失措的语气说" }
-moved        = { en = "Speak in a moved, touched tone",             zh = "用深受感动的语气说" }
-painful      = { en = "Speak as if in pain",                        zh = "用痛苦的语气说" }
+happy        = { form = "adjective", en = "Speak in a happy, cheerful tone",            zh = "用开心愉悦的语气说" }
+excited      = { form = "adjective", en = "Speak in an excited, enthusiastic tone",     zh = "用兴奋激动的语气说" }
+sad          = { form = "adjective", en = "Speak in a sad, sorrowful tone",             zh = "用悲伤难过的语气说" }
+angry        = { form = "adjective", en = "Speak in an angry tone",                     zh = "用愤怒生气的语气说" }
+afraid       = { form = "adjective", en = "Speak in a fearful, frightened tone",        zh = "用害怕恐惧的语气说" }
+surprised    = { form = "adjective", en = "Speak in a surprised tone",                  zh = "用惊讶吃惊的语气说" }
+anxious      = { form = "adjective", en = "Speak in an anxious, uneasy tone",           zh = "用焦虑不安的语气说" }
+calm         = { form = "adjective", en = "Speak in a calm tone",                       zh = "用平静冷静的语气说" }
+confused     = { form = "adjective", en = "Speak in a confused, puzzled tone",          zh = "用困惑不解的语气说" }
+curious      = { form = "adjective", en = "Speak in a curious, inquisitive tone",       zh = "用好奇探询的语气说" }
+disgusted    = { form = "adjective", en = "Speak in a disgusted tone",                  zh = "用厌恶嫌弃的语气说" }
+proud        = { form = "adjective", en = "Speak in a proud tone",                      zh = "用自豪骄傲的语气说" }
+grateful     = { form = "adjective", en = "Speak in a grateful, appreciative tone",     zh = "用感激感谢的语气说" }
+guilty       = { form = "adjective", en = "Speak in a guilty, remorseful tone",         zh = "用愧疚自责的语气说" }
+sarcastic    = { form = "adjective", en = "Speak in a sarcastic tone",                  zh = "用讽刺挖苦的语气说" }
+impatient    = { form = "adjective", en = "Speak in an impatient tone",                 zh = "用不耐烦的语气说" }
+confident    = { form = "adjective", en = "Speak in a confident, assured tone",         zh = "用自信笃定的语气说" }
+empathetic   = { form = "adjective", en = "Speak in an empathetic, understanding tone", zh = "用共情体谅的语气说" }
+serious      = { form = "adjective", en = "Speak in a serious tone",                    zh = "用严肃认真的语气说" }
+amused       = { form = "adjective", en = "Speak in an amused tone",                    zh = "用觉得好笑的语气说" }
+hesitant     = { form = "adjective", en = "Speak hesitantly, as if unsure",             zh = "用犹豫迟疑的语气说" }
+disdainful   = { form = "adjective", en = "Speak in a disdainful, scornful tone",       zh = "用轻蔑不屑的语气说" }
+panicked     = { form = "adjective", en = "Speak in a panicked tone",                   zh = "用惊慌失措的语气说" }
+moved        = { form = "adjective", en = "Speak in a moved, touched tone",             zh = "用深受感动的语气说" }
+painful      = { form = "adjective", en = "Speak as if in pain",                        zh = "用痛苦的语气说" }
 
 # ------------------------------------------------------------------ styles (13)
 # These describe manner or persona rather than affect, so several are imperative sentences
 # instead of "Speak in a ... tone" — "Speak in a narrator tone" is not English.
 [style]
-whisper       = { en = "Say this in a soft whisper",                zh = "用气声小声地耳语" }
-shout         = { en = "Shout this loudly",                         zh = "提高音量大声喊着说" }
-scream        = { en = "Scream this",                               zh = "尖声大叫着说" }
-soft          = { en = "Speak in a soft, mellow tone",              zh = "用柔和轻柔的语气说" }
-broadcast     = { en = "Speak like a news broadcaster",             zh = "用新闻播报的语气说" }
-narrator      = { en = "Speak like a narrator reading aloud",       zh = "用旁白朗读的语气说" }
-singing       = { en = "Speak in a singsong, lilting voice",        zh = "用唱歌般的腔调说" }
-authoritative = { en = "Speak in an authoritative, commanding tone", zh = "用威严命令的语气说" }
-warm          = { en = "Speak in a warm, friendly tone",            zh = "用温暖亲切的语气说" }
-fast          = { en = "Speak quickly",                             zh = "语速加快地说" }
-child         = { en = "Speak like a young child",                  zh = "用小孩子的声音说" }
-elderly       = { en = "Speak like an elderly person",              zh = "用老年人的声音说" }
-accented      = { en = "Speak with a noticeable accent",            zh = "用带口音的方式说" }
+whisper       = { form = "manner", noun = "whisper", en = "Say this in a soft whisper",                zh = "用气声小声地耳语" }
+shout         = { form = "manner", noun = "shout", en = "Shout this loudly",                         zh = "提高音量大声喊着说" }
+scream        = { form = "manner", noun = "scream", en = "Scream this",                               zh = "尖声大叫着说" }
+soft          = { form = "adjective", en = "Speak in a soft, mellow tone",              zh = "用柔和轻柔的语气说" }
+broadcast     = { form = "persona", noun = "news broadcaster", en = "Speak like a news broadcaster",             zh = "用新闻播报的语气说" }
+narrator      = { form = "persona", noun = "narrator", en = "Speak like a narrator reading aloud",       zh = "用旁白朗读的语气说" }
+singing       = { form = "manner", noun = "singsong voice", en = "Speak in a singsong, lilting voice",        zh = "用唱歌般的腔调说" }
+authoritative = { form = "adjective", en = "Speak in an authoritative, commanding tone", zh = "用威严命令的语气说" }
+warm          = { form = "adjective", en = "Speak in a warm, friendly tone",            zh = "用温暖亲切的语气说" }
+fast          = { form = "manner", noun = "hurried delivery", en = "Speak quickly",                             zh = "语速加快地说" }
+child         = { form = "persona", noun = "young child", en = "Speak like a young child",                  zh = "用小孩子的声音说" }
+elderly       = { form = "persona", noun = "elderly person", en = "Speak like an elderly person",              zh = "用老年人的声音说" }
+accented      = { form = "with", noun = "noticeable accent", en = "Speak with a noticeable accent",            zh = "用带口音的方式说" }

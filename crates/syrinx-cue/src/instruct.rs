@@ -39,9 +39,42 @@ impl std::fmt::Display for InstructError {
 
 impl std::error::Error for InstructError {}
 
+/// A label's grammatical role, which decides what sentence frames can hold it.
+///
+/// Exists because a generator that treats every label as a predicate adjective emits
+/// "Speak in a sharply narrator tone". Only 27 of 38 labels are adjectives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Form {
+    /// `sad`, `angry`, `calm` — fits "Speak in a {label} tone".
+    Adjective,
+    /// `whisper`, `shout`, `fast` — a way of speaking; takes an imperative frame and has
+    /// no adjective slot at all.
+    Manner,
+    /// `narrator`, `child` — someone to sound like; "Speak like a {noun}".
+    Persona,
+    /// `accented` — something to speak *with*; "Speak with a {noun}". Neither a manner nor
+    /// a persona: "Speak like a noticeable accent" is not a sentence.
+    With,
+    /// Not declared. Generates **nothing** — an inert default rather than a plausible
+    /// wrong one. A frozen test asserts no shipped row is left here.
+    #[default]
+    Unspecified,
+}
+
 /// One label's phrasing in both languages.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 pub struct Phrasing {
+    /// The noun phrase the non-adjective frames need. The label id is often unusable
+    /// there: `fast` and `elderly` are adjectives even though the cue means "a hurried
+    /// delivery" and "an elderly person", and the first version of this grammar emitted
+    /// "Use a fast throughout" and "Speak like an elderly" as a result.
+    #[serde(default)]
+    pub noun: Option<String>,
+    /// Defaulted so a table written before `form` existed still parses — but the default
+    /// is inert, so forgetting it costs candidates rather than producing bad ones.
+    #[serde(default)]
+    pub form: Form,
     pub en: String,
     pub zh: String,
 }
@@ -166,6 +199,16 @@ impl InstructTable {
             }
         }
         Ok(InstructTable { entries, tuned, all_tuned: raw.tuned })
+    }
+
+    /// A label's grammatical form, if the table covers it.
+    pub fn form(&self, label: &str) -> Option<Form> {
+        self.entries.get(label).map(|p| p.form)
+    }
+
+    /// The noun phrase a non-adjective frame should use for this label.
+    pub fn noun(&self, label: &str) -> Option<&str> {
+        self.entries.get(label).and_then(|p| p.noun.as_deref())
     }
 
     /// The curated phrase for a canonical label, if there is one.
