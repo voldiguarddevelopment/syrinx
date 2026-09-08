@@ -251,6 +251,28 @@ pub fn min_n_for_alpha(alpha: f64) -> usize {
     usize::MAX
 }
 
+/// The smallest per-condition `n` whose exact permutation test can reject at `alpha` **with
+/// room to spare** — the smallest attainable p-value at most `alpha / headroom`.
+///
+/// [`min_n_for_alpha`] answers a narrower question than it looks like it answers: whether
+/// the test *can ever* reject, not whether it has the power to reject a real effect. At
+/// `n = min_n_for_alpha(alpha)` the only way to clear the bar is to draw the single most
+/// extreme labeling out of `C(2n, n)/2`.
+///
+/// That is not hypothetical. The `[sad]` tuning round of 2026-09-08 ran at n=6 with
+/// alpha=0.01, where `min_n_for_alpha` is satisfied and the headroom is 4.6x. The
+/// **incumbent** — a phrase independently shown to work, 5 of 6 sentences in the sentence
+/// sweep — scored exactly 0.0022 on its best sentence, which *is* 1/462, the literal
+/// minimum, and failed on the other two. A gate that only the most extreme possible draw
+/// can pass rejects working phrases, and the run reads as "nothing is better" when the
+/// truth is "the test could not tell".
+///
+/// A headroom of 20 puts the required statistic well inside the distribution rather than at
+/// its edge; for alpha=0.01 that is n=8 (attainable p 0.000155, 64x).
+pub fn min_n_for_headroom(alpha: f64, headroom: f64) -> usize {
+    min_n_for_alpha(alpha / headroom.max(1.0))
+}
+
 /// Exact two-sample permutation test on the distance between condition means.
 ///
 /// Returns `None` when the groups are unequal, empty, or too small to reject at `alpha` —

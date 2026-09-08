@@ -18,7 +18,7 @@ use candle_core::Device;
 use syrinx_cue::instruct::{lang_code, InstructTable};
 use syrinx_cue::legacy_emotion::InstructLang;
 use syrinx_cue::BackendId;
-use syrinx_eval::acoustic::{activation_test, features, Features};
+use syrinx_eval::acoustic::{activation_test, features, min_n_for_headroom, Features};
 use syrinx_eval::affect::{
     emotion2vec9_spec, emotion2vec_label_for_cue, score_resampled, OnnxJudge,
 };
@@ -169,6 +169,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let th = TuneThresholds { alpha: 0.05, candidates: candidates.len(), ..Default::default() };
+    // POWER, not just feasibility. min_n_for_alpha only asks whether the test can ever
+    // reject; at that n the sole way to clear the bar is to draw the most extreme labeling
+    // there is. The 2026-09-08 [sad] round ran at n=6 (4.6x headroom) and the INCUMBENT
+    // scored exactly 1/462 on its best sentence and failed the other two.
+    let floor = min_n_for_headroom(th.corrected_alpha(), 20.0);
+    if n < floor {
+        return Err(format!(
+            "n={n} has too little power: alpha={:.5} needs n>={floor} for 20x headroom. \
+             A gate only the most extreme draw can pass rejects working phrases and reads \
+             as \"nothing is better\".",
+            th.corrected_alpha()
+        )
+        .into());
+    }
     eprintln!(
         "[tune] alpha {:.5} (Bonferroni/{})  renders: {}",
         th.corrected_alpha(),
