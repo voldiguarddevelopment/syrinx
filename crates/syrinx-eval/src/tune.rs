@@ -462,9 +462,23 @@ pub fn decide_per_sentence(
         return void(Void::HoldoutExpired { uses: holdout_uses, budget: th.max_holdout_uses });
     }
 
-    let mut sentences: Vec<&str> = ms.iter().map(|s| s.sentence.as_str()).collect();
-    sentences.sort_unstable();
-    sentences.dedup();
+    // Tune and holdout use DIFFERENT sentences — that is what a holdout is — so their ids
+    // are disjoint and must be partitioned, not unioned. A first version took the union and
+    // then demanded a Tune incumbent for every id, which voided every real round on its
+    // holdout ids. The synthetic tests missed it because they reused one id set across both
+    // splits, modelling a structure the driver does not produce.
+    let ids = |split: Split| {
+        let mut v: Vec<&str> = ms
+            .iter()
+            .filter(|s| s.m.split == split)
+            .map(|s| s.sentence.as_str())
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let sentences = ids(Split::Tune);
+    let holdout_sentences = ids(Split::Holdout);
 
     // ---- round-level voids, evaluated per sentence. A sham that activates ANYWHERE at the
     // corrected alpha voids the round: multiplicity is already paid for in the correction,
@@ -531,6 +545,24 @@ pub fn decide_per_sentence(
 
         let mut per = Vec::new();
         let (mut tune_ok, mut hold_ok, mut hold_total) = (0usize, 0usize, 0.0f64);
+
+        // Holdout is scored over ITS OWN sentences, separately.
+        for s in &holdout_sentences {
+            let hm = ms.iter().find(|x| {
+                x.sentence == **s
+                    && x.m.arm == TuneArm::Candidate
+                    && x.m.split == Split::Holdout
+                    && x.m.phrase.as_deref() == Some(phrase)
+            });
+            let hi = arm_on(ms, s, TuneArm::Incumbent, Split::Holdout).map(|m| m.cued_delta);
+            if let (Some(h), Some(i)) = (hm, hi) {
+                if check(&h.m, i, th).is_ok() {
+                    hold_ok += 1;
+                    hold_total += h.m.cued_delta;
+                }
+            }
+        }
+
         for s in &sentences {
             let tune = arm_on(ms, s, TuneArm::Candidate, Split::Tune)
                 .filter(|m| m.phrase.as_deref() == Some(phrase))
@@ -556,21 +588,6 @@ pub fn decide_per_sentence(
             });
             if per.last().unwrap().passed {
                 tune_ok += 1;
-            }
-
-            // Holdout, same sentence.
-            let hm = ms.iter().find(|x| {
-                x.sentence == **s
-                    && x.m.arm == TuneArm::Candidate
-                    && x.m.split == Split::Holdout
-                    && x.m.phrase.as_deref() == Some(phrase)
-            });
-            let hi = arm_on(ms, s, TuneArm::Incumbent, Split::Holdout).map(|m| m.cued_delta);
-            if let (Some(h), Some(i)) = (hm, hi) {
-                if check(&h.m, i, th).is_ok() {
-                    hold_ok += 1;
-                    hold_total += h.m.cued_delta;
-                }
             }
         }
         let passed = tune_ok >= min_sentences && hold_ok >= min_sentences;

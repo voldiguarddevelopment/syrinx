@@ -40,20 +40,51 @@ fn th() -> TuneThresholds {
     TuneThresholds { alpha: 0.05, candidates: 10, min_margin: 1.0, ..Default::default() }
 }
 
-/// Three sentences; the candidate clears all three on both splits.
+/// Three tune sentences and three **different** holdout sentences.
+///
+/// The ids are disjoint per split because that is what the driver produces — tune and
+/// holdout use different sentences, which is what a holdout is. A first version of this
+/// helper reused one id set across both splits, and the aggregation bug it therefore could
+/// not see (a union of ids, then a demand for a Tune incumbent on every one) voided every
+/// real round on its holdout ids. A synthetic fixture that does not model the real shape is
+/// worse than no fixture: it converts a missing test into a passing one.
 fn round(deltas: [f64; 3]) -> Vec<SentenceMeasurement> {
     let mut v = Vec::new();
     for (i, d) in deltas.iter().enumerate() {
-        let id = format!("s{i}");
-        let mut sham = s(&id, TuneArm::Sham, Split::Tune, None, 0.0);
-        sham.m.p_vs_plain = 0.9;
-        v.push(sham);
-        v.push(s(&id, TuneArm::Incumbent, Split::Tune, Some("old"), 2.0));
-        v.push(s(&id, TuneArm::Incumbent, Split::Holdout, Some("old"), 2.0));
-        v.push(s(&id, TuneArm::Candidate, Split::Tune, Some("new"), *d));
-        v.push(s(&id, TuneArm::Candidate, Split::Holdout, Some("new"), *d));
+        for (split, id) in [
+            (Split::Tune, format!("tune-s{i}")),
+            (Split::Holdout, format!("holdout-s{i}")),
+        ] {
+            if split == Split::Tune {
+                let mut sham = s(&id, TuneArm::Sham, Split::Tune, None, 0.0);
+                sham.m.p_vs_plain = 0.9;
+                v.push(sham);
+            }
+            v.push(s(&id, TuneArm::Incumbent, split, Some("old"), 2.0));
+            v.push(s(&id, TuneArm::Candidate, split, Some("new"), *d));
+        }
     }
     v
+}
+
+/// **Regression, 2026-09-08.** Disjoint sentence ids across splits must not void the round.
+///
+/// The first implementation took the union of all sentence ids and then required a
+/// `Split::Tune` incumbent for each — so every holdout id tripped `IncumbentNotRemeasured`
+/// and every real round voided before a single candidate was scored. It reached a live
+/// 324-render GPU run because the fixture reused one id set across both splits.
+#[test]
+fn disjoint_sentence_ids_across_splits_do_not_void_the_round() {
+    let v = round([5.0, 5.0, 5.0]);
+    let tune: Vec<&str> = v.iter().filter(|x| x.m.split == Split::Tune).map(|x| x.sentence.as_str()).collect();
+    let hold: Vec<&str> = v.iter().filter(|x| x.m.split == Split::Holdout).map(|x| x.sentence.as_str()).collect();
+    assert!(
+        tune.iter().all(|t| !hold.contains(t)),
+        "the fixture must model disjoint splits or it cannot catch this"
+    );
+    let r = decide_per_sentence(&v, 0, &th(), 2);
+    assert!(r.void.is_none(), "disjoint ids must not void: {:?}", r.void);
+    assert!(r.has_proposal());
 }
 
 #[test]
@@ -86,9 +117,9 @@ fn failures_are_attributed_to_the_sentence_they_occurred_on() {
     assert_eq!(*cleared, 2);
     let failed: Vec<&str> =
         per.iter().filter(|p| !p.passed).map(|p| p.sentence.as_str()).collect();
-    assert_eq!(failed, vec!["s2"], "the failing sentence must be named");
+    assert_eq!(failed, vec!["tune-s2"], "the failing sentence must be named");
     assert!(matches!(
-        per.iter().find(|p| p.sentence == "s2").unwrap().reject,
+        per.iter().find(|p| p.sentence == "tune-s2").unwrap().reject,
         Some(Reject::NoMarginOverIncumbent { .. })
     ));
 }
@@ -112,7 +143,7 @@ fn tune_breadth_does_not_substitute_for_holdout_breadth() {
 #[test]
 fn a_sham_activating_on_any_single_sentence_voids_the_round() {
     let mut v = round([5.0, 5.0, 5.0]);
-    let i = v.iter().position(|x| x.sentence == "s1" && x.m.arm == TuneArm::Sham).unwrap();
+    let i = v.iter().position(|x| x.sentence == "tune-s1" && x.m.arm == TuneArm::Sham).unwrap();
     v[i].m.p_vs_plain = 0.0001;
     let r = decide_per_sentence(&v, 0, &th(), 2);
     assert!(matches!(r.void, Some(Void::ShamActivated { .. })));
@@ -127,7 +158,7 @@ fn a_sham_exactly_at_alpha_voids_the_round() {
     assert_eq!(t.corrected_alpha(), 0.005);
 
     let mut at = round([5.0, 5.0, 5.0]);
-    let i = at.iter().position(|x| x.sentence == "s1" && x.m.arm == TuneArm::Sham).unwrap();
+    let i = at.iter().position(|x| x.sentence == "tune-s1" && x.m.arm == TuneArm::Sham).unwrap();
     at[i].m.p_vs_plain = 0.005;
     assert!(
         matches!(decide_per_sentence(&at, 0, &t, 2).void, Some(Void::ShamActivated { .. })),
@@ -135,7 +166,7 @@ fn a_sham_exactly_at_alpha_voids_the_round() {
     );
 
     let mut past = round([5.0, 5.0, 5.0]);
-    let j = past.iter().position(|x| x.sentence == "s1" && x.m.arm == TuneArm::Sham).unwrap();
+    let j = past.iter().position(|x| x.sentence == "tune-s1" && x.m.arm == TuneArm::Sham).unwrap();
     past[j].m.p_vs_plain = 0.00625;
     assert!(decide_per_sentence(&past, 0, &t, 2).void.is_none(), "just past alpha must not");
 }
@@ -145,12 +176,12 @@ fn a_sham_exactly_at_alpha_voids_the_round() {
 #[test]
 fn the_counter_cue_voids_on_a_majority_not_on_a_single_sentence() {
     let mut one = round([5.0, 5.0, 5.0]);
-    one.push(s("s0", TuneArm::CounterCue, Split::Tune, Some("wrong"), 9.0));
+    one.push(s("tune-s0", TuneArm::CounterCue, Split::Tune, Some("wrong"), 9.0));
     assert!(decide_per_sentence(&one, 0, &th(), 2).void.is_none(), "1 of 3 must not void");
 
     let mut two = round([5.0, 5.0, 5.0]);
-    two.push(s("s0", TuneArm::CounterCue, Split::Tune, Some("wrong"), 9.0));
-    two.push(s("s1", TuneArm::CounterCue, Split::Tune, Some("wrong"), 9.0));
+    two.push(s("tune-s0", TuneArm::CounterCue, Split::Tune, Some("wrong"), 9.0));
+    two.push(s("tune-s1", TuneArm::CounterCue, Split::Tune, Some("wrong"), 9.0));
     assert!(
         matches!(decide_per_sentence(&two, 0, &th(), 2).void, Some(Void::CounterCueWon { .. })),
         "2 of 3 must void"
@@ -163,7 +194,7 @@ fn the_counter_cue_voids_on_a_majority_not_on_a_single_sentence() {
 fn a_missing_incumbent_on_any_sentence_voids_the_round() {
     let v: Vec<_> = round([5.0, 5.0, 5.0])
         .into_iter()
-        .filter(|x| !(x.sentence == "s1" && x.m.arm == TuneArm::Incumbent && x.m.split == Split::Tune))
+        .filter(|x| !(x.sentence == "tune-s1" && x.m.arm == TuneArm::Incumbent && x.m.split == Split::Tune))
         .collect();
     assert!(matches!(
         decide_per_sentence(&v, 0, &th(), 2).void,
@@ -197,16 +228,15 @@ fn an_unsafe_phrase_is_rejected_before_any_sentence_is_scored() {
 fn the_winner_is_ranked_by_holdout_breadth() {
     let mut v = round([9.0, 9.0, 9.0]); // "new": 3 tune, 3 holdout
     for i in 0..3 {
-        let id = format!("s{i}");
         // "wide" looks worse on tune but clears every holdout sentence.
-        v.push(s(&id, TuneArm::Candidate, Split::Tune, Some("wide"), 4.0));
-        v.push(s(&id, TuneArm::Candidate, Split::Holdout, Some("wide"), 9.0));
+        v.push(s(&format!("tune-s{i}"), TuneArm::Candidate, Split::Tune, Some("wide"), 4.0));
+        v.push(s(&format!("holdout-s{i}"), TuneArm::Candidate, Split::Holdout, Some("wide"), 9.0));
     }
     // Break "new" on two holdout sentences so "wide" has strictly broader coverage.
     for x in v.iter_mut().filter(|x| {
         x.m.phrase.as_deref() == Some("new")
             && x.m.split == Split::Holdout
-            && (x.sentence == "s1" || x.sentence == "s2")
+            && (x.sentence == "holdout-s1" || x.sentence == "holdout-s2")
     }) {
         x.m.cued_delta = 2.0;
     }
