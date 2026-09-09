@@ -1,0 +1,189 @@
+warning: unused imports: `IM_START_TOKEN` and `VOICE_TOKEN`
+  --> crates/syrinx-fish/src/s1/mod.rs:45:57
+   |
+45 |     use super::tokenizer::{FishTokenizer, IM_END_TOKEN, IM_START_TOKEN, INTERLEAVE_TOKEN, SPEAKER0_TOKEN, VOICE_TOKEN};
+   |                                                         ^^^^^^^^^^^^^^                                    ^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `ENCODER_DIM` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:42:7
+   |
+42 | const ENCODER_DIM: usize = 64;
+   |       ^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: constant `N_RESIDUAL` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:48:7
+   |
+48 | const N_RESIDUAL: usize = 9; // PARITY: confirm n_codebooks on-box.
+   |       ^^^^^^^^^^
+
+warning: constant `DOWNSAMPLE_FACTOR` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:50:7
+   |
+50 | const DOWNSAMPLE_FACTOR: [usize; 2] = [2, 2]; // PARITY: confirm downsample_factor.
+   |       ^^^^^^^^^^^^^^^^^
+
+warning: constant `ENCODER_TRANSFORMER_LAYERS` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:54:7
+   |
+54 | const ENCODER_TRANSFORMER_LAYERS: [usize; 4] = [0, 0, 4, 4];
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: constant `WINDOW_SIZE` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:56:7
+   |
+56 | const WINDOW_SIZE: usize = 512;
+   |       ^^^^^^^^^^^
+
+warning: constant `DAC_ROPE_BASE` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:58:7
+   |
+58 | const DAC_ROPE_BASE: f64 = 10_000.0;
+   |       ^^^^^^^^^^^^^
+
+warning: constant `DAC_NORM_EPS` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:60:7
+   |
+60 | const DAC_NORM_EPS: f64 = 1e-5;
+   |       ^^^^^^^^^^^^
+
+warning: constant `SNAKE_EPS` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:62:7
+   |
+62 | const SNAKE_EPS: f64 = 1e-9;
+   |       ^^^^^^^^^
+
+warning: constant `NORM_EPS` is never used
+  --> crates/syrinx-fish/src/s1/codec.rs:64:7
+   |
+64 | const NORM_EPS: f64 = 1e-12;
+   |       ^^^^^^^^
+
+warning: struct `ModdedDac` is never constructed
+  --> crates/syrinx-fish/src/s1/codec.rs:67:12
+   |
+67 | pub struct ModdedDac {
+   |            ^^^^^^^^^
+
+warning: multiple associated items are never used
+   --> crates/syrinx-fish/src/s1/codec.rs:74:12
+    |
+ 72 | impl ModdedDac {
+    | -------------- associated items in this implementation
+ 73 |     /// Build from a loaded codec weight bag + the resolved codec geometry.
+ 74 |     pub fn new(w: Weights, cfg: CodecConfig) -> Self {
+    |            ^^^
+...
+ 78 |     fn dev(&self) -> &Device {
+    |        ^^^
+...
+ 87 |     fn causal_conv1d(
+    |        ^^^^^^^^^^^^^
+...
+111 |     fn causal_transpose1d(
+    |        ^^^^^^^^^^^^^^^^^^
+...
+134 |     fn snake(&self, x: &Tensor, alpha_name: &str) -> Result<Tensor> {
+    |        ^^^^^
+...
+146 |     fn residual_unit(&self, x: &Tensor, prefix: &str, dilation: usize) -> Result<Tensor> {
+    |        ^^^^^^^^^^^^^
+...
+179 |     fn convnext(&self, x: &Tensor, prefix: &str) -> Result<Tensor> {
+    |        ^^^^^^^^
+...
+218 |     fn decode_codebook(&self, prefix: &str, codes: &[u32]) -> Result<Tensor> {
+    |        ^^^^^^^^^^^^^^^
+...
+237 |     fn upsample(&self, z: &Tensor) -> Result<Tensor> {
+    |        ^^^^^^^^
+...
+253 |     fn run_decoder(&self, z: &Tensor) -> Result<Tensor> {
+    |        ^^^^^^^^^^^
+...
+293 |     pub fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+    |            ^^^^^^
+...
+325 |     fn encoder_block(
+    |        ^^^^^^^^^^^^^
+...
+355 |     fn window_transformer(
+    |        ^^^^^^^^^^^^^^^^^^
+...
+409 |     fn run_encoder(&self, wav: &Tensor) -> Result<Tensor> {
+    |        ^^^^^^^^^^^
+...
+438 |     fn downsample(&self, z: &Tensor) -> Result<Tensor> {
+    |        ^^^^^^^^^^
+...
+457 |     fn quantize_one(&self, prefix: &str, z: &Tensor) -> Result<(Vec<u32>, Tensor)> {
+    |        ^^^^^^^^^^^^
+...
+495 |     pub fn encode(&self, wav: &Tensor) -> Result<Tensor> {
+    |            ^^^^^^
+
+warning: function `extra_padding` is never used
+   --> crates/syrinx-fish/src/s1/codec.rs:539:4
+    |
+539 | fn extra_padding(length: usize, kernel_eff: usize, stride: usize, padding_total: usize) -> usize {
+    |    ^^^^^^^^^^^^^
+
+warning: function `layer_norm` is never used
+   --> crates/syrinx-fish/src/s1/codec.rs:553:4
+    |
+553 | fn layer_norm(x: &Tensor, w: &Tensor, b: &Tensor, eps: f64) -> Result<Tensor> {
+    |    ^^^^^^^^^^
+
+warning: function `l2_normalize` is never used
+   --> crates/syrinx-fish/src/s1/codec.rs:562:4
+    |
+562 | fn l2_normalize(x: &Tensor) -> Result<Tensor> {
+    |    ^^^^^^^^^^^^
+
+warning: function `window_causal_mask` is never used
+   --> crates/syrinx-fish/src/s1/codec.rs:569:4
+    |
+569 | fn window_causal_mask(t: usize, window: usize, dev: &Device) -> Result<Tensor> {
+    |    ^^^^^^^^^^^^^^^^^^
+
+warning: function `load_codec` is never used
+  --> crates/syrinx-fish/src/s1/load.rs:60:8
+   |
+60 | pub fn load_codec(path: &str, dev: Device) -> Result<Weights> {
+   |        ^^^^^^^^^^
+
+warning: constant `ENCODER_DIM` is never used
+  --> crates/syrinx-fish/src/s2/codec.rs:52:7
+   |
+52 | const ENCODER_DIM: usize = 64;
+   |       ^^^^^^^^^^^
+
+warning: `syrinx-fish` (lib) generated 18 warnings (run `cargo fix --lib -p syrinx-fish` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.05s
+     Running tests/real_cue_activation_qwen.rs (/data/development/syrinx-wt/.targets/events/debug/deps/real_cue_activation_qwen-9822d9872ffd5720)
+
+running 1 test
+[c42'] 6 cases, n=9, alpha 0.05/24 = 0.00208 (n floor 9), enforce=false
+test real_cue_activation_qwen_run has been running for over 60 seconds
+  en-emotion-happy-leading     cue/plain 0.0683  sham/plain 0.4792  cue/sham 0.0598  A/A 0.0507  wer 0.000
+  en-emotion-sad-mid           cue/plain 0.0038  sham/plain 0.0233  cue/sham 0.0001  A/A 0.6608  wer 0.000
+  en-emotion-angry-trailing    cue/plain 0.8677  sham/plain 0.8067  cue/sham 0.8300  A/A 0.8011  wer 0.000
+  en-emotion-calm-mid          cue/plain 0.1594  sham/plain 0.0233  cue/sham 0.0825  A/A 0.6608  wer 0.200
+  en-style-whisper-leading     cue/plain 0.0042  sham/plain 0.4792  cue/sham 0.2068  A/A 0.0507  wer 0.000
+  en-style-shout-mid           cue/plain 0.0182  sham/plain 0.0233  cue/sham 0.0000  A/A 0.6608  wer 0.000
+  [A1] 0.6B cued == plain: true
+
+[c42'] corrected alpha 0.00208
+[c42'] content-activated (beat plain AND sham): []
+[c42'] perturbation-only (beat plain, not sham): []
+[c42'] not applicable: 0 case(s)
+[c42'] wrote .opt-reports/c42-qwen-v5.json
+
+[c42'] NOT ENFORCED. ADR-0003 records this first run as measurement only: a sentinel must clear p <= alpha AND replicate on a disjoint seed block before it may be pinned, and "clause B not enabled" is an acceptable outcome. Set SYRINX_C42_ENFORCE=1 with SYRINX_C42_SENTINEL once one is earned.
+test real_cue_activation_qwen_run ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1147.49s
+

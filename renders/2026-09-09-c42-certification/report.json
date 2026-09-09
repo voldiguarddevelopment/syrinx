@@ -1,0 +1,66 @@
+{
+  "alpha": 0.0020833333333333333,
+  "cases": {
+    "en-emotion-angry-trailing": {
+      "a_a": 0.8010695187165775,
+      "cue_vs_plain": 0.8677498971616618,
+      "cue_vs_sham": 0.8300287947346771,
+      "instruct": "Speak in an angry tone",
+      "sham_vs_plain": 0.8067050596462361,
+      "wer_cued": 0.0,
+      "wer_plain": 0.0
+    },
+    "en-emotion-calm-mid": {
+      "a_a": 0.6607980255039079,
+      "cue_vs_plain": 0.15944055944055943,
+      "cue_vs_sham": 0.08247634718222953,
+      "instruct": "Speak in a calm tone",
+      "sham_vs_plain": 0.02328259975318799,
+      "wer_cued": 0.20000000298023224,
+      "wer_plain": 0.0
+    },
+    "en-emotion-happy-leading": {
+      "a_a": 0.05071986836692719,
+      "cue_vs_plain": 0.06832579185520361,
+      "cue_vs_sham": 0.05981077745783628,
+      "instruct": "Speak in a happy, cheerful tone",
+      "sham_vs_plain": 0.47918552036199097,
+      "wer_cued": 0.0,
+      "wer_plain": 0.0
+    },
+    "en-emotion-sad-mid": {
+      "a_a": 0.6607980255039079,
+      "cue_vs_plain": 0.003825586178527355,
+      "cue_vs_sham": 0.00008227067050596462,
+      "instruct": "Speak in a sad, sorrowful tone",
+      "sham_vs_plain": 0.02328259975318799,
+      "wer_cued": 0.0,
+      "wer_plain": 0.0
+    },
+    "en-style-shout-mid": {
+      "a_a": 0.6607980255039079,
+      "cue_vs_plain": 0.018222953517071164,
+      "cue_vs_sham": 0.00004113533525298231,
+      "instruct": "Shout this loudly",
+      "sham_vs_plain": 0.02328259975318799,
+      "wer_cued": 0.0,
+      "wer_plain": 0.0
+    },
+    "en-style-whisper-leading": {
+      "a_a": 0.05071986836692719,
+      "cue_vs_plain": 0.004154668860551214,
+      "cue_vs_sham": 0.20678733031674207,
+      "instruct": "Say this in a soft whisper",
+      "sham_vs_plain": 0.47918552036199097,
+      "wer_cued": 0.0,
+      "wer_plain": 0.0
+    }
+  },
+  "content_activated": [],
+  "enforced": false,
+  "n": 9,
+  "not_applicable": [],
+  "perturbation_only": [],
+  "sentinel": null,
+  "violations": "[]"
+}
