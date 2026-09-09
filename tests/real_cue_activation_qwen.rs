@@ -34,7 +34,7 @@ use std::collections::BTreeMap;
 
 use candle_core::Device;
 use syrinx_cue::BackendId;
-use syrinx_eval::acoustic::{activation_test, features, min_n_for_alpha, Features};
+use syrinx_eval::acoustic::{activation_test, features, min_n_for_headroom, Features};
 use syrinx_eval::activation::CueCase;
 use syrinx_eval::contrast::{
     evaluate_contrast, Arm, ArmContrast, ContrastThresholds, PipelineControl,
@@ -111,11 +111,17 @@ fn real_cue_activation_qwen_run() {
         sentinel: sentinel.clone(),
     };
     let alpha = th.corrected_alpha();
-    let floor = min_n_for_alpha(alpha);
+    // POWER, not feasibility. `min_n_for_alpha` says whether the test can EVER reject;
+    // at that n the only way to clear the bar is the single most extreme labeling. The
+    // [sad] tuning round of 2026-09-08 was wrecked by exactly that confusion, and the
+    // first clean run of THIS gate then repeated it at 13.4x headroom while three of six
+    // cases sat within 1.2x of the bar — the regime where power decides the verdict.
+    let floor = min_n_for_headroom(alpha, 20.0);
     assert!(
         n >= floor,
-        "n={n} cannot reach alpha={alpha:.5}; the exact permutation test needs n>={floor}. \
-         A run that cannot possibly reject is not a gate."
+        "n={n} has too little power for alpha={alpha:.5}: 20x headroom needs n>={floor}. \
+         Reporting \"no activation\" from an underpowered run is a false negative dressed \
+         as a certification."
     );
     eprintln!(
         "[c42'] {} cases, n={n}, alpha 0.05/{comparisons} = {alpha:.5} (n floor {floor}), \
@@ -138,17 +144,48 @@ fn real_cue_activation_qwen_run() {
 
     let mut contrasts: Vec<ArmContrast> = Vec::new();
     let mut not_applicable: Vec<String> = Vec::new();
+    let mut lowering_bugs: Vec<String> = Vec::new();
+    let mut seen_texts: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut report: BTreeMap<String, serde_json::Value> = BTreeMap::new();
 
     for case in &chosen {
         let p = plan(backend, &case.text).expect("plan");
-        let clean = squeeze(&p.text);
-        let Some(instruct) = p.segments.first().and_then(|s| s.instruct.clone()) else {
-            // The kind is unsupported here, so cued and plain are the identical request.
-            // Reporting that as activation 0.0 would be a fabricated measurement of a
-            // channel that does not exist (ADR-0003 §5).
-            eprintln!("  {:<28} not_applicable (lowered to no instruct)", case.id);
-            not_applicable.push(case.id.clone());
+        // The segment that CARRIES the instruct, not the first one. A `mid` or `trailing`
+        // cue makes `pass_hoist` split the utterance, and segment 0 is then the text BEFORE
+        // the cue, which by construction has no instruct. Reading `segments.first()` made
+        // four of six sentinels report `not_applicable` on the first run -- a fabricated
+        // non-measurement, which is the failure ADR-0003 §5 exists to prevent, arriving
+        // from the opposite direction. The cue scopes a span; that span is what to measure.
+        let carrier = p.segments.iter().find(|s| s.instruct.is_some());
+        let Some((clean, instruct)) =
+            carrier.map(|s| (squeeze(&s.text), s.instruct.clone().expect("carrier has one")))
+        else {
+            // Nothing carried an instruct. That is legitimate ONLY if the backend cannot
+            // express this kind; if caps say it can, the cue was dropped by a lowering bug
+            // and calling it "not applicable" would bury exactly the defect this gate is
+            // for. ADR-0003 §5 names both halves and the runner must tell them apart.
+            let caps = backend.caps().expect("caps");
+            let kind = match case.kind.as_str() {
+                "emotion" => Some(syrinx_cue::ir::CueKind::Emotion {
+                    label: case.label.clone(),
+                    intensity: 1.0,
+                }),
+                "style" => Some(syrinx_cue::ir::CueKind::Style { label: case.label.clone() }),
+                "event" => Some(syrinx_cue::ir::CueKind::Event { label: case.label.clone() }),
+                _ => None,
+            };
+            let expressible = kind.as_ref().is_some_and(|k| caps.can_express(k));
+            if expressible {
+                eprintln!(
+                    "  {:<28} LOWERING BUG: caps say {} is expressible, but no segment \
+                     carries an instruct",
+                    case.id, case.kind
+                );
+                lowering_bugs.push(case.id.clone());
+            } else {
+                eprintln!("  {:<28} not_applicable ({} unsupported here)", case.id, case.kind);
+                not_applicable.push(case.id.clone());
+            }
             continue;
         };
 
@@ -199,7 +236,13 @@ fn real_cue_activation_qwen_run() {
         let cvp = mk(Arm::Cue, Arm::Plain, &fc, &fa);
         let svp = mk(Arm::Sham, Arm::Plain, &fs, &fa);
         let cvs = mk(Arm::Cue, Arm::Sham, &fc, &fs);
+        // A/A depends only on the TEXT: two cases over the same sentence render the same
+        // plain audio and produce the identical A/A p-value. Counting it once per case
+        // inflates the activation count against a budget derived from the case count --
+        // the first run reported 2 activations from ONE underlying measurement, because
+        // two sentinels share a sentence.
         let aa = mk(Arm::ControlA, Arm::ControlB, &fa, &fb);
+        let first_for_text = seen_texts.insert(clean.clone());
 
         eprintln!(
             "  {:<28} cue/plain {:.4}  sham/plain {:.4}  cue/sham {:.4}  A/A {:.4}  wer {:.3}",
@@ -214,8 +257,16 @@ fn real_cue_activation_qwen_run() {
                 "wer_cued": w_cued, "wer_plain": w_plain,
             }),
         );
-        contrasts.extend([cvp, svp, cvs, aa]);
+        contrasts.extend([cvp, svp, cvs]);
+        if first_for_text {
+            contrasts.push(aa);
+        }
     }
+
+    // The 1.7B is no longer needed and holds ~4.5 GB of VRAM. Loading the 0.6B on top of
+    // it OOM'd on a box whose GPUs are shared with other work, so it is dropped explicitly
+    // rather than at end of scope.
+    drop(engine);
 
     // Clause A1: the `accepted` checkpoint must render bit-identically. Two renders, and a
     // stronger statement than any p-value — but a control on OUR OWN `honors_instruct`
@@ -259,6 +310,11 @@ fn real_cue_activation_qwen_run() {
         eprintln!("  [A1] SKIPPED — SYRINX_QWEN_CV_DIR_0_6B unset (the pipeline control did not run)");
     }
 
+    assert!(
+        lowering_bugs.is_empty(),
+        "cues the backend declares expressible were dropped before rendering: {lowering_bugs:?} \
+         — a lowering bug, not a null result, and it must not be reported as one"
+    );
     let verdict = evaluate_contrast(&contrasts, &controls, &not_applicable, &th);
     eprintln!("\n[c42'] corrected alpha {:.5}", verdict.corrected_alpha);
     eprintln!("[c42'] content-activated (beat plain AND sham): {:?}", verdict.content_activated);
