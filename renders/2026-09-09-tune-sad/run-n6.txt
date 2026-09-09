@@ -1,0 +1,91 @@
+[tune] label=sad judge-class=sad n=6/arm
+[tune] incumbent: "Speak in a sad, sorrowful tone"
+[tune] candidate: "Say this the way someone who is sad would say it"
+[tune] candidate: "Speak as if you are genuinely sad"
+[tune] candidate: "Speak in a deeply sad tone"
+[tune] candidate: "Speak in a quietly sad tone"
+[tune] candidate: "Speak in a sad, depressed tone"
+[tune] alpha 0.01000 (Bonferroni/5)  renders: 324
+
+[tune] === Tune split ===
+  [tune-s0] "The house is quiet now in a way it never used to be."
+     sham                   p_plain=0.8074 p_sham=1.0000 delta=-1.359 +/-2.458 top=neutral
+     incumbent              p_plain=0.0368 p_sham=0.0281 delta=+5.093 +/-5.737 top=sad
+     counter-cue            p_plain=0.0714 p_sham=0.1299 delta=+0.722 +/-3.057 top=unknown
+     cand:Say this the way someo p_plain=0.6320 p_sham=0.5433 delta=+6.956 +/-4.496 top=sad
+     cand:Speak as if you are ge p_plain=0.2511 p_sham=0.1320 delta=+3.445 +/-4.419 top=sad
+     cand:Speak in a deeply sad  p_plain=0.0736 p_sham=0.0671 delta=+5.913 +/-4.750 top=sad
+     cand:Speak in a quietly sad p_plain=0.0368 p_sham=0.0152 delta=+4.705 +/-3.263 top=sad
+     cand:Speak in a sad, depres p_plain=0.1212 p_sham=0.1342 delta=+4.882 +/-4.265 top=sad
+  [tune-s1] "I keep forgetting that I cannot just call and tell her."
+     sham                   p_plain=0.6429 p_sham=1.0000 delta=-0.181 +/-4.664 top=surprised
+     incumbent              p_plain=0.0022 p_sham=0.0260 delta=+6.812 +/-3.400 top=sad
+     counter-cue            p_plain=0.6970 p_sham=0.1753 delta=-3.799 +/-4.453 top=happy
+     cand:Say this the way someo p_plain=0.0152 p_sham=0.1299 delta=+7.594 +/-2.821 top=sad
+     cand:Speak as if you are ge p_plain=0.1342 p_sham=0.0433 delta=+3.059 +/-4.413 top=sad
+     cand:Speak in a deeply sad  p_plain=0.0606 p_sham=0.3160 delta=+6.457 +/-3.930 top=sad
+     cand:Speak in a quietly sad p_plain=0.1169 p_sham=0.2706 delta=+4.472 +/-6.031 top=sad
+     cand:Speak in a sad, depres p_plain=0.0195 p_sham=0.3398 delta=+6.878 +/-2.758 top=sad
+  [tune-s2] "There was no one left to turn the lights on."
+     sham                   p_plain=0.1558 p_sham=1.0000 delta=-2.573 +/-5.073 top=happy
+     incumbent              p_plain=0.3377 p_sham=0.1515 delta=+5.383 +/-7.048 top=sad
+     counter-cue            p_plain=0.0152 p_sham=0.1991 delta=-6.901 +/-5.829 top=happy
+     cand:Say this the way someo p_plain=0.1580 p_sham=0.0152 delta=+5.611 +/-5.969 top=sad
+     cand:Speak as if you are ge p_plain=0.1905 p_sham=0.0541 delta=+6.472 +/-4.489 top=sad
+     cand:Speak in a deeply sad  p_plain=0.0606 p_sham=0.0152 delta=+6.180 +/-4.784 top=sad
+     cand:Speak in a quietly sad p_plain=0.0043 p_sham=0.0108 delta=+6.929 +/-5.771 top=sad
+     cand:Speak in a sad, depres p_plain=0.0346 p_sham=0.0022 delta=+8.285 +/-5.963 top=sad
+
+[tune] === Holdout split ===
+  [holdout-s0] "I packed the last box and closed the door behind me."
+     sham                   p_plain=0.2727 p_sham=1.0000 delta=+2.132 +/-2.736 top=unknown
+     incumbent              p_plain=0.1623 p_sham=0.4069 delta=+3.494 +/-3.488 top=unknown
+     counter-cue            p_plain=0.0022 p_sham=0.0022 delta=+1.014 +/-2.384 top=surprised
+     cand:Say this the way someo p_plain=0.3463 p_sham=0.4740 delta=+2.451 +/-4.722 top=happy
+     cand:Speak as if you are ge p_plain=0.5087 p_sham=0.3983 delta=+2.846 +/-3.819 top=other
+     cand:Speak in a deeply sad  p_plain=0.0823 p_sham=0.0238 delta=+2.477 +/-2.574 top=unknown
+     cand:Speak in a quietly sad p_plain=0.0195 p_sham=0.1905 delta=+1.092 +/-2.616 top=other
+     cand:Speak in a sad, depres p_plain=0.0043 p_sham=0.0173 delta=+0.321 +/-2.769 top=other
+  [holdout-s1] "Nobody came, and after a while I stopped watching the road."
+     sham                   p_plain=0.1558 p_sham=1.0000 delta=+1.028 +/-1.970 top=neutral
+     incumbent              p_plain=0.1234 p_sham=0.0087 delta=+3.508 +/-2.562 top=neutral
+     counter-cue            p_plain=0.6926 p_sham=0.0390 delta=-2.274 +/-4.302 top=happy
+     cand:Say this the way someo p_plain=0.0152 p_sham=0.0108 delta=+2.370 +/-4.575 top=neutral
+     cand:Speak as if you are ge p_plain=0.0779 p_sham=0.0065 delta=+1.459 +/-2.746 top=neutral
+     cand:Speak in a deeply sad  p_plain=0.1905 p_sham=0.0108 delta=+3.085 +/-2.310 top=neutral
+     cand:Speak in a quietly sad p_plain=0.3788 p_sham=0.0303 delta=+3.819 +/-1.796 top=neutral
+     cand:Speak in a sad, depres p_plain=0.0281 p_sham=0.0022 delta=+2.258 +/-3.735 top=neutral
+  [holdout-s2] "It rained the whole way home and I did not mind."
+     sham                   p_plain=0.4978 p_sham=1.0000 delta=+0.201 +/-2.619 top=surprised
+     incumbent              p_plain=0.2013 p_sham=0.4091 delta=+5.709 +/-3.185 top=sad
+     counter-cue            p_plain=0.6472 p_sham=0.3723 delta=-0.131 +/-2.692 top=surprised
+     cand:Say this the way someo p_plain=0.0152 p_sham=0.0022 delta=+7.098 +/-2.927 top=sad
+     cand:Speak as if you are ge p_plain=0.0541 p_sham=0.0346 delta=+4.617 +/-3.502 top=sad
+     cand:Speak in a deeply sad  p_plain=0.1905 p_sham=0.6926 delta=+5.558 +/-5.138 top=sad
+     cand:Speak in a quietly sad p_plain=0.0108 p_sham=0.1017 delta=+6.291 +/-4.021 top=sad
+     cand:Speak in a sad, depres p_plain=0.4091 p_sham=0.2532 delta=+3.617 +/-5.753 top=sad
+
+=== decision ===
+corrected alpha 0.01000   must clear 2 of 3 sentences
+  "Say this the way someone who is sad would say it" cleared 0/3 tune sentences
+      tune-s0        NoAcousticChange { p: 0.6320346320346321, alpha: 0.01 }
+      tune-s1        NoAcousticChange { p: 0.015151515151515152, alpha: 0.01 }
+      tune-s2        NoAcousticChange { p: 0.15800865800865802, alpha: 0.01 }
+  "Speak as if you are genuinely sad"          cleared 0/3 tune sentences
+      tune-s0        NoAcousticChange { p: 0.2510822510822511, alpha: 0.01 }
+      tune-s1        NoAcousticChange { p: 0.1341991341991342, alpha: 0.01 }
+      tune-s2        NoAcousticChange { p: 0.19047619047619047, alpha: 0.01 }
+  "Speak in a deeply sad tone"                 cleared 0/3 tune sentences
+      tune-s0        NoAcousticChange { p: 0.0735930735930736, alpha: 0.01 }
+      tune-s1        NoAcousticChange { p: 0.06060606060606061, alpha: 0.01 }
+      tune-s2        NoAcousticChange { p: 0.06060606060606061, alpha: 0.01 }
+  "Speak in a quietly sad tone"                cleared 0/3 tune sentences
+      tune-s0        NoAcousticChange { p: 0.0367965367965368, alpha: 0.01 }
+      tune-s1        NoAcousticChange { p: 0.11688311688311688, alpha: 0.01 }
+      tune-s2        PerturbationOnly { p_vs_sham: 0.010822510822510822, alpha: 0.01 }
+  "Speak in a sad, depressed tone"             cleared 0/3 tune sentences
+      tune-s0        NoAcousticChange { p: 0.12121212121212122, alpha: 0.01 }
+      tune-s1        NoAcousticChange { p: 0.01948051948051948, alpha: 0.01 }
+      tune-s2        NoAcousticChange { p: 0.03463203463203463, alpha: 0.01 }
+
+No candidate cleared every criterion. The incumbent stands.
