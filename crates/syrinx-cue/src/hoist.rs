@@ -121,8 +121,25 @@ pub fn pass_hoist(
         .collect();
     effective.sort_by_key(|c| c.span.start);
 
-    let points: Vec<Cue> =
-        lowered.cues.iter().filter(|c| c.is_point()).cloned().collect();
+    // A zero-span cue is a POINT — a sound that happens at an instant, which is exactly
+    // what `[laughs]` or `[cough]` is. An emotion or a style is a MANNER of speaking and
+    // cannot occur at an instant, so a zero-span one is not an event: it is a cue written
+    // after the text it describes ("... all week. [angry]"), which the parser gives an
+    // empty span because a spanning cue scopes what FOLLOWS and nothing follows.
+    //
+    // Classifying it as a point made it inert on every backend and recorded no drop, so a
+    // trailing `[angry]` silently did nothing — found by the C4.2' runner on 2026-09-09,
+    // and only because that runner asserts the difference between "caps cannot express
+    // this" and "the cue vanished".
+    let is_manner = |c: &Cue| matches!(c.kind, CueKind::Emotion { .. } | CueKind::Style { .. });
+    let trailing_manner: Vec<&Cue> =
+        lowered.cues.iter().filter(|c| c.is_point() && is_manner(c)).collect();
+    let points: Vec<Cue> = lowered
+        .cues
+        .iter()
+        .filter(|c| c.is_point() && !is_manner(c))
+        .cloned()
+        .collect();
     let spanning: Vec<&&Cue> = effective.iter().filter(|c| !c.is_point()).collect();
 
     // Word-granular or inline backends carry their cues in the text stream; one request.
@@ -200,6 +217,23 @@ pub fn pass_hoist(
                 .collect(),
         });
     }
+    // A trailing manner cue describes the delivery of the text BEFORE it, so it applies to
+    // the last segment — but only if that segment has no instruction of its own. Two
+    // different deliveries for one span is a conflict, and the loser is reported rather
+    // than silently discarded.
+    for c in &trailing_manner {
+        match out.last_mut() {
+            Some(seg) if seg.instruct.is_none() => {
+                seg.instruct = instruct_for(c, opts.lang);
+            }
+            _ => report.push(
+                c.source.clone(),
+                c.raw.clone(),
+                Action::Dropped { reason: DropReason::Unsupported },
+            ),
+        }
+    }
+
     // Trailing whitespace belongs to the last segment.
     if !pending.is_empty() {
         match out.last_mut() {
