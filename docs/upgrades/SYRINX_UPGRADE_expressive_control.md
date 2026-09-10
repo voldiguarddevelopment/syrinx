@@ -904,3 +904,74 @@ old default explicitly, which is what a frozen test is for. The assertion was up
 than deleted — what the default *is* still matters, and a silent change should still fail
 there — with the authorisation and reason recorded in the test itself, following the
 ADR-0002 precedent.
+
+### A34 — 2026-09-08 — **the instruct channel cannot produce a laugh; `[laughs]` is unreachable, not unwired**
+
+`event = unsupported` on all five Qwen checkpoints means `pass_hoist` drops `[laughs]`
+before a render. Every backend that honours events is deprecated. But that is a narrower
+claim than "the model cannot laugh": Qwen has one expressive channel and nobody had asked
+it to laugh through that.
+
+144 renders, 3 sentences x 6 arms at n=8, four phrasings meaning four different things by
+"laugh". **No duration increase anywhere** — largest magnitude 0.23 s and *negative*, mean
+|Δ| under 0.07 s, where a laugh costs 0.5–1.5 s. Nothing near α=0.00208. WER flat, which
+matters because a laugh is non-lexical audio the oracle must transcribe or skip.
+
+The sharpest reading is comparative: **the sham moved the audio more than every laugh
+instruction on two of three sentences.** These are not weakly effective; they are less
+consequential than a meaningless string of the same length. The model is not *partially*
+laughing, which is why "the right words would unlock it" is unlikely on four negatives.
+
+So the current behaviour — drop, record `Dropped { reason: Unsupported }`, speak cleanly —
+is correct. It also puts the 2026-09-06 judge decision on measurement rather than
+assumption: audio-event detection was SenseVoiceSmall's one capability over emotion2vec+,
+passed over because no shipping backend had an event channel. There is none.
+Full record and 18 WAVs: `renders/2026-09-08-event-induction/`.
+
+### A35 — 2026-09-09 — **a feasibility check was used as a power check; and a trailing cue was silently inert (ADR-0005)**
+
+**The power defect.** `min_n_for_alpha` answers whether the exact permutation test can
+*ever* reject at α. The tuning driver used it as a floor as though it answered whether the
+test can reject a *real effect*. At α=0.01 that floor is n=5 with **1.3x** headroom — below
+the n=6 the round actually ran, so passing the check said nothing. The `[sad]` incumbent,
+independently shown to work on 5 of 6 sentences, scored 0.0022 on its best sentence: that
+**is** 1/462, the single most extreme labeling available at n=6. A gate only the most
+extreme draw can clear rejects working phrases and reads as "nothing is better".
+`min_n_for_headroom(α, 20)` is now required by both the tuner and the C4.2′ runner.
+At n=8 the same phrase scores 0.0073 / 0.0002 / 0.0564 — 2 of 3, the gate reachable.
+
+**ADR-0005 (PROPOSED).** `"…all week. [angry]"` produced no instruction *and no drop
+record*. A trailing cue gets an empty span — a spanning cue scopes what follows, and nothing
+follows — so `is_point()` was true and it was filed as a point **event**, never reaching
+`instruct_for`. Right for `[laughs]`, a category error for an emotion: a manner of speaking
+cannot occur at an instant. `placement: trailing` is one of three placements in the frozen
+C4.2 set, so that set had been measuring a no-op on those cases since it was written.
+
+Found by the C4.2′ runner, and only because that runner distinguishes "the backend cannot
+express this kind" from "caps say it can, yet nothing carried an instruct" — an assertion
+that exists only because the runner's *own* first version had the same class of bug.
+
+### A36 — 2026-09-09 — **C4.2′ certified: clean, all controls hold, verdict "no"**
+
+n=9 (20x headroom), 6 pre-registered sentinels, 4 arms each. A1 holds (the 0.6B renders
+bit-identically), A2 no calibration violation, A3 no sham activated, C no WER regression,
+and **0 cases `not_applicable`**. No sentinel shows content activation. Clause B earns no
+sentinel and ships disabled, which ADR-0003 pre-registered as acceptable.
+
+Getting there cost **three runner defects**, none visible from a green suite:
+`segments.first()` mislabelled 4 of 6 as `not_applicable`; the A1 control OOM'd because the
+1.7B was never freed; and A/A was counted per case rather than per text, manufacturing a
+`CalibrationFailed` from one measurement counted twice.
+
+**Recorded, not acted on:** two cases separate from their *sham* decisively (`sad-mid`
+p=0.0001, `shout-mid` p=0.0000) while their cue-vs-plain sits at 0.0038 and 0.0182 — the cue
+is further from a delivery-neutral instruction than from no instruction at all. If sham and
+cue move the audio in different directions from plain, the conjunctive requirement may
+measure the wrong thing: `cue vs plain` re-admits the very confound the sham arm removes.
+Redefining `content_activated` is an ADR-0003 amendment and a maintainer decision, and six
+sentinels is thin evidence. Data in `renders/2026-09-09-c42-certification/report.json`.
+
+Also open from the same day: the `[sad]` tuning incumbent clears **0 of 3 holdout
+sentences**, so a challenger must clear sentences the incumbent cannot. Defensible (a phrase
+working where the incumbent fails is what tuning should reward) but undecided — a threshold
+question on `min_sentences`, not a bug.
