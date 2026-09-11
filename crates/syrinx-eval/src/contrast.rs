@@ -302,3 +302,116 @@ pub fn evaluate_contrast(
         violations,
     }
 }
+
+// ===========================================================================================
+// PROPOSED and UNACCEPTED — the sham-only rule (ADR-0003 §"Amendment, proposed 2026-09-11").
+// ===========================================================================================
+//
+// The first certification run (`renders/2026-09-09-c42-certification/`) produced two cases
+// whose cue separated from its SHAM at p = 0.0000 / 0.0001 while separating from PLAIN at
+// only 0.0182 / 0.0038. `evaluate_contrast` requires both, so it reported nothing. The
+// question that raised is whether the `cue vs plain` leg belongs in the criterion at all:
+// it is the leg that cannot distinguish "this cue has content" from "an instruction was
+// present", which is the confound the sham arm exists to remove.
+//
+// Nothing below changes what `evaluate_contrast` reports. It computes the SAME decision
+// under BOTH rules from the SAME measurements, so a run can print the two lists side by
+// side and a maintainer can see the difference in the numbers instead of in prose. The
+// shipped verdict is still, and only, `ContrastReport::content_activated`.
+//
+// Acceptance is a human act (ADR-0001 §7). This code exists to inform that act, not to
+// perform it.
+
+/// Which contrasts a case must clear before a run calls it activated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ContrastRule {
+    /// **The shipped criterion** (ADR-0003 §3): the cue must clear `cue vs plain` *and*
+    /// `cue vs sham`. Identical to what [`evaluate_contrast`] puts in
+    /// [`ContrastReport::content_activated`].
+    PlainAndSham,
+    /// **PROPOSED, not accepted.** The cue must clear `cue vs sham` only.
+    ShamOnly,
+}
+
+impl ContrastRule {
+    /// Does this case clear the rule at an already-corrected alpha?
+    ///
+    /// An absent contrast is never significant, so every rule fails closed on a
+    /// measurement the run did not make — the same posture as
+    /// `a_missing_sham_contrast_fails_closed`.
+    pub fn admits(
+        self,
+        vs_plain: Option<&ArmContrast>,
+        vs_sham: Option<&ArmContrast>,
+        corrected_alpha: f64,
+    ) -> bool {
+        let beat_plain = vs_plain.is_some_and(|c| c.significant_at(corrected_alpha));
+        let beat_sham = vs_sham.is_some_and(|c| c.significant_at(corrected_alpha));
+        match self {
+            ContrastRule::PlainAndSham => beat_plain && beat_sham,
+            ContrastRule::ShamOnly => beat_sham,
+        }
+    }
+}
+
+/// The two rules' verdicts over one run's measurements.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleComparison {
+    pub corrected_alpha: f64,
+    /// Cases the shipped conjunctive rule admits.
+    pub plain_and_sham: Vec<String>,
+    /// Cases the proposed sham-only rule admits.
+    pub sham_only: Vec<String>,
+    /// Cases the proposed rule admits and the shipped one does not. `PlainAndSham` is a
+    /// strict sub-rule of `ShamOnly` — it adds a conjunct — so this list is the entire
+    /// practical difference between the two, and it is what a maintainer has to judge.
+    pub divergent: Vec<String>,
+}
+
+/// The single contrast of one case between two named arms, if the run measured it.
+///
+/// **Contract:** a run emits at most ONE contrast per `(case_id, arm, against)` triple —
+/// `real_cue_activation_qwen` pushes exactly one `cue/plain`, one `sham/plain` and one
+/// `cue/sham` per case. Under that contract first-match and last-match are the same row,
+/// which is why a `find` -> `rev().find()` mutant survives here: it is equivalent on every
+/// input the type is defined for. On a duplicated triple this returns the first, and
+/// `evaluate_contrast`'s own `BTreeMap` lookup would return the last — so duplicates are
+/// malformed input for both, and the runner, not this function, is where that is caught.
+fn find_contrast<'a>(
+    contrasts: &'a [ArmContrast],
+    case_id: &str,
+    arm: Arm,
+    against: Arm,
+) -> Option<&'a ArmContrast> {
+    contrasts.iter().find(|c| c.case_id == case_id && c.arm == arm && c.against == against)
+}
+
+/// Cases `rule` admits, in case-id order.
+pub fn activated_under(
+    contrasts: &[ArmContrast],
+    corrected_alpha: f64,
+    rule: ContrastRule,
+) -> Vec<String> {
+    let ids: std::collections::BTreeSet<&str> =
+        contrasts.iter().map(|c| c.case_id.as_str()).collect();
+    ids.into_iter()
+        .filter(|id| {
+            rule.admits(
+                find_contrast(contrasts, id, Arm::Cue, Arm::Plain),
+                find_contrast(contrasts, id, Arm::Cue, Arm::Sham),
+                corrected_alpha,
+            )
+        })
+        .map(String::from)
+        .collect()
+}
+
+/// Both rules over one run's measurements, at the run's corrected alpha.
+pub fn compare_rules(contrasts: &[ArmContrast], th: &ContrastThresholds) -> RuleComparison {
+    let corrected_alpha = th.corrected_alpha();
+    let plain_and_sham = activated_under(contrasts, corrected_alpha, ContrastRule::PlainAndSham);
+    let sham_only = activated_under(contrasts, corrected_alpha, ContrastRule::ShamOnly);
+    let divergent =
+        sham_only.iter().filter(|id| !plain_and_sham.contains(id)).cloned().collect();
+    RuleComparison { corrected_alpha, plain_and_sham, sham_only, divergent }
+}

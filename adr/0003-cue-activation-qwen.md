@@ -186,3 +186,228 @@ headroom and stays numerically comparable to the recorded n=8 results.
   (`tests/cue_contrast_gate.rs`) and the *decision logic* is CI-gated on every board even
   though the numbers are not.
 - Ledger amendment **A27** rewrites C4.2's AC under its immutable id.
+
+---
+
+# AMENDMENT — PROPOSED, NOT ACCEPTED
+
+**Status of this section: PROPOSED. Nothing here is adopted.** ADR-0003's own Status line is
+unchanged and this section does not change it. Acceptance is a human act (ADR-0001 §7 /
+C0.2′); no run, no test and no pass of this loop may perform it. The amendment is written so
+that the decision can be made against numbers instead of prose.
+
+Raised: 2026-09-11, from `renders/2026-09-09-c42-certification/FINDINGS.md`.
+Code: `crates/syrinx-eval/src/contrast.rs` (`ContrastRule`, `compare_rules`), frozen by
+`tests/cue_rule_comparison.rs`. Additive — `evaluate_contrast` is byte-for-byte unchanged
+and remains the only shipped verdict.
+
+## The question
+
+`evaluate_contrast` calls a case **content-activated** only when the cue clears *both*
+contrasts at the corrected alpha:
+
+| leg | claim |
+|---|---|
+| `cue vs plain` | the cue changed the audio |
+| `cue vs sham` | the change is content, not prompt perturbation |
+
+The first certification run (n=9, α=0.05/24 = 0.00208) produced this:
+
+| case | cue/plain | sham/plain | cue/sham |
+|---|---|---|---|
+| happy-leading | 0.0683 | 0.4792 | 0.0598 |
+| **sad-mid** | 0.0038 | 0.0233 | **0.0001** |
+| angry-trailing | 0.8677 | 0.8067 | 0.8300 |
+| calm-mid | 0.1594 | 0.0233 | 0.0825 |
+| whisper-leading | 0.0042 | 0.4792 | 0.2068 |
+| **shout-mid** | 0.0182 | 0.0233 | **0.0000** |
+
+Two cases separate from their sham decisively while their `cue vs plain` sits at 0.0038 and
+0.0182, so the conjunction reports nothing. FINDINGS.md hypothesised that sham and cue move
+the audio in **different directions** from plain, and that requiring `cue vs plain`
+therefore re-admits the very confound the sham arm was introduced to remove.
+
+**The two criteria, stated exactly** (both now computable from one run):
+
+- `ContrastRule::PlainAndSham` — shipped. `cue vs plain` **and** `cue vs sham`.
+- `ContrastRule::ShamOnly` — proposed. `cue vs sham` alone.
+
+`PlainAndSham` adds a conjunct, so it is a strict sub-rule: its verdict is always a subset
+of `ShamOnly`'s, and `RuleComparison::divergent` is the whole practical difference. On the
+measured run: shipped `[]`, proposed `[sad-mid, shout-mid]`.
+
+## The evidence, argued against itself
+
+### What the data does support
+
+**Cue and sham do not move the audio the same way.** This is the one part of the direction
+hypothesis the data carries. `crates/syrinx-eval/examples/contrast_geometry.rs` drives the real
+`acoustic::activation_test` over synthetic arms of known geometry (11 dims, n=9, all 24310
+labelings, isotropic Gaussian arms, 40 draws per cell, medians shown) — so this evidence is
+reproducible from disk, not asserted:
+
+    cargo run --release -p syrinx-eval --example contrast_geometry 40
+
+A *collinear* cue and sham cannot produce the observed pattern:
+
+| configuration | cue/plain | sham/plain | cue/sham | P(cue/sham < cue/plain) |
+|---|---|---|---|---|
+| collinear, \|μ\|=1.2 | 0.116 | 0.159 | **0.503** | 0.23 |
+| orthogonal, \|μ\|=1.2 | 0.233 | 0.159 | **0.030** | 0.85 |
+| opposed 180°, \|μ\|=1.2 | 0.229 | 0.337 | **0.041** | 0.88 |
+
+The observed pattern is real and it rules collinearity out.
+
+### What the data does not support — three duller readings, tested
+
+**1. "Different directions" is unfalsified but so is "merely different directions."** The
+table above shows orthogonal and opposed displacements produce statistically
+indistinguishable signatures at these magnitudes (0.030 vs 0.041 — and the ordering flips
+between draws). The observed p-values
+cannot separate "a neutral instruction flattens delivery while a cue colours it" — the
+recorded story, which predicts an *obtuse* angle — from "two arbitrary prompts perturb the
+trajectory in two arbitrary directions", which in 11 dimensions is generically near-
+orthogonal and needs no content interpretation at all. Any two distinct perturbations from a
+common baseline satisfy ‖c−s‖ > max(‖c−p‖, ‖s−p‖) once the angle between them exceeds 60°.
+
+**The one run that recorded effect sizes contradicts the obtuse reading.**
+`renders/2026-09-06-instruct-lang/run.txt` reports all three distances per cell, so the
+angle follows from the law of cosines:
+
+| cell | ‖c−p‖ | ‖s−p‖ | ‖c−s‖ | cos θ | θ |
+|---|---|---|---|---|---|
+| happy en | 1.76 | 1.85 | 2.17 | +0.278 | 74° |
+| happy zh | 2.39 | 1.70 | 1.24 | +0.869 | 30° |
+| sad en | 2.98 | 1.41 | 2.61 | +0.483 | 61° |
+| sad zh | 2.42 | 1.18 | 2.45 | +0.218 | 77° |
+| angry en | 1.40 | 2.54 | 2.37 | +0.393 | 67° |
+| angry zh | 1.90 | 1.86 | 2.34 | +0.226 | 77° |
+
+**All six cosines are positive** (mean +0.41; the random-direction null in 11-d is
+mean 0, sd 0.30). The cue and sham displacements are *positively correlated and oblique* —
+they are not opposed, and in two of six cells ‖c−s‖ is not even the largest of the three.
+The recorded hypothesis is stated in the one form the available geometry rejects.
+
+**2. Unequal variance is NOT the explanation** — tested, and eliminated. The plausible dull
+story is that the plain arm (no instruction, freest AR trajectory) is simply wider, which
+would inflate every `X vs plain` p-value without any directional claim. Simulated with the
+cue and sham means made *identical* and only the plain arm's spread varied:
+
+| sd(plain) / sd(instructed) | cue/plain | sham/plain | cue/sham | P(cue/sham < cue/plain) |
+|---|---|---|---|---|
+| 1.0× | 0.233 | 0.231 | 0.587 | 0.17 |
+| 1.6× | 0.313 | 0.356 | 0.487 | 0.40 |
+| 2.0× | 0.218 | 0.334 | 0.525 | 0.25 |
+
+Variance alone never drives `cue/sham` down. This candidate is refuted; recording it because
+an eliminated alternative is worth as much as a supported one.
+
+**3. The run is ONE observation of the effect, not three.** The sham and plain arms are
+per *carrier text*, not per case — `sham_vs_plain` and `a_a` are byte-identical across
+cases sharing a sentence (0.0233/0.6608 for the three `mid` cases, 0.4792/0.0507 for the two
+`leading` ones). Six sentinels are **three** plain arms and **three** sham arms. Every case
+showing the pattern is a cue arm against the *same* sham render set, and that set is the
+most-displaced sham in the run (p=0.0233, the smallest of the three). The other two sham
+arms do not agree: `whisper-leading` runs the other way entirely (cue/sham 0.2068 against
+cue/plain 0.0042), and `calm-mid` shares the divergent cases' sham arm and does not clear.
+So: one sham arm supports, one contradicts, one is null throughout. "The sham arm is an
+outlier" is not excluded by anything in this run.
+
+**4. Both divergent p-values are at the test's resolution floor.** With n=9 the exact test
+enumerates 24310 labelings, so the smallest attainable p is 4.114e-5. `shout-mid`'s
+4.1135e-5 *is* 1/24310 and `sad-mid`'s 8.227e-5 *is* 2/24310 — the first and second most
+extreme labelings possible. "0.0000 versus 0.0038" reads as a 400× gap; the measurement
+cannot express anything smaller, so the true gap is unbounded below and unmeasured. It is
+evidence of strong separation and no evidence at all about *how much* stronger.
+
+### The argument that actually decides it: `ShamOnly` has no null
+
+The `cue vs plain` leg is confounded, exactly as FINDINGS.md says: it cannot separate "this
+cue has content" from "an instruction was present". But dropping it does not remove the
+confound — it removes the anchor and admits a **larger** one. `cue vs sham` asks whether two
+*different instruction strings* produce different audio. Simulate two **delivery-neutral**
+shams, orthogonal, with no content whatsoever:
+
+| configuration | cue/plain | sham/plain | cue/sham | P(cue/sham < cue/plain) |
+|---|---|---|---|---|
+| sham1 vs sham2, \|μ\|=1.2 | 0.230 | 0.171 | 0.058 | 0.78 |
+| sham1 vs sham2, \|μ\|=1.6 | 0.083 | 0.089 | **0.013** | 0.80 |
+
+The signature the amendment is built on is reproduced in full by two meaningless prompts.
+The run contains no measurement that excludes this, because it has no second sham. The
+conjunction is crude, but `sham vs plain` at least calibrates one arm against a
+no-instruction baseline; `ShamOnly` calibrates nothing.
+
+## Recommendation
+
+**Do not adopt `ContrastRule::ShamOnly`. Keep `PlainAndSham` as C4.2′'s criterion.** The
+observation that raised this is real and the conjunction is genuinely imperfect, but the
+proposed replacement is weaker, not stronger: it drops the only baseline in the design and
+its distinguishing signature is one a pair of meaningless instructions reproduces.
+
+What should change instead, in cost order — none of it a criterion change:
+
+1. **Persist the effect vectors.** `ArmContrast::effect` is computed and then discarded by
+   the runner's `report.json`; every geometric question above had to be answered from a
+   *different, older* run because of it. Record `effect` per contrast, and ideally the 11-d
+   arm centroid, so direction is measured rather than inferred. Zero GPU cost.
+2. **Add the missing arm: `sham2`.** A second delivery-neutral instruction of comparable
+   length, and the contrast `sham1 vs sham2`. That is the null `cue vs sham` currently
+   lacks, and it is the single measurement that would settle this question. 3 carrier texts
+   × n renders ≈ 27 renders ≈ 3.5 min at the measured 7.75 s/render. If `sham1 vs sham2`
+   separates as strongly as `cue vs sham`, `ShamOnly` is void and this amendment is
+   withdrawn on evidence. If it does not, `ShamOnly` becomes arguable and should then be
+   proposed with that number attached.
+3. **Give each case its own sham arm**, or state plainly in the report that n_independent is
+   the carrier-text count, not the case count. Three cases against one shared sham arm were
+   read as three observations here, and that is how a one-draw artifact becomes a criterion.
+4. **Re-run at n ≥ 11** if the floor matters: at n=9 the two headline p-values are the two
+   most extreme values the test can emit, so the run is measuring at its own resolution
+   limit.
+
+Until (2) exists, the honest position is the one the certification run already took: the
+gate reports no content activation, and the divergence is recorded as an observation.
+
+## What was built under this amendment
+
+`ContrastRule` / `RuleComparison` / `activated_under` / `compare_rules` in
+`crates/syrinx-eval/src/contrast.rs`, computing **both** criteria from one set of
+measurements. `evaluate_contrast` is unchanged and `tests/cue_contrast_gate.rs` is untouched
+and green, so `real_cue_activation_qwen`'s verdict is exactly what it was. A runner may
+print both lists; only `ContrastReport::content_activated` is the verdict.
+
+Frozen by `tests/cue_rule_comparison.rs` (9 tests, `GROUP_cue`, model-free), including the
+2026-09-09 numbers verbatim: shipped rule `[]`, proposed rule
+`[en-emotion-sad-mid, en-style-shout-mid]`.
+
+`crates/syrinx-eval/examples/contrast_geometry.rs` produces every simulated table above by
+driving the real `acoustic::activation_test`, so this section's evidence can be regenerated
+rather than trusted. It is an example, not a gate: it has no assertions and no board row,
+because "a synthetic geometry behaves as geometry predicts" is not a fact about Syrinx.
+
+**Mutation, checked by hand** — each operator flipped in the source, the frozen test run,
+the source restored. 17 mutants, 16 killed:
+
+| # | mutant | result |
+|---|---|---|
+| M1–M3 | `==` → `!=` on `case_id` / `arm` / `against` in the contrast lookup | killed |
+| M4–M5 | each `&&` → `\|\|` in the lookup predicate | killed |
+| M6 | `beat_plain && beat_sham` → `\|\|` | killed |
+| M7–M8 | drop either conjunct of `PlainAndSham` | killed |
+| M9 | `ShamOnly` reads the plain leg | killed |
+| M10 | drop the `!` in the `divergent` filter | killed |
+| M11–M12 | `is_some_and(significant)` → `is_some()` on either leg | killed |
+| M13 | swap the plain/sham lookups at the call site | killed |
+| M14 | `significant_at`: `<=` → `<` | killed |
+| M15 | `divergent` iterates the wrong list | killed |
+| M16 | `compare_rules` swaps the two rules | killed |
+| M17 | `find` → `rev().find()` in the lookup | **SURVIVED** |
+
+**M17 is equivalent under the input contract and is reported rather than papered over.** A
+run emits at most one contrast per `(case_id, arm, against)` triple, so first-match and
+last-match are the same row on every input the type is defined for. Killing it would mean
+pinning behaviour on duplicated triples, which are malformed input — and on which
+`evaluate_contrast`'s own `BTreeMap` lookup takes the *last*, so a test pinning first-match
+here would create a disagreement where none exists today. The contract is now stated in
+`find_contrast`'s doc comment; the runner, not this function, is where duplicates belong
+caught.
