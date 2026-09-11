@@ -55,18 +55,51 @@ fn label_of(kind: &CueKind) -> Option<&str> {
 }
 
 /// The prefix for one cue — the total function pinned in ledger A14.
+///
+/// Backend-blind: no `[[tuned]]` row is consulted. See [`instruct_for_backend`] for the
+/// full ADR-0004 order.
 pub fn instruct_for(cue: &Cue, lang: InstructLang) -> Option<String> {
+    instruct_with(InstructTable::shared(), cue, lang, None)
+}
+
+/// The prefix for one cue on a **named backend** — the full ADR-0004 §2 order:
+/// accepted tuned row → curated phrase → deterministic fallback.
+///
+/// Added 2026-09-11. Until then `phrase_for_backend` existed and nothing in the pipeline
+/// called it, so an accepted tuned row was inert even after a human signed it — the
+/// storage mechanism was complete and connected to nothing.
+pub fn instruct_for_backend(cue: &Cue, lang: InstructLang, backend: &str) -> Option<String> {
+    instruct_with(InstructTable::shared(), cue, lang, Some(backend))
+}
+
+/// [`instruct_for_backend`] against an explicit table, so a test can drive the tuned path
+/// with fixture rows without putting them in the shipped `instruct.toml`.
+///
+/// `backend: None` skips the tuned tier entirely, which is what [`instruct_for`] wants —
+/// an explicit absence rather than a sentinel string that a row could accidentally match.
+pub fn instruct_with(
+    table: &InstructTable,
+    cue: &Cue,
+    lang: InstructLang,
+    backend: Option<&str>,
+) -> Option<String> {
     // 1. Free text is already a natural-language instruction; pass it through untouched.
     if cue.kind == CueKind::Free {
         let raw = cue.raw.trim();
         return (!raw.is_empty()).then(|| raw.to_string());
     }
     let label = label_of(&cue.kind)?;
-    // 2. A curated phrase, keyed on the CANONICAL vocab id. Synonyms were resolved to that
-    //    id during parse, so a lookup here either hits the authored prose or the label has
-    //    none. The table used to live in `legacy_emotion` keyed on legacy CosyVoice tag
-    //    names, which missed 38 of 51 ids and sent them all to the fallback below.
-    if let Some(phrase) = InstructTable::shared().phrase(label, lang) {
+    // 2. An ACCEPTED tuned row for this exact (backend, lang, label), if one exists, and
+    //    otherwise the curated phrase — keyed on the CANONICAL vocab id. Synonyms were
+    //    resolved to that id during parse, so a lookup here either hits authored prose or
+    //    the label has none. The table used to live in `legacy_emotion` keyed on legacy
+    //    CosyVoice tag names, which missed 38 of 51 ids and sent them all to the fallback
+    //    below.
+    let found = match backend {
+        Some(b) => table.phrase_for_backend(label, lang, b),
+        None => table.phrase(label, lang),
+    };
+    if let Some(phrase) = found {
         return Some(phrase.to_string());
     }
     // 3. Otherwise a deterministic phrasing, so the function is total. Reached only by the
@@ -104,14 +137,31 @@ fn snap_to_word_boundary(text: &str, at: usize) -> usize {
     text[..at].rfind(char::is_whitespace).map_or(0, |i| i + 1)
 }
 
-/// Split a lowered document into per-utterance requests.
+/// Split a lowered document into per-utterance requests, against the shipped phrase table.
 pub fn pass_hoist(
     lowered: &Lowered,
     caps: &ControlCaps,
     opts: &SplitOptions,
     report: &mut LoweringReport,
 ) -> Vec<UtteranceSegment> {
+    pass_hoist_with(lowered, caps, opts, InstructTable::shared(), report)
+}
+
+/// [`pass_hoist`] against an explicit phrase table.
+///
+/// Every prefix is resolved with [`instruct_with`] against `caps.id` — the per-checkpoint
+/// key a `[[tuned]]` row is written under (ADR-0004 §1), which is the join that was missing
+/// until 2026-09-11. With no accepted tuned row for a backend this is byte-for-byte the
+/// curated result, which is the additivity ADR-0004 §2 relies on for reversibility.
+pub fn pass_hoist_with(
+    lowered: &Lowered,
+    caps: &ControlCaps,
+    opts: &SplitOptions,
+    table: &InstructTable,
+    report: &mut LoweringReport,
+) -> Vec<UtteranceSegment> {
     let text = &lowered.text;
+    let instruct_for = |c: &Cue| instruct_with(table, c, opts.lang, Some(&caps.id));
 
     // Cues that can actually steer this backend, in source order.
     let mut effective: Vec<&Cue> = lowered
@@ -144,7 +194,7 @@ pub fn pass_hoist(
 
     // Word-granular or inline backends carry their cues in the text stream; one request.
     if !needs_split(caps) {
-        let instruct = spanning.first().and_then(|c| instruct_for(c, opts.lang));
+        let instruct = spanning.first().and_then(|c| instruct_for(c));
         return vec![UtteranceSegment {
             text: text.clone(),
             instruct: if caps.granularity == Granularity::Utterance { instruct } else { None },
@@ -164,7 +214,7 @@ pub fn pass_hoist(
         }
         return vec![UtteranceSegment {
             text: text.clone(),
-            instruct: first.and_then(|c| instruct_for(c, opts.lang)),
+            instruct: first.and_then(|c| instruct_for(c)),
             cues: points,
         }];
     }
@@ -172,7 +222,7 @@ pub fn pass_hoist(
     // Split at each conflicting cue: one whose instruction differs from the one in effect.
     let mut boundaries: Vec<(usize, Option<String>)> = vec![(0, None)];
     for c in &spanning {
-        let instruct = instruct_for(c, opts.lang);
+        let instruct = instruct_for(c);
         let current = &boundaries.last().unwrap().1;
         if &instruct == current {
             continue; // not a conflict — same delivery, no reason to split
@@ -224,7 +274,7 @@ pub fn pass_hoist(
     for c in &trailing_manner {
         match out.last_mut() {
             Some(seg) if seg.instruct.is_none() => {
-                seg.instruct = instruct_for(c, opts.lang);
+                seg.instruct = instruct_for(c);
             }
             _ => report.push(
                 c.source.clone(),

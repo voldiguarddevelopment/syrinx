@@ -21,7 +21,10 @@ pub mod ssml;
 pub mod vocab;
 
 pub use caps::{BackendId, CapsTable, ControlCaps, ExpressiveBackend, Granularity, Inline, Support};
-pub use hoist::{instruct_for, pass_hoist, SplitOptions, UtteranceSegment};
+pub use hoist::{
+    instruct_for, instruct_for_backend, instruct_with, pass_hoist, pass_hoist_with, SplitOptions,
+    UtteranceSegment,
+};
 pub use ir::{Cue, CueDoc, CueKind, Level, SpeakerRef, Span};
 pub use legacy_emotion::{parse_tagged, EmotionInstruct, EmotionRegistry, InstructLang, Segment, TagSyntax};
 pub use lower::{lower, lower_full, Action, DropReason, Lowered, LoweringReport, ReportEntry};
