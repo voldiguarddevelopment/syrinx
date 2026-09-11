@@ -440,8 +440,17 @@ pub fn parse_ssml(input: &str) -> Result<CueDoc, SsmlError> {
                     return Err(SsmlError::UnsupportedTag { name: tag.name, at: i });
                 }
             }
-            // `<break/>` and `<prosody .../>` never take content.
-            if tag.self_closing {
+            // `<break/>` and `<prosody .../>` never take content, so a self-closing tag
+            // that OPENED an element must close it here.
+            //
+            // The guard is `source_start == i` — "the top of the stack is the element this
+            // very tag pushed" — and not a bare `pop()`. `<break/>` pushes nothing (it
+            // emits its Pause cue directly above), so a bare pop closed whatever element
+            // happened to enclose it: `<speak>wait<break/>then</speak>` popped the
+            // `<speak>` and then rejected its own `</speak>` as a MismatchedClose. Every
+            // fixture that exercised `<break/>` did so at the document root, so the
+            // combination that fails is the ordinary one — a real document.
+            if tag.self_closing && stack.last().is_some_and(|o| o.source_start == i) {
                 if let Some(open) = stack.pop() {
                     if let Some(kind) = open.kind {
                         cues.push(Cue {
