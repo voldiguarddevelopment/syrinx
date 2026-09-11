@@ -179,6 +179,13 @@ pub enum Void {
     /// The incumbent was not re-measured in this round. Comparing against a stored number
     /// would let driver drift or a GPU change masquerade as an improvement.
     IncumbentNotRemeasured,
+    /// The holdout partition cannot discriminate: the **incumbent itself** clears the
+    /// criteria on fewer than `required` of the holdout sentences, so a challenger is
+    /// being asked to succeed where the shipping phrase demonstrably does not.
+    ///
+    /// Raised only under [`HoldoutPolicy::RequireFitPartition`]. See ADR-0004 §PROPOSED
+    /// (2026-09-11) for why this is a void rather than a lowered bar.
+    HoldoutPartitionUnfit { incumbent_cleared: usize, of: usize, required: usize },
 }
 
 /// What a round concluded.
@@ -438,16 +445,101 @@ fn arm_on<'a>(
         .map(|s| &s.m)
 }
 
-/// Decide a round from per-sentence measurements.
+/// How the **holdout** split's breadth requirement is expressed.
+///
+/// Added 2026-09-11. The measured problem, from `renders/2026-09-09-tune-sad/FINDINGS.md`:
+/// on the `[sad]` round at n=8 the incumbent — the phrase that actually ships — cleared
+/// 2 of 3 tune sentences and **0 of 3 holdout sentences** (p = 0.0284, 0.0519, 0.1206,
+/// with `other`/`neutral` the top-gaining class on two of them). Under
+/// [`HoldoutPolicy::Absolute`] a challenger must therefore clear 2 of 3 sentences on which
+/// the shipping phrase clears none. That is not confirmation of a selection; it is a
+/// second, harder qualifying exam on sentences that happen to be hard — and nobody decided
+/// it should be.
+///
+/// The three sentence-dependence sweeps (`renders/2026-09-06-{sad,angry}-sentences/`) say
+/// why it happens: between-sentence variance is large enough to flip a cue's verdict, so a
+/// three-sentence partition can easily be one where the channel barely works.
+///
+/// Every arm here is a *policy*, pre-registered before a round like `min_sentences`.
+/// Choosing one after seeing the numbers is the forbidden move.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldoutPolicy {
+    /// **Status quo.** A candidate must clear `min_sentences` holdout sentences,
+    /// independent of how the incumbent fares there.
+    ///
+    /// Never accepts wrongly — it can only reject a phrase that deserved to win. Its cost
+    /// is that when the partition is hard the loop reports "nothing beat the incumbent"
+    /// for a reason that has nothing to do with the candidates, which is precisely the
+    /// "gate the incumbent cannot pass accepts nothing" failure this module already names
+    /// for the pooled design.
+    Absolute,
+    /// `Absolute`, **plus** a round-level void: if the incumbent cannot itself clear
+    /// `min_sentences` of the holdout sentences, the partition cannot discriminate and the
+    /// round is [`Void::HoldoutPartitionUnfit`].
+    ///
+    /// This is the recommended default (ADR-0004 §PROPOSED, 2026-09-11). It moves no bar,
+    /// so it adds no lever for a search to pull; and because a weak incumbent *voids* the
+    /// round rather than lowering the bar, it removes the incentive to make the reference
+    /// look bad that every relative rule creates.
+    RequireFitPartition,
+    /// Relative: a candidate must clear **strictly more** holdout sentences than the
+    /// incumbent does. Directly expresses "better than what we ship" — and collapses to
+    /// "clear at least one" exactly when the incumbent is weakest, which is when a single
+    /// lucky sentence is least distinguishable from noise.
+    StrictlyBroaderThanIncumbent,
+    /// Paired: count only the holdout sentences the incumbent *also* clears, and require
+    /// `min_sentences` of those. A genuine like-for-like comparison, but it fails closed on
+    /// exactly the round that motivated the question (0 eligible sentences → 0 cleared →
+    /// no proposal), and it discards the sentences where an improvement would matter most.
+    OnlyWhereIncumbentClears,
+}
+
+/// Does the incumbent clear the criteria **on its own terms** on this sentence?
+///
+/// Every criterion except the margin, which is meaningless against itself: significance
+/// versus plain and versus the sham, a judge move outside its own noise, the cued class
+/// gaining most, the WER veto and the speaker floor. Those are exactly the criteria the
+/// 2026-09-09 `[sad]` holdout sentences failed, and they are properties of the sentence at
+/// least as much as of the phrase.
+///
+/// Implemented by running the same [`check`] with `min_margin = 0.0` against the
+/// measurement's own delta, rather than by restating the criteria — a second copy would be
+/// free to drift from the first.
+fn incumbent_clears(m: &TuneMeasurement, th: &TuneThresholds) -> bool {
+    let self_th = TuneThresholds { min_margin: 0.0, ..th.clone() };
+    check(m, m.cued_delta, &self_th).is_ok()
+}
+
+/// Decide a round from per-sentence measurements, under [`HoldoutPolicy::Absolute`].
 ///
 /// `min_sentences` is how many sentences a candidate must clear on **each** split. It is
 /// pre-registered like everything else: choosing it after seeing the results would be
 /// picking the threshold that admits the answer you liked.
+///
+/// Frozen by `tests/cue_tune_per_sentence.rs`. It is now a thin delegation so that the
+/// policy work of 2026-09-11 is strictly additive: this function's behaviour is defined to
+/// be the `Absolute` arm, and a frozen test asserts the two agree.
 pub fn decide_per_sentence(
     ms: &[SentenceMeasurement],
     holdout_uses: usize,
     th: &TuneThresholds,
     min_sentences: usize,
+) -> PerSentenceReport {
+    decide_per_sentence_with_policy(ms, holdout_uses, th, min_sentences, HoldoutPolicy::Absolute)
+}
+
+/// Decide a round from per-sentence measurements under an explicit [`HoldoutPolicy`].
+///
+/// The tune split is unaffected by the policy: a candidate always has to clear
+/// `min_sentences` tune sentences, each with its own margin over the re-measured
+/// incumbent. Only the **holdout** requirement — the one the 2026-09-09 `[sad]` round put
+/// in question — varies.
+pub fn decide_per_sentence_with_policy(
+    ms: &[SentenceMeasurement],
+    holdout_uses: usize,
+    th: &TuneThresholds,
+    min_sentences: usize,
+    policy: HoldoutPolicy,
 ) -> PerSentenceReport {
     let alpha = th.corrected_alpha();
     let void = |v: Void| PerSentenceReport {
@@ -514,6 +606,33 @@ pub fn decide_per_sentence(
         });
     }
 
+    // ---- how well the incumbent does on the HOLDOUT partition, on its own terms.
+    //
+    // This is the number the 2026-09-09 `[sad]` round exposed: it was 0 of 3. Under
+    // `Absolute` it is computed and unused; under the other arms it is the whole question.
+    let incumbent_fit: Vec<&str> = holdout_sentences
+        .iter()
+        .filter(|s| {
+            arm_on(ms, s, TuneArm::Incumbent, Split::Holdout)
+                .is_some_and(|m| incumbent_clears(m, th))
+        })
+        .copied()
+        .collect();
+    let inc_hold_ok = incumbent_fit.len();
+
+    // A partition the shipping phrase cannot pass cannot confirm a challenger: whatever a
+    // candidate does there, "better" and "merely different" are indistinguishable. Voiding
+    // says so, where lowering the bar would quietly reward whoever made the reference look
+    // worst. Checked last of the voids, because the earlier ones are about round integrity
+    // and this one is about the partition.
+    if matches!(policy, HoldoutPolicy::RequireFitPartition) && inc_hold_ok < min_sentences {
+        return void(Void::HoldoutPartitionUnfit {
+            incumbent_cleared: inc_hold_ok,
+            of: holdout_sentences.len(),
+            required: min_sentences,
+        });
+    }
+
     // ---- score each candidate, per sentence, per split.
     let mut phrases: Vec<&str> = ms
         .iter()
@@ -548,6 +667,15 @@ pub fn decide_per_sentence(
 
         // Holdout is scored over ITS OWN sentences, separately.
         for s in &holdout_sentences {
+            // Paired policy: only sentences the incumbent also clears are eligible, so the
+            // comparison is like-for-like. An empty eligible set therefore yields zero
+            // cleared and the candidate fails CLOSED — an unanswerable partition must never
+            // read as a pass.
+            if matches!(policy, HoldoutPolicy::OnlyWhereIncumbentClears)
+                && !incumbent_fit.contains(s)
+            {
+                continue;
+            }
             let hm = ms.iter().find(|x| {
                 x.sentence == **s
                     && x.m.arm == TuneArm::Candidate
@@ -590,7 +718,13 @@ pub fn decide_per_sentence(
                 tune_ok += 1;
             }
         }
-        let passed = tune_ok >= min_sentences && hold_ok >= min_sentences;
+        // The tune side never varies: `min_sentences` sentences, each with its own margin
+        // over the re-measured incumbent. Only the holdout requirement is the policy's.
+        let hold_pass = match policy {
+            HoldoutPolicy::StrictlyBroaderThanIncumbent => hold_ok > inc_hold_ok,
+            _ => hold_ok >= min_sentences,
+        };
+        let passed = tune_ok >= min_sentences && hold_pass;
         detail.push((cand.clone(), tune_ok, per));
         if passed {
             winners.push((cand, hold_ok, hold_total));

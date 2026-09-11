@@ -114,3 +114,166 @@ marks that as where "measurement tool" becomes "derivative work".
   past a test, not edit a constant.
 - The driver writes a **proposal** under `.opt-reports/`, never into `crates/syrinx-cue/`.
 - Ledger amendment **A29**.
+
+---
+
+# PROPOSED AMENDMENT — 2026-09-11: what the holdout split may require
+
+**Status of this section: PROPOSED. Nothing below is accepted.** ADR-0004's own Status
+line is unchanged and this amendment does not change it; acceptance is a human act
+(ADR-0001 §7 / C0.2′). The code shipped alongside it is a *policy enum with the status quo
+as its default-compatible arm*, not a change of behaviour: `decide_per_sentence` is defined
+to be the existing rule and a frozen test asserts that.
+
+## The question, and the measurement that raised it
+
+`renders/2026-09-09-tune-sad/FINDINGS.md`, `[sad]` at n=8, `1.7B-CustomVoice`:
+
+| | tune | holdout |
+|---|:-:|:-:|
+| incumbent (`"Speak in a sad, sorrowful tone"`) clears | **2 / 3** | **0 / 3** |
+
+The holdout p-values for the shipping phrase were 0.0284, 0.0519, 0.1206 against a
+corrected alpha, and on two of the three the top-gaining class was `other`/`neutral` rather
+than `sad`. `decide_per_sentence` requires a candidate to clear `min_sentences` (2 of 3) on
+**each** split, so a challenger must clear 2 of 3 sentences on which the shipping phrase
+clears none.
+
+That was never decided. It is the unexamined consequence of applying one absolute count to
+both splits, and §4/§5 of this ADR are silent on it.
+
+Context that makes it an ordinary occurrence rather than bad luck:
+`renders/2026-09-06-sad-sentences/` and `renders/2026-09-06-angry-sentences/` establish
+between-sentence variance large enough to flip a cue's verdict — `[angry]` reads
+p = 0.0045 on one sentence and p = 0.7417 on another. A three-sentence partition where the
+channel barely works is a normal draw from that distribution.
+
+## The options, and what each can be gamed by
+
+Implemented as `syrinx_eval::tune::HoldoutPolicy`; frozen in
+`tests/cue_tune_holdout_policy.rs`.
+
+### A — `Absolute`: keep absolute breadth (status quo)
+
+Clear `min_sentences` holdout sentences, whatever the incumbent does there.
+
+*For.* The bar is fixed, pre-registered and auditable: "it worked on 2 of 3 held-out
+sentences" is a claim a reader can check without knowing anything about the incumbent's
+round. It cannot be moved by a bad incumbent draw. Crucially, **its error is one-sided** —
+it can only reject a phrase that deserved to win, never accept one that did not, which is
+the safe direction of error in a system whose stated worst outcome is a false green.
+
+*Against.* When the partition is hard, the loop's answer ("nothing beat the incumbent") is
+determined by the sentences rather than by the candidates, and reads as a verdict about the
+candidates. It is the same defect this module's own header names for the pooled design:
+*"a gate the incumbent cannot pass can accept nothing"* — the failure ADR-0003 recorded for
+the 0.85 activation floor, reached from the other direction.
+
+*Gameable by.* Choosing easy holdout sentences, and by `min_sentences` itself. Both are
+pre-registered human choices, which is a mitigation and not a defence.
+
+### B — `StrictlyBroaderThanIncumbent`: relative holdout requirement
+
+Clear strictly more holdout sentences than the incumbent does.
+
+*For.* It states exactly what a tuning loop is for — better than what we ship — and it is
+the natural reading of "confirmation": the holdout re-runs the comparison selection was
+made on, rather than setting a fresh exam.
+
+*Against.* The bar collapses precisely when the incumbent is weakest. On the 2026-09-09
+round it becomes "clear 1 of 3", and one sentence is what the whole per-sentence design
+exists to stop being decisive. The bar also now moves with a *measurement* of the
+incumbent, so a bad draw for the reference lowers the bar for every challenger in that
+round. Pinned as behaviour in
+`strictly_broader_collapses_to_a_single_sentence_when_the_incumbent_clears_none`.
+
+*Gameable by.* Anything that depresses the incumbent's measured record — harder sentences,
+lower n, an unlucky seed set. It builds in an **incentive to make the reference look
+worse**, which is the wrong incentive to have anywhere near a search loop.
+
+### C — `OnlyWhereIncumbentClears`: paired / conditional breadth
+
+Count only the holdout sentences the incumbent also clears, and require `min_sentences` of
+those.
+
+*For.* A genuine like-for-like comparison: you are asked to win only where the channel
+demonstrably works, which is the cleanest answer to the "different vs better" confound.
+
+*Against.* On the round that raised the question the eligible set is **empty**. It has to
+fail closed (it does — `the_paired_arm_fails_closed_on_an_empty_eligible_set`), so it
+answers nothing while looking like an ordinary rejection. It also discards the sentences
+where an improvement would matter most, and a partition with one eligible sentence quietly
+becomes a one-sentence test.
+
+*Gameable by.* Making the incumbent fail on the hard sentences shrinks the eligible set to
+the easy ones, so breadth evaporates without any threshold changing.
+
+### D — `RequireFitPartition`: keep the absolute bar, and void an unfit partition
+
+Keep A exactly. Add one round-level void: if the incumbent cannot itself clear
+`min_sentences` of the **holdout** sentences, the round is
+`Void::HoldoutPartitionUnfit` and no candidate is scored.
+
+The incumbent's self-clearing is the same `check` with the margin criterion neutralised —
+significance versus plain and versus the sham, a judge move outside its own noise, the cued
+class gaining most, the WER veto, the speaker floor. Those are exactly the criteria the
+2026-09-09 holdout sentences defeated.
+
+*For.*
+- **It moves no bar.** There is no new lever for a search to pull; on a partition the
+  incumbent passes, D is byte-identical to A (pinned in
+  `on_a_fit_partition_require_fit_is_indistinguishable_from_absolute`).
+- **It inverts B's incentive.** A weak reference *voids* the round instead of lowering the
+  bar, so there is nothing to gain by making the incumbent look bad.
+- **It makes an invisible problem loud.** Today the driver prints "the incumbent stands";
+  under D it prints that the partition could not answer, which is what was actually true on
+  2026-09-09.
+- **It is the same argument as an existing void.** `IncumbentNotRemeasured` exists because
+  "without it there is nothing to have a margin over". An incumbent that is re-measured and
+  fails every holdout criterion is the same hole one step further in.
+- It is the honest answer to "different or better?": *this partition cannot tell you.*
+
+*Against.* It can never accept a phrase that works only where the incumbent fails — the
+case FINDINGS calls "arguably exactly what tuning should reward". The reply is that this is
+precisely the case where "better" and "different" are indistinguishable from the data, and
+that the case is deferred rather than forbidden: it becomes decidable as soon as a
+partition exists that the incumbent can pass. It also costs a round.
+
+*Gameable by.* Re-drawing the holdout until one is fit — p-hacking on the partition. This
+is real and is **not** closed by anything in this amendment; see Open questions.
+
+## Recommendation
+
+**D (`RequireFitPartition`)**, as a pre-registered per-round policy. It is the only option
+that answers the question without introducing a threshold that a search can move, and its
+failure mode is a loud void rather than a quiet acceptance. A conjunction of A with one
+more guard is in the spirit of §4: conjunctive, never a weighted sum.
+
+The policy is a *parameter*, exactly like `min_sentences` and for the same reason — it must
+be chosen before a round, never after seeing the numbers. §7's "what is never automated"
+list applies to it unchanged.
+
+## What this amendment does NOT decide (human, before the next round)
+
+1. **Whether to adopt D at all**, and whether `Absolute` remains the default. Nothing in
+   the code changes today: `decide_per_sentence` is still A, and
+   `examples/tune_instruct.rs` still calls it.
+2. **Whether a `HoldoutPartitionUnfit` void consumes a `holdout_uses` budget slot.** It
+   serves no decision, but it does leak — you learn the incumbent fails there. Not
+   implemented: the budget is the driver's bookkeeping, not the pure function's.
+3. **How many holdout re-draws are allowed** before re-drawing is itself the search. D is
+   gameable exactly here, and the honest bound is a human one.
+4. **Whether the 2026-09-09 `[sad]` round should be re-labelled.** Under D its verdict is
+   "partition unfit", not "the incumbent stands". The measured numbers do not change; the
+   sentence written under them would.
+5. **Whether the holdout partition should be *chosen* so the incumbent passes it.** That is
+   D's requirement stated as a selection rule, and it is a different and stronger claim —
+   it would make the holdout non-random by construction.
+
+## Consequences if accepted
+
+- `examples/tune_instruct.rs` switches to `decide_per_sentence_with_policy(..., policy)`
+  with the policy printed in the round header and recorded in the proposal row.
+- A `[[tuned]]` row would want the policy in its provenance, alongside `holdout_id` and
+  `holdout_uses` — a row is not auditable if you cannot tell which rule admitted it.
+- Ledger amendment to follow on acceptance.
