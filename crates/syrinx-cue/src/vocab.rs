@@ -37,6 +37,11 @@ pub struct Entry {
     pub cosyvoice: Option<String>,
     #[serde(default)]
     pub step_audio: Option<String>,
+    /// Chatterbox Turbo's native `[tag]`, brackets included. A CLOSED nineteen-token set
+    /// (`added_tokens.json`, ids 50257-50275), so absence here means "no counterpart",
+    /// not "we did not get round to it" — see the column's note in `vocab.toml`.
+    #[serde(default)]
+    pub chatterbox_turbo: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

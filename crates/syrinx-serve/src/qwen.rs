@@ -99,7 +99,10 @@ impl QwenMode {
             BackendId::FishS1Mini
             | BackendId::FishS2Pro
             | BackendId::CosyVoice2
-            | BackendId::CosyVoice3 => None,
+            | BackendId::CosyVoice3
+            // An unadopted candidate with no crate and no weights — see its caps.toml
+            // row. It is not Qwen, so it has no Qwen generation mode.
+            | BackendId::ChatterboxTurbo => None,
         }
     }
 }

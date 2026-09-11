@@ -187,6 +187,10 @@ pub enum BackendId {
     Qwen17bVoiceDesign,
     CosyVoice2,
     CosyVoice3,
+    /// **Unadopted candidate.** See the `chatterbox-turbo` row in `caps.toml`: it is here
+    /// so the cue layer can describe a backend with a real event channel, not because the
+    /// project has adopted it. No weights exist on this box.
+    ChatterboxTurbo,
 }
 
 impl BackendId {
@@ -202,6 +206,7 @@ impl BackendId {
         Self::Qwen17bVoiceDesign,
         Self::CosyVoice2,
         Self::CosyVoice3,
+        Self::ChatterboxTurbo,
     ];
 
     /// The `caps.toml` id. The exhaustive match means a new variant cannot compile until
@@ -217,6 +222,7 @@ impl BackendId {
             Self::Qwen17bVoiceDesign => "qwen3-1.7b-voicedesign",
             Self::CosyVoice2 => "cosyvoice2",
             Self::CosyVoice3 => "cosyvoice3",
+            Self::ChatterboxTurbo => "chatterbox-turbo",
         }
     }
 
