@@ -19,6 +19,7 @@ structure of the questions they raise. A real commercial decision needs a lawyer
 | `w2v2-msp-dim` (audEERING) | dimensional affect — **REJECTED 2026-09-06 on licence** | CC-BY-NC-SA-4.0 | **no** |
 | `emotion2vec/emotion2vec_plus_large` | affect judge (**adopted 2026-09-06**): 9-class SER | FunASR Model Open Source License | **yes**, attribution required |
 | `ehcalabres/wav2vec2-lg-xlsr-en-...` | affect judge (**superseded 2026-09-06**): RAVDESS 8-class | **Apache-2.0** | yes |
+| `ResembleAI/chatterbox-turbo` | **candidate only — NOT adopted.** Metadata only on this box (4 config/tokenizer files, **no weights**) | **MIT** (card front matter) | **yes** |
 
 ### Datasets
 
@@ -60,15 +61,80 @@ shipping path.
 | `Qwen/Qwen2.5-Omni-7B`, `Qwen3-Omni-30B-A3B` | Apache-2.0 (tagged `other`, `license_name: apache-2.0`) | yes | heavier; same caveat |
 | `emotion2vec/emotion2vec_plus_large` | FunASR licence | yes, attribution | dedicated affect representation |
 
-### Candidate second family
+### Candidate second family — Chatterbox (Resemble AI)
 
-| model | licence | notes |
-|---|---|---|
-| `ResembleAI/chatterbox` | **MIT** | 23 languages, voice cloning. Fully permissive — no NC clause, no ShareAlike. A candidate, not adopted; it would need the same reference-anchored port treatment Qwen got before anyone trusts it. |
+**Not adopted, and nothing here adopts it.** Qwen3-TTS remains the TTS path and the
+fallback. This section exists to discharge `CLAUDE.md`'s standing rule — *"any new backend
+is a licence question first; add its row to `docs/LICENSES.md` before building on it"* —
+**before** anyone builds. Whether to take on a second family at all is a scope decision
+under ADR-0001 §7, it is a human act, and it has not been made. Capability detail lives in
+`backends/CONTROL_SURVEY.md`; cost and phasing in `backends/CHATTERBOX_PORT_SCOPE.md`.
 
-MIT is if anything cleaner than Apache-2.0 here (no patent grant, but no NOTICE obligation
-either). It is the right shape for a second family; adopting it is a scope decision, not a
-licence one.
+**One row was not enough, because this is two checkpoints with different capabilities.**
+The tag channel and the languages live in different weights and cannot be had from one
+model:
+
+| checkpoint | what it is | paralinguistic tags | licence | commercial |
+|---|---|---|---|---|
+| `ResembleAI/chatterbox-turbo` | **English only** (`language: [en]`), 32 kHz, decoder distilled to one step. Card says **350M**. | **19 native inline tags**, enumerated — see `backends/CONTROL_SURVEY.md` §2 | **MIT** | **yes** |
+| `ResembleAI/chatterbox` | **500M**, **23 languages** (Multilingual V3), plus an English-only 500M and six single-language finetunes in the same repo. `exaggeration` / `cfg_weight` scalars. | **none** — no tag syntax documented or shipped | **MIT** | **yes** |
+
+Read on 2026-09-12 from the two model cards and, for Turbo, from the checkpoint's own
+tokenizer metadata now on this box at `/data/models/chatterbox-turbo` — `added_tokens.json`,
+`tokenizer_config.json`, `special_tokens_map.json`, `t3_turbo_v1.yaml`. **The weights are
+not downloaded** (~4 GB); every claim below is from a card or from those four files.
+
+#### What the licence says
+
+Both cards declare **`license: mit`** in their YAML front matter. MIT grants use, copy,
+modify, merge, publish, distribute, sublicense and sell, conditioned only on carrying the
+copyright notice and the permission notice. **No NonCommercial clause, no ShareAlike, no
+NOTICE file to maintain — and no patent grant**, which is the one thing Apache-2.0 gives
+that MIT does not. The inference code, `github.com/resemble-ai/chatterbox`, is MIT with a
+LICENSE file checked in.
+
+One thing to hand a lawyer rather than settle here: **neither Hugging Face weight repo
+ships a LICENSE file.** The grant on the weights is the card's front-matter tag and nothing
+else. That is how Hugging Face expects a licence to be declared and it is almost certainly
+what Resemble AI intends, but it is thinner than checked-in text, and the code repo's
+LICENSE covers the code rather than self-evidently the checkpoints. Contrast `s2-pro`,
+where the restriction is a licence *file* inside the checkpoint and there is nothing left
+to argue about. The asymmetry is worth noticing: we were willing to treat Fish's file as
+binding, so we should not treat a tag as binding on a different standard of evidence.
+
+#### What it means for us
+
+- **It is the cleanest licence of any TTS family screened here** — cleaner than Apache-2.0
+  on obligations, weaker on patents. That is a reason it *stays* a candidate, not a reason
+  to move: Qwen is Apache-2.0, already ported, and anchored end to end. **No licence
+  problem is driving this**, unlike the 2026-09-06 decision that displaced Fish.
+- **The two checkpoints are a capability fork, not a version bump.** Anything built on
+  Turbo's tag channel is English-only by construction, and anything built on the 23
+  languages has no tag channel. A `caps.toml` keyed on "Chatterbox" would be wrong for one
+  of them — precisely the defect `CONTROL_SURVEY.md` §3.1 already records, and a licence
+  screen cannot fix it.
+- **Every generated file is watermarked by default, and the watermark is not ours.** Both
+  cards state that every audio file Chatterbox generates carries Resemble AI's PerTh
+  (Perceptual Threshold) watermark. Under this file's own rule — anything that ends up *in*
+  a shipped artifact inherits its lineage — audio we sold would carry a third party's mark.
+  Three things that look like one and are not:
+  1. **Licence: clean.** The watermarker is `github.com/resemble-ai/perth`, **MIT**, a
+     separate package from the model. Nothing about it is restrictive.
+  2. **What actually applies it: the Python package, not the weights.** The card documents
+     watermarking as a property of upstream's generate path and demonstrates detection with
+     an ordinary `import perth` over the finished waveform. It is post-processing, so **a
+     Rust port would not inherit it** — it would emit unwatermarked audio unless the
+     watermarker were deliberately implemented or linked. "Always on" is a fact about
+     upstream's code; do not carry it forward as a fact about a port.
+  3. **Our own obligation is separate and unmet by theirs.** `syrinx-serve` owes a
+     watermark of its own. Two neural watermarks in one waveform raises questions nobody
+     has answered (do they survive each other? which detector answers a provenance
+     claim?), and *dropping* the upstream one is equally a decision rather than a default.
+     Neither is settled here, and neither should be settled by whichever happens to be
+     easier to code.
+
+MIT is the right shape for a second family. **Adopting one is a scope decision, not a
+licence one**, and this section does not make it.
 
 ## The judge was replaced again, 2026-09-06 — measured, not assumed
 
