@@ -30,6 +30,7 @@ members = [
     "crates/syrinx-cue",
     "crates/syrinx-qwen",
     "crates/syrinx-stt",
+    "crates/syrinx-chatterbox",
 ]
 
 # Dev-deps for the integration tests under tests/. The real_* parity/eval tests
@@ -45,6 +46,10 @@ syrinx-prosody = { path = "crates/syrinx-prosody" }
 # on for the `real` build; Cargo unifies the two, and these tests only touch the API
 # that exists in both.
 syrinx-qwen = { path = "crates/syrinx-qwen", default-features = false }
+# Chatterbox Turbo (CANDIDATE second family, not adopted). Phase 0 is model-free by
+# construction — the crate has no features at all and no Candle — so `tests/chatterbox_*.rs`
+# are dev-dep-only and never touch the root `real` feature. See crates/syrinx-chatterbox/src/lib.rs.
+syrinx-chatterbox = { path = "crates/syrinx-chatterbox" }
 serde_json = "1"
 axum = "0.7"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

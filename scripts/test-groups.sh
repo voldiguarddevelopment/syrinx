@@ -62,7 +62,17 @@ GROUP_qwen="qwen_config_contract qwen_tensor_manifest qwen_sampling_contract qwe
 # 23 s together, where the five-test group took 21.6 min.
 GROUP_qwen_ckpt="real_qwen_prompt_parity real_qwen_stack_parity real_qwen_encode_parity real_qwen_speaker_parity"
 
-ALL_GROUPS="unit modelfree cue qwen cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qwen_ckpt"
+# Chatterbox Turbo (syrinx-chatterbox) — a CANDIDATE second family, not adopted; Qwen3-TTS
+# remains the TTS path. Phase 0 of the port is model-free by construction: the crate parses
+# the shipped config files and derives a tensor manifest, and the manifest is checked against
+# the checkpoints' safetensors HEADERS (committed under tests/golden/chatterbox/index/, no
+# weight data). There is deliberately no weight-backed Chatterbox group yet and no `real`
+# feature on the crate — see crates/syrinx-chatterbox/src/lib.rs on why putting pure config
+# functions behind `real` is the mistake QWEN_PORT_STATUS.md §5 gap 5 records. These must
+# never SKIP.
+GROUP_chatterbox="chatterbox_config_contract chatterbox_tensor_manifest"
+
+ALL_GROUPS="unit modelfree cue qwen chatterbox cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qwen_ckpt"
 
 # ---- opt-in tests (deliberately in NO group) ---------------------------------
 # A test named here is reachable only by naming it:
@@ -204,7 +214,7 @@ FAMILY_whisper="stt"
 
 # Everything that needs no weights, no fixtures and no GPU. These must never SKIP:
 # a SKIP here is a bug in the runner or the test, not a partial box.
-FAMILY_free="unit modelfree cue qwen"
+FAMILY_free="unit modelfree cue qwen chatterbox"
 # The complement: everything gated on weights or parity fixtures.
 FAMILY_weights="cv2 cv2e2e cv3 cv3e2e fish_s1 fish_s2 stt qwen_ckpt"
 FAMILY_all="$ALL_GROUPS"
