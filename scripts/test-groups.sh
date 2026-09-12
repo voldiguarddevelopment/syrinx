@@ -25,7 +25,7 @@
 # Every member crate's #[cfg(test)] modules, in one row. `crate_unit_tests` is a
 # PSEUDO-TEST, not a tests/<name>.rs file — see the pseudo-test section below for
 # why the row exists and how the runners execute it.
-GROUP_unit="crate_unit_tests"
+GROUP_unit="crate_unit_tests crate_integration_tests"
 
 GROUP_modelfree="voice_lib emotion_tags watermark audio_server health_endpoint server_hardening real_cv3_quality_source real_cv3_multinomial"
 
@@ -145,7 +145,7 @@ optin_why() {
 # 32 cores): 13.6 s with no env / 14.5 s with scripts/test-all.env sourced. Of
 # that, syrinx-fish's 13 tests are ~11.9 s and everything else is ~2 s.
 
-PSEUDO_TESTS="crate_unit_tests"
+PSEUDO_TESTS="crate_unit_tests crate_integration_tests"
 
 is_pseudo_test() { case " $PSEUDO_TESTS " in *" $1 "*) return 0 ;; esac; return 1; }
 
@@ -159,6 +159,18 @@ test_cargo_args() {
     # so the board would say "128 passed in 3 crates" and quietly omit the rest.
     # It does NOT soften the verdict — cargo still exits non-zero.
     crate_unit_tests) printf '%s\n' --workspace --lib --no-fail-fast ;;
+    # `--workspace --lib` above reaches ONLY library unit tests. It does not run a
+    # single integration binary under crates/*/tests/, and 68 tests live there --
+    # including crates/syrinx-cue/tests/invariant_property.rs, which CLAUDE.md names
+    # as the enforcement of the hard invariant and calls a release blocker. Until
+    # 2026-09-12 no board had ever run it: `test-all.sh free` printed 27 PASS while
+    # the release blocker was never executed. Same shape as the unknown-selector bug
+    # this file was written to kill -- a green board that did not test the thing.
+    # --exclude the root package: its tests/*.rs each already have their own board row,
+    # so including them would run every frozen test twice and hide WHICH one failed inside
+    # an aggregate. The gap this row closes is only the member-crate integration binaries.
+    crate_integration_tests)
+      printf '%s\n' --workspace --tests --exclude syrinx-workspace-scaffold-tests --no-fail-fast ;;
     *)                printf '%s\n' --test "$1" ;;
   esac
 }
@@ -179,12 +191,12 @@ test_can_skip() { ! is_pseudo_test "$1"; }
 test_detail() {
   local t="$1" log="$2"
   case "$t" in
-    crate_unit_tests)
+    crate_unit_tests|crate_integration_tests)
       [ -f "$log" ] || return 0
       local sk; sk="$(grep -cE 'SKIP |skipping ' "$log")"
       awk -v sk="$sk" '
         /^test result:/ { p += $4; f += $6; g += $8; if ($4 + $6 + $8 > 0) c++ }
-        END { printf "%d passed, %d failed, %d self-skipped, %d ignored in %d crates", p, f, sk, g, c }
+        END { printf "%d passed, %d failed, %d self-skipped, %d ignored in %d binaries", p, f, sk, g, c }
       ' "$log"
       ;;
     *) : ;;
