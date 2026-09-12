@@ -63,6 +63,13 @@ answer than the underpowered run could give. Worth having spent 30 minutes on.
 
 ## Two smaller things, recorded
 
+> **Both were chased on 2026-09-11 — see `ANOMALIES.md` in this directory.** The A/A is
+> chance (the test is exactly the size it claims; 0.0507 = 1233/24310 did not even reject,
+> and one such value among three texts is a 1-in-7 event). The `wer 0.200` is one word edit
+> in a five-word reference and *not* a text/audio mismatch — 0.444 and 0.800 are the only
+> values a wrong-end-of-the-split bug could produce. Which word went wrong is still unknown,
+> because the runner discards its transcripts.
+
 - **A/A on the leading text is 0.0507**, a hair above nominal 0.05. It does not violate, but
   the plain arm on *"I really cannot believe what you just told me."* is closer to
   disagreeing with itself than any other text here. Worth watching, not acting on.

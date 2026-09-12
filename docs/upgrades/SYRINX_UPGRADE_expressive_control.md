@@ -975,3 +975,51 @@ Also open from the same day: the `[sad]` tuning incumbent clears **0 of 3 holdou
 sentences**, so a challenger must clear sentences the incumbent cannot. Defensible (a phrase
 working where the incumbent fails is what tuning should reward) but undecided — a threshold
 question on `min_sentences`, not a bug.
+
+### A37 — 2026-09-11 — **both C4.2′ anomalies chased: one is chance, one is not the bug it looked like**
+
+A36 left two things "worth watching, not acting on". Both are now measured, model-free, with
+no GPU: `renders/2026-09-09-c42-certification/ANOMALIES.md`.
+
+**The A/A at p=0.0507 is chance, and the three ways it could have been structure are ruled
+out.** Feeding `activation_test` every labeling of one fixed pool returns `{1/N … N/N}`
+**bit-exactly** — enumerated at n=4 and n=5 over Gaussian, Cauchy (no finite variance) and
+real short-clip features. Because that statement is conditional on the pool, no input
+distribution can break it: **heavy tails and short clips are dead as explanations, by proof
+rather than by simulation.** The size therefore is `floor(N·α)/N`, which at n=9 and α=0.05
+is `1215/24310 = 0.049979` — so `0.0507 = 1233/24310` **did not reject at all**, and
+`P(min of 3 ≤ 0.0507) = 0.145` (independence checked, not assumed: the three texts share
+one pair of seed blocks, and across 600 simulated worlds their A/A p-values correlate at
+|r| ≤ 0.047). Monte-Carlo agrees — 50 000 replications at n=9 give 0.05072 ± 0.00098, and
+20 000 Cauchy ones give 0.05015. The seed blocks `0..9` / `1000..1009` are exchangeable
+(1400 replications through the project's own `SplitMix64`, FPR 0.048–0.050) and
+structurally cannot be otherwise. The run's *shortest* text has the *highest* A/A, which is
+the opposite of the short-clip story.
+
+**The `wer 0.200` is one word edit in a five-word reference, not a text/audio mismatch.**
+The C4.2′ runner renders the *carrier span* of a mid cue — `"before it gets any later."`,
+five words, which is also what `render_all` does in production — and scores it against that
+same string, one variable used for both. The ADR-0005 class (holding the wrong end of a
+split) cannot produce 0.200: the two mismatch directions give `4/9 = 0.444` and `4/5 =
+0.800`. Also ruled out: case/punctuation, oracle nondeterminism (`decode` is argmax at every
+temperature rung), markup leakage, and anything special about `calm` in the lowering.
+**What caused the edit is undetermined and stays that way** — the runner computes `wer()`
+and throws the transcript away, so A36's "plausibly the oracle mishearing a quieter
+delivery" is still a guess with two live rivals (a padded-clip hallucination; a wrong
+detected language).
+
+Two new `GROUP_cue` gates, both deterministic:
+`tests/acoustic_permutation_exactness.rs` (exact uniformity, the n=9 size, seed-block
+exchangeability) and `tests/cue_measure_reference_text.rs` (the carrier span of every
+sentinel, and the 0.200/0.444/0.800 table that tells an oracle error from a wrong-end bug).
+Seven mutants applied by hand; five killed, two understood — M1 (`>= x-1e-12` → `> x-1e-12`)
+is genuinely equivalent, and M7 (trailing manner cue to `first` instead of `last`) is
+already killed by `tests/cue_trailing_manner.rs`.
+
+**Open for a pass with a GPU**, all in `real_cue_activation_qwen.rs`: record the transcripts
+in `report.json` (two lines, and this whole investigation becomes a five-second read); score
+WER over all `n` renders instead of `cued[0]` alone; force `transcribe_lang(.., Some("en"))`
+rather than running LID on 1.4 s of audio. None was done here because that file is
+`cfg(all(real, cuda))` and this pass could not even compile it — editing an unrunnable gate
+is what CLAUDE.md forbids. Also cheap and worth doing: two more disjoint plain seed blocks
+on the one text, to turn the A/A from a single number into a repeatability statement.
