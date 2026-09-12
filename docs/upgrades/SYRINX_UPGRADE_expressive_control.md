@@ -1023,3 +1023,60 @@ rather than running LID on 1.4 s of audio. None was done here because that file 
 `cfg(all(real, cuda))` and this pass could not even compile it — editing an unrunnable gate
 is what CLAUDE.md forbids. Also cheap and worth doing: two more disjoint plain seed blocks
 on the one text, to turn the A/A from a single number into a repeatability statement.
+
+### A37b — 2026-09-11 — **the holdout question gets four named options (ADR-0004 PROPOSED); and the tuned-row path turned out to be wired to nothing**
+
+*(Numbered **A37b**, not A37. Two agents working in parallel worktrees allocated A37 on the same day; the earlier-committed one kept the plain number. CLAUDE.md's rule is that IDs are immutable and splits add suffixes, so a suffix is the convention this file already has for exactly this shape of clash — and it keeps the 2026-09-11 work ahead of A38, which is dated 2026-09-12. Neither entry had reached `main`, so nothing published was renumbered.)*
+
+**The holdout threshold (A36's open item).** `decide_per_sentence` demands `min_sentences`
+on *each* split as an absolute count, so on the 2026-09-09 `[sad]` round a challenger had to
+clear 2 of 3 holdout sentences the incumbent cleared **none** of. Four options are now
+written down and implemented as `syrinx_eval::tune::HoldoutPolicy`, each with what it can be
+gamed by: `Absolute` (status quo — one-sided error, but a bar the incumbent cannot pass
+accepts nothing, the same defect A33 fixed on the pooled side); `StrictlyBroaderThanIncumbent`
+(collapses to "clear one sentence" exactly when the incumbent is weakest, and rewards
+whoever makes the reference look worst); `OnlyWhereIncumbentClears` (like-for-like, but the
+eligible set on the round in question is empty, so it fails closed and answers nothing); and
+`RequireFitPartition` — keep the absolute bar, and **void** the round when the incumbent
+cannot itself clear `min_sentences` holdout sentences.
+
+`RequireFitPartition` is the recommendation, argued in ADR-0004 §PROPOSED (2026-09-11). It
+moves no bar, so it adds no lever a search can pull; it inverts the incentive the relative
+rules create, because a weak reference voids rather than lowers; and it is the same argument
+as the existing `IncumbentNotRemeasured` void one step further in. Nothing is accepted:
+`decide_per_sentence` is still `Absolute` by definition, and `examples/tune_instruct.rs`
+still calls it. Frozen in `tests/cue_tune_holdout_policy.rs`, 14 hand-injected mutants, no
+survivors.
+
+**The tuned-row path had never run, and it was wired to nothing.** ADR-0004's storage
+mechanism had unit coverage of inertness and zero end-to-end coverage. Driving it with
+fixture rows (`tests/instruct_tuned_path.rs`, 23 assertions) found four defects:
+
+1. **`phrase_for_backend` was called from tests and from no production code.** Every prefix
+   in the pipeline came from `hoist::instruct_for`, which is backend-blind, so an accepted
+   row a human had signed would have been inert with no diagnostic. ADR-0004 §2's
+   tuned → curated → fallback order did not exist anywhere — tiers 1–2 in `instruct.rs`,
+   tier 3 in `hoist.rs`, nothing joining them. Fixed: `instruct_with` / `pass_hoist_with`
+   resolve against `caps.id`, the per-checkpoint key §1 writes a row under.
+2. **A tuned phrase was exempt from the hard invariant.** The frozen well-formedness test
+   walks curated rows only, so a signed row containing `[sad]` would have reached a backend
+   as literal text — from the one source no human reads before it ships.
+   `syrinx_cue::instruct::phrase_is_safe` now gates at load, and a frozen test asserts it
+   agrees case for case with `syrinx_eval::tune::phrase_is_safe`, which gates at proposal.
+3. **Provenance was accepted blank or absurd**: `judge = ""`, `measured_on = ""`,
+   `judge_recall_on_class = 3.0`, `margin = -1.0`, and a `lang` no lookup can ever produce
+   (silently inert forever). All are load errors now, for signed and unsigned rows alike.
+   `backend` deliberately keeps no such check: it is an open set, so an unknown id is not
+   *provably* unreachable the way an unknown `lang` is.
+4. **Two accepted rows for one `(backend, lang, label)` resolved by row order.** Now a load
+   error: a file that does not say what will be spoken must not load.
+
+Also fixed: `examples/tune_instruct.rs` hard-coded `measured_on = "2026-09-06"` and
+`holdout_id = "{label}-2026-09-06-a"` into every proposal it wrote, so the 2026-09-09 rounds
+would have signed a false date. It now requires `SYRINX_TUNE_MEASURED_ON` and refuses to
+default it — the load-time validation can tell that a date is blank and can never tell that
+it is a lie.
+
+`crates/syrinx-cue/instruct.toml` still has **zero** `[[tuned]]` rows and a frozen test
+asserts the shipped file contains no `accepted_by` at all. Signing a real tuned phrase
+remains a human act.

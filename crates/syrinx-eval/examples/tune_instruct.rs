@@ -357,21 +357,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (Some(a), Some(b)) => a - b,
                 _ => f64::NAN,
             };
+            // The date this round actually ran, not the date this line was written. It was
+            // hard-coded to "2026-09-06" and the 2026-09-09 rounds would have written that
+            // literal into a provenance field whose entire purpose is to record when the
+            // measurement happened. `syrinx-cue` validates that the field is non-blank; it
+            // cannot possibly tell that a date is a lie, so the only place to be honest
+            // about it is here.
+            let measured_on = std::env::var("SYRINX_TUNE_MEASURED_ON").map_err(|_| {
+                "set SYRINX_TUNE_MEASURED_ON=YYYY-MM-DD (the date this round ran) — a \
+                 provenance date must never be defaulted"
+            })?;
+
             let row = format!(
                 "# PROPOSAL — inert until a human adds `accepted_by`. ADR-0004.\n\
                  [[tuned]]\nlabel = {:?}\nlang = {:?}\nbackend = \"qwen3-1.7b-customvoice\"\n\
                  phrase = {:?}\n# accepted_by = \"\"   # <- listen first, then sign\n\
-                 measured_on = \"2026-09-06\"\nincumbent = {:?}\nmargin = {:.3}\n\
+                 measured_on = {:?}\nincumbent = {:?}\nmargin = {:.3}\n\
                  judge = \"emotion2vec/emotion2vec_plus_large\"\njudge_recall_on_class = {:.3}\n\
                  holdout_id = {:?}\nholdout_uses = 0\n\
                  notes = \"proposed by examples/tune_instruct.rs\"\n",
                 c.label,
                 lang_code(lang),
                 c.phrase,
+                measured_on,
                 incumbent,
                 margin,
                 judge_recall_for(&label),
-                format!("{label}-2026-09-06-a"),
+                format!("{label}-{measured_on}-a"),
             );
             std::fs::create_dir_all(std::path::Path::new(&path).parent().unwrap()).ok();
             std::fs::write(&path, &row)?;

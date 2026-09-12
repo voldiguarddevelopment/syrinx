@@ -24,6 +24,19 @@ pub enum InstructError {
     Parse(String),
     /// A label carries an empty phrase in one of the languages.
     Empty { label: String, lang: &'static str },
+    /// A `[[tuned]]` row is present but not usable as written: a provenance field that is
+    /// blank or out of range, a `lang` no lookup can ever produce, or a phrase that would
+    /// carry cue markup back into a backend.
+    ///
+    /// Rejected at LOAD rather than defaulted, because a tuned row's whole justification is
+    /// its provenance (ADR-0004 §1): a row whose `judge` is `""` is not a row that records
+    /// which judge measured it, and a row nobody notices is broken is one signature away
+    /// from shipping.
+    InvalidTuned { label: String, field: &'static str, why: String },
+    /// Two accepted `[[tuned]]` rows claim the same `(backend, lang, label)`. The file does
+    /// not then say what will be spoken, and silently keeping the last one written makes
+    /// the answer depend on row order.
+    DuplicateTuned { backend: String, lang: String, label: String },
 }
 
 impl std::fmt::Display for InstructError {
@@ -32,6 +45,12 @@ impl std::fmt::Display for InstructError {
             InstructError::Parse(e) => write!(f, "instruct table parse error: {e}"),
             InstructError::Empty { label, lang } => {
                 write!(f, "instruct phrase for {label:?} is empty in {lang}")
+            }
+            InstructError::InvalidTuned { label, field, why } => {
+                write!(f, "tuned row for {label:?}: field {field} is {why}")
+            }
+            InstructError::DuplicateTuned { backend, lang, label } => {
+                write!(f, "two accepted tuned rows for ({backend}, {lang}, {label})")
             }
         }
     }
@@ -186,14 +205,73 @@ impl InstructTable {
             if t.phrase.trim().is_empty() {
                 return Err(InstructError::Empty { label: t.label.clone(), lang: "tuned" });
             }
-            // An unsigned row is inert. It is still validated, so a malformed proposal
-            // cannot sit in the file unnoticed until the day someone signs it.
+            // Validation applies to EVERY row, signed or not — ADR-0004 §3: an unsigned row
+            // is "present in the file, validated on load, and returned by no lookup". A
+            // malformed proposal must not be able to sit in the file unnoticed until the
+            // day someone signs it, because signing is the moment nobody re-reads the
+            // provenance.
+            let bad = |field, why: &str| {
+                Err(InstructError::InvalidTuned {
+                    label: t.label.clone(),
+                    field,
+                    why: why.to_string(),
+                })
+            };
+
+            // The CLAUDE.md hard invariant. A tuned phrase is machine-generated prose that
+            // reaches a model, and no human reads it between the search and the file, so a
+            // `[` in it is exactly the cue-markup leak the invariant forbids.
+            if let Err(why) = phrase_is_safe(&t.phrase) {
+                return bad("phrase", &why);
+            }
+            // A blank provenance field is a missing one that got past serde.
+            for (field, v) in [
+                ("label", &t.label),
+                ("backend", &t.backend),
+                ("lang", &t.lang),
+                ("measured_on", &t.measured_on),
+                ("incumbent", &t.incumbent),
+                ("judge", &t.judge),
+                ("holdout_id", &t.holdout_id),
+            ] {
+                if v.trim().is_empty() {
+                    return bad(field, "blank");
+                }
+            }
+            // A `lang` outside the closed set is a row no lookup can ever return: the key
+            // is built from `lang_code`, which is total over the two `InstructLang`
+            // variants. Silently inert is the failure mode this validation exists to stop,
+            // so it is an error. `backend` gets no equivalent check on purpose — it is an
+            // OPEN set (a new checkpoint appears before `caps.toml` lists it), so a row
+            // naming an unknown backend is not provably unreachable the way this one is.
+            if !known_lang(&t.lang) {
+                return bad("lang", "not a known instruct language");
+            }
+            // The number that makes the verdict quotable at all (ADR-0004 §1). NaN and
+            // out-of-range are both nonsense, and both would otherwise travel with the row
+            // as though they were measurements.
+            let recall = t.judge_recall_on_class;
+            if !recall.is_finite() || recall < 0.0 || recall > 1.0 {
+                return bad("judge_recall_on_class", "not a recall in [0, 1]");
+            }
+            // ADR-0004 §4(v): the margin is over the re-measured incumbent and "a tie keeps
+            // the incumbent", so a row recording a margin of zero or less records a
+            // candidate that should never have been written down.
+            if !t.margin.is_finite() || t.margin <= 0.0 {
+                return bad("margin", "not a positive margin over the incumbent");
+            }
+
+            // An unsigned row is inert: validated above, and then deliberately dropped.
             match t.accepted_by.as_deref().map(str::trim) {
                 Some(sig) if !sig.is_empty() => {
-                    tuned.insert(
-                        (t.backend.clone(), t.lang.clone(), t.label.clone()),
-                        t.clone(),
-                    );
+                    let key = (t.backend.clone(), t.lang.clone(), t.label.clone());
+                    if tuned.insert(key, t.clone()).is_some() {
+                        return Err(InstructError::DuplicateTuned {
+                            backend: t.backend.clone(),
+                            lang: t.lang.clone(),
+                            label: t.label.clone(),
+                        });
+                    }
                 }
                 _ => {}
             }
@@ -267,6 +345,57 @@ pub fn lang_code(lang: InstructLang) -> &'static str {
         InstructLang::En => "en",
         InstructLang::Zh => "zh",
     }
+}
+
+/// Every `lang` key a lookup can ever produce.
+///
+/// Derived from [`lang_code`] rather than restated as a literal list, so a third language
+/// cannot leave this stale — which would turn a valid row into a load error.
+pub const KNOWN_LANGS: [InstructLang; 2] = [InstructLang::En, InstructLang::Zh];
+
+/// Is this the `lang` key of a language the table can be looked up in?
+///
+/// A `[[tuned]]` row with any other `lang` is unreachable by construction: the lookup key
+/// is built from [`lang_code`], which is total over [`KNOWN_LANGS`].
+pub fn known_lang(code: &str) -> bool {
+    KNOWN_LANGS.iter().any(|l| lang_code(*l) == code)
+}
+
+/// Is this string safe to put in front of a backend as an instruction?
+///
+/// **This is the crate that owns the CLAUDE.md hard invariant**, and an instruct string is
+/// the one piece of cue-derived text that reaches a model as prose rather than being
+/// stripped from it — so a `[` here is precisely the leak the invariant forbids, whether it
+/// came from a hand-authored row or from a tuning search.
+///
+/// The rules are deliberately identical to `syrinx_eval::tune::phrase_is_safe`, which gates
+/// a phrase at *proposal* time; this one gates it at *load* time. Two gates, one rule: the
+/// eval crate is optional and model-gated, so it cannot be the only place the invariant is
+/// enforced, and the two must never diverge. `tests/instruct_tuned_path.rs` asserts they
+/// agree case by case.
+pub fn phrase_is_safe(phrase: &str) -> Result<(), String> {
+    let p = phrase.trim();
+    if p.is_empty() {
+        return Err("empty".into());
+    }
+    if p != phrase {
+        return Err("leading or trailing whitespace".into());
+    }
+    if p.contains('\n') {
+        return Err("multi-line".into());
+    }
+    if p.chars().count() > 120 {
+        return Err(format!("too long ({} chars, limit 120)", p.chars().count()));
+    }
+    for bad in ['[', ']', '<', '>', '|'] {
+        if p.contains(bad) {
+            return Err(format!("contains {bad:?}"));
+        }
+    }
+    if p.contains("endofprompt") {
+        return Err("carries a prompt delimiter".into());
+    }
+    Ok(())
 }
 
 /// The English indefinite article for a word — "a" or "an".
