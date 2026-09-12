@@ -25,13 +25,17 @@ Read from the model card and repository files, not recalled.
 | size | 350M params, **English only** |
 | sample rate | 32 kHz (`sample_rate: 32000`) |
 | voice cloning | zero-shot from a reference clip |
-| watermark | **PerTh, always on** — every generated file is watermarked by the model |
+| watermark | PerTh — but **applied by upstream's Python over the finished waveform, not by the weights**. A Rust port therefore inherits *no* watermark. "Always on" is true of upstream and would silently become false of us; see `docs/LICENSES.md` |
 
 ### The paralinguistic tag set — all 19, enumerated
 
 `CONTROL_SURVEY.md` recorded this as unverifiable upstream ("`[cough]`, `[laugh]`,
 `[chuckle]`, and more"). It is enumerated in `added_tokens.json`, contiguous ids
 50257–50275 immediately after the 50257-entry GPT-2 base vocabulary:
+
+Grouping into emotion/style/event below is **ours, editorial** — `added_tokens.json` carries
+no kind field and the card states no taxonomy. It is weakly corroborated by the events
+occupying a contiguous id block (50267–50275) and by nothing else.
 
 | kind | tags |
 |---|---|
@@ -45,11 +49,37 @@ map a canonical vocab id to the backend's own spelling, exactly as the `fish_s2`
 does. `[whispering]` is not `[whisper]`, `[fear]` is not `[afraid]`, and `[gasp]` is our
 `quick_breath`. A pass-through would ship the wrong token or an unknown one.
 
-### Architecture, from `t3_turbo_v1.yaml`
+### Architecture — CORRECTED 2026-09-12, read from the checkpoint, not the YAML
 
-- **T3** — `llama_config_name: Llama_520M`, 30 layers, 16 heads, 1024 channels. Text tokens
-  (GPT-2 BPE, `text_tokens_dict_size: 50276` = 50257 base + 19 tags) → speech tokens
-  (`speech_tokens_dict_size: 6563`, tortoise-style, start 6561 / stop 6562).
+**The first version of this section was wrong, and wrong in the way it warned against.**
+It said *"T3 — `llama_config_name: Llama_520M`, 30 layers"*, quoting two fields that are
+**dead**: `t3_turbo_v1.yaml` is a training-config superset for several models in Resemble's
+stack, and this document said so two paragraphs earlier before repeating dead keys anyway.
+
+The checkpoint settles it. A `safetensors` file begins with a u64 length and a JSON tensor
+index, so a **29 KB HTTP range request** against the 1.9 GB file reads the complete
+name/shape listing without downloading any weights:
+
+```
+tfmr.h.0 .. tfmr.h.23           -> 24 blocks, not 30
+tfmr.h.0.attn.c_attn.weight     [1024, 3072]   fused QKV, GPT-2 Conv1D layout
+tfmr.wpe.weight                 [8196, 1024]   LEARNED absolute positions
+rotary / RoPE tensors           none
+total                           478.9M params  (= 1.9 GB / 4, i.e. F32)
+```
+
+- **T3 is a 24-block GPT-2**, not a Llama. The live field is `gpt_transformer_type:
+  gpt2-medium`; `llama_config_name` and `n_transformer_layers` are dead. Heads (16) and
+  channels (1024) happen to be right. Text tokens (GPT-2 BPE, `text_tokens_dict_size:
+  50276` = 50257 base + 19 tags) → speech tokens (`speech_tokens_dict_size: 6563`,
+  tortoise-style, start 6561 / stop 6562).
+- **"350M params" is not what ships.** T3 alone is 478.9M; s3gen 264.0M, meanflow 266.1M,
+  ve 1.4M. The card's figure is unreconciled and this document no longer repeats it as fact.
+- **Two unrelated speaker encoders**, not one: `ve.safetensors` (a 1.4M-param 3-layer LSTM,
+  40 mel bins in, 256 out, feeding T3's `cond_enc.spkr_enc`) and s3gen's own
+  `speaker_encoder.*` (937 tensors, CAMPPlus-shaped). A port assuming a single path is
+  wrong before it starts. `ve_hidden_size: 768` is another dead field.
+- `s3gen_meanflow` differs from `s3gen` by exactly **two** tensors.
 - **s3gen** — speech tokens → mel → waveform. **Distilled to a single step**
   (`s3gen_meanflow.safetensors`), down from 10.
 - **ve** — voice encoder, 5.7 MB, `speaker_embed_size: 256`.
@@ -63,7 +93,7 @@ already has ports of that lineage:
 
 | Chatterbox component | in-tree precedent |
 |---|---|
-| T3 (Llama-family transformer, RoPE, KV cache) | `syrinx-qwen`'s talker — same family, same problems solved |
+| T3 (**GPT-2**: learned positions, LayerNorm, GELU, Conv1D weights) | **weaker than first claimed.** `syrinx-qwen`'s talker is RoPE + RMSNorm + SwiGLU; almost none of that transfers. GPT-2 is the *simpler* shape, so this is still tractable — but as new work, not reuse. The Conv1D `[in, out]` layout is the transpose of what candle's `Linear` wants |
 | s3gen (flow-matching token→mel) | `syrinx-acoustic` — built for CosyVoice2/3 |
 | HiFT-style vocoder | `syrinx-vocoder` — same |
 | voice encoder | `syrinx-speaker` |
