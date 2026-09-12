@@ -77,3 +77,23 @@ Each produced a plausible wrong answer, and none was visible from a green suite:
 1.7B was never freed; and A/A was counted per case rather than per text, manufacturing a
 `CalibrationFailed` from one measurement counted twice. The first of those, once fixed,
 immediately exposed a real defect in `syrinx-cue` — trailing cues silently inert (ADR-0005).
+
+## Follow-up, 2026-09-11: the hypothesis above was tested and mostly does not hold
+
+The "different directions" reading was taken seriously and checked adversarially. Result, in
+full, in the **PROPOSED, unaccepted amendment** at the end of `adr/0003-cue-activation-qwen.md`:
+
+- **Survives:** cue and sham do not move the audio the *same* way — collinear displacements
+  cannot produce this pattern.
+- **Fails:** the specific claim that they move in *different* (opposed) directions. The one
+  run with recorded effect sizes (`renders/2026-09-06-instruct-lang/`) gives all six
+  cue/sham displacement cosines **positive** (mean +0.41, angles 30°–77°). They are oblique,
+  not opposed — and in 11 dimensions oblique is what any two arbitrary perturbations are.
+- **Fatal to the proposed criterion:** two *delivery-neutral* shams, orthogonal, with no
+  content at all, reproduce the signature in full. `cue vs sham` alone has no null.
+- **And this run is one observation, not three.** The sham and plain arms are per carrier
+  text: the three `mid` cases share ONE sham render set, `calm-mid` shares it and does not
+  clear, and `whisper-leading` runs the other way.
+
+Recommendation recorded there: keep the conjunction; add a `sham2` arm (~3.5 min of GPU) and
+persist `ArmContrast::effect`, which this run computed and then discarded.
