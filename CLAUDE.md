@@ -127,6 +127,7 @@ versioned interfaces (never reach into another crate's internals):
 | `syrinx-cue` | **the sole owner of expressive-cue syntax**: bracket cues, SSML subset, the `CueDoc` IR, the label vocabulary, backend `ControlCaps`, and every lowering pass |
 | `syrinx-qwen` | **the TTS path** — Qwen3-TTS port: talker, predictor, Mimi codec, generation loop |
 | `syrinx-fish` | Fish Audio port (s1-mini, s2-pro) — **deprecated, research-licence only** |
+| `syrinx-chatterbox` | Chatterbox Turbo port — **candidate second family, NOT adopted**; Phase 0 only (see below) |
 | `syrinx-stt` | Whisper ASR — the native WER oracle used to score renders |
 | `syrinx-lm` | AR semantic LM forward pass + paralinguistic tokens |
 | `syrinx-speaker` | speaker encoder, embedding store, blend/morph, attributes |
@@ -137,7 +138,11 @@ versioned interfaces (never reach into another crate's internals):
 | `syrinx-eval` | MOS/SIM-o/WER/latency harness, frozen-eval-set runner |
 | `syrinx-cli` | local runner / dev harness |
 
-That is the whole workspace — **13 crates**. `syrinx-core` (tensor glue, weight loading,
+That is the whole workspace — **13 crates that ship, plus `syrinx-chatterbox`**, which is
+listed so nobody mistakes it for an adopted path: it is a candidate second family under
+evaluation, Qwen remains the TTS path and the fallback, and only its Phase 0 (documents,
+licence records, config/tokenizer parsing — no weights, no GPU) is in scope. Adoption is a
+human decision under ADR-0001 §7 and has not been made. `syrinx-core` (tensor glue, weight loading,
 device management) and `syrinx-stream` (packet streaming, ring buffer, `cpal`) were deleted
 in `d09b11e`: each backend port turned out to need its own weight loading and device
 handling rather than a shared layer, so the responsibility moved into `syrinx-qwen` and
@@ -231,9 +236,17 @@ engineering changes that, and it had gone unrecorded while the effort went into 
 - **`syrinx-stt` (Whisper, Apache-2.0) stays active** as the native WER oracle — now scoring
   Qwen renders. `syrinx-eval`'s Qwen path uses it directly, with no Python at inference.
 - **Any new backend is a licence question first.** Add its row to `docs/LICENSES.md` before
-  building on it. `ResembleAI/chatterbox` (**MIT**, 23 languages, voice cloning) is the
-  leading candidate for a second family precisely because its licence is clean; it is a
-  candidate, not an adopted path.
+  building on it. Resemble AI's **Chatterbox** (**MIT**, verified from both cards'
+  `license: mit` front matter on 2026-09-12) is the leading candidate for a second family
+  precisely because its licence is clean; **it is a candidate, not an adopted path**, and
+  `syrinx-chatterbox` existing does not change that. Read `docs/LICENSES.md` before
+  quoting it: it is **two checkpoints, not one**, and they trade off — `chatterbox-turbo`
+  is 350M, **English only**, with a closed set of **19 native paralinguistic tags**
+  (enumerated in `docs/backends/CONTROL_SURVEY.md` §2), while `ResembleAI/chatterbox` is
+  500M across 23 languages with **no tag channel at all**. Tags and languages cannot be
+  had from one model. Both watermark every generated file with Resemble AI's PerTh —
+  applied by upstream's Python, not by the weights, so a port inherits nothing and owes a
+  decision. Scope and phasing: `docs/backends/CHATTERBOX_PORT_SCOPE.md`.
 
 ## Working in a git worktree (the default for any change)
 

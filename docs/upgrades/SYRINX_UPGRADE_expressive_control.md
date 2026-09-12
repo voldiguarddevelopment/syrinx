@@ -1080,3 +1080,65 @@ it is a lie.
 `crates/syrinx-cue/instruct.toml` still has **zero** `[[tuned]]` rows and a frozen test
 asserts the shipped file contains no `accepted_by` at all. Signing a real tuned phrase
 remains a human act.
+
+### A38 — 2026-09-12 — **Chatterbox Turbo's tag set is resolved from upstream; a licence row and a candidate crate, and nothing adopted**
+
+**Numbering, first, because it is not a gap.** A37 is claimed by two unmerged branches with
+different content — `wt/anomalies` (the C4.2′ anomalies) and `wt/holdout` (ADR-0004's four
+holdout options), both dated 2026-09-11, neither on `main`. IDs are immutable, so this
+amendment takes **A38** rather than manufacturing a third collision. Whoever merges those
+two second renumbers *their own* entry; this one does not move.
+
+**What was resolved.** `CONTROL_SURVEY.md` recorded the complete Chatterbox Turbo tag set as
+**unverifiable upstream** on 2026-09-03 — `[cough]`, `[laugh]`, `[chuckle]`, "and more". That
+was correct *about the card*, which still says "and more", and wrong about the checkpoint.
+The set is **19 tags**, enumerated with ids in `added_tokens.json`, contiguous at
+**50257–50275**, immediately after the 50257-entry GPT-2 base vocabulary — and
+`t3_turbo_v1.yaml`'s `text_tokens_dict_size: 50276` corroborates the count independently
+(50257 + 19). Read from the four metadata files now on this box at
+`/data/models/chatterbox-turbo`; the ~4 GB of weights are **not** downloaded and nothing
+here needed them.
+
+    [advertisement] [angry] [chuckle] [clear throat] [cough] [crying] [dramatic] [fear]
+    [gasp] [groan] [happy] [laugh] [narration] [sarcastic] [shush] [sigh] [sniff]
+    [surprised] [whispering]
+
+The hedge is removed and **replaced by a record of how it was resolved**, so a reader can
+still tell "we checked" from "we assumed" — which is the whole value of having written the
+hedge down. Three further corrections to that survey's own rows came out of the same pass:
+"Nano" was never on the card and has been dropped rather than kept as folklore;
+`ResembleAI/chatterbox` is a repo holding several checkpoints, not one "base multilingual"
+model; and Turbo's "350M" is the card's figure, unreconciled with `Llama_520M` in the
+shipped config and a 1.92 GB T3 weight file, recorded as unreconciled rather than smoothed
+over. The emotion/style/event grouping in `CHATTERBOX_PORT_SCOPE.md` is **ours** — upstream
+ships no kind field — and is now labelled as such.
+
+**Why it matters here, and the limit of that.** A34 measured that Qwen's instruct channel
+cannot produce a laugh: 144 renders, n=8, four phrasings, no duration change anywhere, and
+the sham moved the audio *more* than every laugh instruction on two of three sentences. The
+conclusion — `[laughs]` is unreachable on the shipping path, so dropping it is correct — was
+recorded with one caveat: *"a backend with a real event channel would answer differently by
+construction."* Nine of Turbo's 19 tags are event tags with their own embeddings, which is
+that channel, so the caveat now names a specific checkpoint instead of a hypothetical. **It
+does not weaken A34 and does not predict the answer.** A34 is a measurement about Qwen and
+it stands unchanged; whether `[laugh]` on Turbo actually produces a laugh is the same
+experiment run again on a different backend, and it has not been run.
+
+**A licence row exists now, because the rule says it must exist first.** `docs/LICENSES.md`
+records both checkpoints separately: `chatterbox-turbo` (English only, 19 tags) and
+`ResembleAI/chatterbox` (23 languages, no tag channel) — MIT, verified from each card's
+`license: mit` front matter, not recalled. **Tags and languages cannot be had from one
+model**, which is a capability fork no licence can fix. Two things were flagged for a human
+rather than settled: **neither HF weight repo ships a LICENSE file** (the grant is the
+front-matter tag alone, thinner evidence than the licence *file* we treated as binding for
+Fish), and **PerTh watermarking** — always on upstream, applied by MIT-licensed
+`resemble-ai/perth` **in the Python, not by the weights**, so a Rust port inherits nothing
+and `syrinx-serve`'s own watermarking obligation becomes a decision instead of a default.
+
+**Status: nothing is adopted.** Qwen3-TTS remains the TTS path and the fallback. `CLAUDE.md`
+gains a `syrinx-chatterbox` row marked *candidate second family, NOT adopted*, and its
+"candidate, not an adopted path" wording is corrected on the facts but **not upgraded** —
+the crate existing is not an adoption. Phase 0 is documents, licence records, and
+config/tokenizer parsing against files that download without the weights: model-free,
+GPU-free, frozen-test gateable. Phases 1 and 2 need weights and a GPU and are not started.
+Adoption is a human act under ADR-0001 §7 and this amendment does not perform it.
