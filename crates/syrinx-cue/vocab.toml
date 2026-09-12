@@ -15,9 +15,57 @@
 #     fish_s2   native `[tag]` spelling (open vocabulary, so always expressible)
 #     cosyvoice native inline token, or omitted (instruct-only)
 #     step_audio native `[tag]`, or omitted
+#     chatterbox_turbo native `[tag]` INCLUDING the brackets, or omitted
 #
 # `fish_s2` is always present because S2's vocabulary is open ("15,000+ unique tags");
 # absence elsewhere is meaningful and drives Dropped/Hoisted outcomes in the report.
+#
+# ---------------------------------------------------------------- chatterbox_turbo
+#
+# Source: the checkpoint's own `added_tokens.json`, enumerated in
+# docs/backends/CHATTERBOX_PORT_SCOPE.md (2026-09-12) — nineteen contiguous ids
+# 50257-50275, immediately after the 50257-entry GPT-2 base vocabulary, and
+# `t3_turbo_v1.yaml`'s `text_tokens_dict_size: 50276` = 50257 + 19 confirms the count.
+# The set is CLOSED and complete: CONTROL_SURVEY.md's "and more" is now resolved.
+# Spellings are stored WITH their brackets because `[tag]` is literally the native
+# surface form (as for `cosyvoice`), and because storing them bracketed makes
+# `tests/chatterbox_cue.rs`'s "every spelling is one of the nineteen" check exact.
+#
+# **Chatterbox Turbo is an UNADOPTED candidate** (CLAUDE.md: Qwen3-TTS is the TTS path).
+# No weights are on this box and nothing here has been heard. This column records what
+# the token table says, so the question can be asked; it adopts nothing.
+#
+# Only genuinely unambiguous mappings are recorded. Four are spelling traps, all noted
+# in the scope doc and all mapped by MEANING, never by spelling:
+#   [whispering] -> our `whisper`      (their spelling is our synonym, not our id)
+#   [fear]       -> our `afraid`
+#   [gasp]       -> our `quick_breath` (their spelling is our synonym)
+#   [narration]  -> our `narrator`
+# One more is not in the scope doc's trap list but behaves the same way:
+#   [crying]     -> our `sob`          (their spelling is our synonym; upstream files it
+#                                       under *emotion* while our taxonomy calls it an
+#                                       event. The label reaches the model bracketed and
+#                                       inline either way, so the kind disagreement does
+#                                       not leak — but it is a real disagreement.)
+#
+# FIVE of their nineteen have no counterpart here and are deliberately left unmapped:
+#   [dramatic]      no canonical style for it (our nearest, `authoritative`, is not it)
+#   [advertisement] no canonical style; `broadcast` is news/anchor, not advertising
+#   [sniff]         no canonical event
+#   [shush]         no canonical event
+#   [clear throat]  our vocabulary MERGES throat-clearing into `cough` (it is one of
+#                   `cough`'s synonyms, and `fish_s2 = "clearing throat"`), so we cannot
+#                   address their two distinct tokens separately. `cough` maps to
+#                   `[cough]` on the id match; an author who writes `[clearing throat]`
+#                   resolves to `cough` and therefore gets `[cough]`. Splitting `cough`
+#                   into two canonical entries would change every other backend column
+#                   and belongs in its own task, not in a spelling column.
+#
+# Notable in the other direction: they have NO `sad` and no `excited`. `sad` is left
+# unmapped rather than bent onto `[crying]` — crying is not sadness — and `excited` is
+# left unmapped rather than collapsed onto `[happy]`, which would silently discard the
+# arousal difference the vocabulary exists to carry. Absence is the honest answer and
+# the report will say `Unmapped`.
 
 # ---------------------------------------------------------------- emotions (valenced)
 [[emotion]]
@@ -28,6 +76,7 @@ synonyms = ["happy", "joyful", "delighted", "cheerful", "glad", "delight"]
 fish_s1 = "delighted"
 fish_s2 = "happy"
 step_audio = "happy"
+chatterbox_turbo = "[happy]"
 
 [[emotion]]
 id = "excited"
@@ -55,6 +104,7 @@ synonyms = ["angry", "furious", "mad", "irate", "enraged"]
 fish_s1 = "angry"
 fish_s2 = "angry"
 step_audio = "angry"
+chatterbox_turbo = "[angry]"
 
 [[emotion]]
 id = "afraid"
@@ -64,6 +114,7 @@ synonyms = ["afraid", "scared", "fearful", "frightened", "terrified"]
 fish_s1 = "scared"
 fish_s2 = "scared"
 step_audio = "fear"
+chatterbox_turbo = "[fear]"
 
 [[emotion]]
 id = "surprised"
@@ -73,6 +124,7 @@ synonyms = ["surprised", "astonished", "amazed", "shocked", "startled"]
 fish_s1 = "surprised"
 fish_s2 = "surprised"
 step_audio = "surprised"
+chatterbox_turbo = "[surprised]"
 
 [[emotion]]
 id = "anxious"
@@ -148,6 +200,7 @@ valence = 0.35
 synonyms = ["sarcastic", "sardonic", "snarky", "sneering", "ironic"]
 fish_s1 = "sarcastic"
 fish_s2 = "sarcastic"
+chatterbox_turbo = "[sarcastic]"
 
 [[emotion]]
 id = "impatient"
@@ -239,6 +292,7 @@ synonyms = ["whisper", "whispering", "whispered", "hushed", "in a small voice"]
 fish_s1 = "whispering"
 fish_s2 = "whisper"
 step_audio = "whisper"
+chatterbox_turbo = "[whispering]"
 
 [[style]]
 id = "shout"
@@ -273,6 +327,7 @@ id = "narrator"
 arousal = 0.40
 synonyms = ["narrator", "narration", "storytelling", "audiobook"]
 fish_s2 = "narrator"
+chatterbox_turbo = "[narration]"
 
 [[style]]
 id = "singing"
@@ -331,6 +386,7 @@ fish_s1 = "laughing"
 fish_s2 = "laughing"
 cosyvoice = "[laughter]"
 step_audio = "laugh"
+chatterbox_turbo = "[laugh]"
 
 [[event]]
 id = "chuckle"
@@ -338,6 +394,7 @@ arousal = 0.60
 synonyms = ["chuckle", "chuckles", "chuckling", "giggle"]
 fish_s1 = "chuckling"
 fish_s2 = "chuckle"
+chatterbox_turbo = "[chuckle]"
 
 [[event]]
 id = "sigh"
@@ -346,6 +403,7 @@ synonyms = ["sigh", "sighs", "sighing", "exhale"]
 fish_s1 = "sighing"
 fish_s2 = "sigh"
 step_audio = "sigh"
+chatterbox_turbo = "[sigh]"
 
 [[event]]
 id = "breath"
@@ -361,6 +419,7 @@ arousal = 0.60
 synonyms = ["quick breath", "gasp", "sharp breath"]
 fish_s2 = "gasp"
 cosyvoice = "[quick_breath]"
+chatterbox_turbo = "[gasp]"
 
 [[event]]
 id = "cough"
@@ -369,6 +428,7 @@ synonyms = ["cough", "coughs", "coughing", "clearing throat"]
 fish_s2 = "clearing throat"
 cosyvoice = "[cough]"
 step_audio = "cough"
+chatterbox_turbo = "[cough]"
 
 [[event]]
 id = "sob"
@@ -376,6 +436,7 @@ arousal = 0.75
 synonyms = ["sob", "sobbing", "crying", "crying loudly", "weeping"]
 fish_s1 = "sobbing"
 fish_s2 = "sobbing"
+chatterbox_turbo = "[crying]"
 
 [[event]]
 id = "pant"
@@ -390,6 +451,7 @@ arousal = 0.55
 synonyms = ["groan", "groaning", "moan", "moaning"]
 fish_s1 = "groaning"
 fish_s2 = "moaning"
+chatterbox_turbo = "[groan]"
 
 [[event]]
 id = "tsk"

@@ -174,3 +174,27 @@ pause = "unsupported"
 speaker_turn = "unsupported"
 source = "tokenizer.py; in-tree crates/syrinx-serve/src/synth_cv3; CONTROL_SURVEY.md §1"
 notes = "Same inline set as CV2. <|endofprompt|> is required for all CV3 inference."
+
+# ------------------------------------------------------------------ Chatterbox (candidate)
+
+# UNADOPTED. Qwen3-TTS is the TTS path (CLAUDE.md); this row exists so the cue layer can
+# describe a backend with a genuine event channel, which is the one thing the shipping path
+# provably lacks (renders/2026-09-08-event-induction/). Nothing here has been heard: no
+# Chatterbox weights are on this box.
+
+[[backend]]
+id = "chatterbox-turbo"
+krate = "syrinx-chatterbox"
+model = "chatterbox-turbo (t3_turbo_v1)"
+inline = "closed"
+granularity = "word"
+instruct = "unsupported"
+emotion = "honored"
+style = "honored"
+event = "honored"
+prosody = "unsupported"
+emphasis = "unsupported"
+pause = "unsupported"
+speaker_turn = "unsupported"
+source = "added_tokens.json: nineteen paralinguistic tags at contiguous ids 50257-50275, immediately after the 50257-entry GPT-2 base vocabulary; corroborated by t3_turbo_v1.yaml `text_tokens_dict_size: 50276` (= 50257 + 19). Enumerated in docs/backends/CHATTERBOX_PORT_SCOPE.md (2026-09-12)."
+notes = "UNADOPTED CANDIDATE — no weights on this box, nothing measured by ear. MIT, 350M, English only, 32 kHz, always-on PerTh watermark. `inline = closed` because the native surface form is literally `[tag]` in the text stream but the vocabulary is a FIXED nineteen tokens: anything outside the set would be BPE'd into ordinary words and SPOKEN, so it must be mapped or dropped, never passed through. `granularity = word` follows: the tags are text tokens interleaved with the text, so control changes mid-utterance and pass_hoist must NOT split. No natural-language instruction channel exists, hence `instruct = unsupported`, and therefore `Free` cues are inexpressible here by construction. emotion/style/event are `honored` on the same reading the qwen3-1.7b-customvoice row records: the channel demonstrably EXISTS and reaches the model (the tags are trained embedding entries, not an API that swallows a string). That is a stronger structural claim than Qwen's, and it is still not a perceptual one — whether `[laugh]` produces a laugh is Phase 2 of the scope doc and is exactly the unanswered question that motivated the port. Demoting to `accepted` would be a different lie: `Accepted` lowers identically to `Unsupported` (caps.rs), so it would switch the cue layer off for the one backend that has the channel, and make the experiment unrunnable through this crate. Six emotion tags, four style, nine event; five of the nineteen have no canonical counterpart — see the chatterbox_turbo note in vocab.toml."

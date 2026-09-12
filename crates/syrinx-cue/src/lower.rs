@@ -185,6 +185,7 @@ fn native_spelling(caps: &ControlCaps, vocab: &Vocab, id: &str) -> Option<String
         "syrinx-fish" if caps.id == "fish-s1-mini" => e.fish_s1.clone(),
         "syrinx-fish" => e.fish_s2.clone(),
         "syrinx-serve" => e.cosyvoice.clone(),
+        "syrinx-chatterbox" => e.chatterbox_turbo.clone(),
         _ => None,
     }
 }
