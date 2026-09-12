@@ -976,7 +976,9 @@ sentences**, so a challenger must clear sentences the incumbent cannot. Defensib
 working where the incumbent fails is what tuning should reward) but undecided — a threshold
 question on `min_sentences`, not a bug.
 
-### A37 — 2026-09-11 — **the holdout question gets four named options (ADR-0004 PROPOSED); and the tuned-row path turned out to be wired to nothing**
+### A37b — 2026-09-11 — **the holdout question gets four named options (ADR-0004 PROPOSED); and the tuned-row path turned out to be wired to nothing**
+
+*(Numbered **A37b**, not A37. Two agents working in parallel worktrees allocated A37 on the same day; the earlier-committed one kept the plain number. CLAUDE.md's rule is that IDs are immutable and splits add suffixes, so a suffix is the convention this file already has for exactly this shape of clash — and it keeps the 2026-09-11 work ahead of A38, which is dated 2026-09-12. Neither entry had reached `main`, so nothing published was renumbered.)*
 
 **The holdout threshold (A36's open item).** `decide_per_sentence` demands `min_sentences`
 on *each* split as an absolute count, so on the 2026-09-09 `[sad]` round a challenger had to
