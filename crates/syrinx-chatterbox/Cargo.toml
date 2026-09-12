@@ -1,0 +1,15 @@
+[package]
+name = "syrinx-chatterbox"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Chatterbox Turbo (ResembleAI) — a CANDIDATE second TTS family, not an adopted path.
+# See src/lib.rs and docs/backends/CHATTERBOX_PORT_SCOPE.md. Phase 0 only: this crate is
+# a pure function of the shipped config files and has NO model code, NO Candle, NO
+# weights and NO GPU path. There is deliberately no `real` feature yet — see lib.rs
+# ("Why there is no `real` feature") for why adding one now would be the exact mistake
+# QWEN_PORT_STATUS.md §5 gap 5 records.
+
+[dependencies]
+serde_json = "1"

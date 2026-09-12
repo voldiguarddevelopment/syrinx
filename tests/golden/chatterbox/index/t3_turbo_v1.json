@@ -1,0 +1,1899 @@
+{
+ "cond_enc.spkr_enc.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "cond_enc.spkr_enc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   256
+  ]
+ },
+ "speech_emb.weight": {
+  "dtype": "F32",
+  "shape": [
+   6563,
+   1024
+  ]
+ },
+ "speech_head.bias": {
+  "dtype": "F32",
+  "shape": [
+   6563
+  ]
+ },
+ "speech_head.weight": {
+  "dtype": "F32",
+  "shape": [
+   6563,
+   1024
+  ]
+ },
+ "text_emb.weight": {
+  "dtype": "F32",
+  "shape": [
+   50276,
+   1024
+  ]
+ },
+ "text_head.weight": {
+  "dtype": "F32",
+  "shape": [
+   50276,
+   1024
+  ]
+ },
+ "tfmr.h.0.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.0.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.0.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.0.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.0.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.0.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.0.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.0.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.0.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.0.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.0.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.0.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.1.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.1.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.1.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.1.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.1.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.1.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.1.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.1.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.1.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.1.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.1.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.1.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.10.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.10.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.10.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.10.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.10.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.10.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.10.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.10.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.10.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.10.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.10.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.10.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.11.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.11.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.11.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.11.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.11.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.11.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.11.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.11.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.11.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.11.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.11.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.11.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.12.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.12.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.12.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.12.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.12.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.12.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.12.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.12.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.12.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.12.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.12.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.12.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.13.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.13.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.13.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.13.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.13.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.13.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.13.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.13.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.13.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.13.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.13.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.13.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.14.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.14.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.14.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.14.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.14.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.14.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.14.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.14.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.14.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.14.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.14.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.14.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.15.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.15.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.15.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.15.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.15.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.15.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.15.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.15.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.15.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.15.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.15.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.15.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.16.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.16.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.16.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.16.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.16.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.16.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.16.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.16.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.16.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.16.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.16.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.16.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.17.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.17.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.17.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.17.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.17.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.17.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.17.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.17.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.17.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.17.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.17.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.17.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.18.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.18.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.18.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.18.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.18.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.18.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.18.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.18.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.18.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.18.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.18.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.18.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.19.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.19.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.19.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.19.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.19.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.19.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.19.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.19.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.19.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.19.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.19.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.19.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.2.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.2.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.2.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.2.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.2.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.2.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.2.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.2.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.2.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.2.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.2.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.2.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.20.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.20.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.20.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.20.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.20.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.20.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.20.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.20.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.20.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.20.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.20.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.20.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.21.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.21.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.21.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.21.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.21.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.21.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.21.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.21.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.21.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.21.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.21.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.21.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.22.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.22.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.22.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.22.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.22.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.22.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.22.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.22.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.22.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.22.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.22.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.22.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.23.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.23.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.23.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.23.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.23.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.23.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.23.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.23.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.23.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.23.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.23.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.23.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.3.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.3.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.3.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.3.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.3.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.3.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.3.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.3.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.3.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.3.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.3.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.3.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.4.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.4.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.4.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.4.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.4.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.4.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.4.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.4.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.4.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.4.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.4.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.4.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.5.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.5.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.5.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.5.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.5.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.5.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.5.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.5.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.5.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.5.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.5.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.5.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.6.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.6.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.6.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.6.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.6.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.6.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.6.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.6.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.6.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.6.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.6.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.6.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.7.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.7.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.7.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.7.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.7.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.7.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.7.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.7.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.7.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.7.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.7.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.7.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.8.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.8.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.8.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.8.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.8.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.8.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.8.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.8.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.8.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.8.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.8.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.8.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.h.9.attn.c_attn.bias": {
+  "dtype": "F32",
+  "shape": [
+   3072
+  ]
+ },
+ "tfmr.h.9.attn.c_attn.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   3072
+  ]
+ },
+ "tfmr.h.9.attn.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.9.attn.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   1024
+  ]
+ },
+ "tfmr.h.9.ln_1.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.9.ln_1.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.9.ln_2.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.9.ln_2.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.9.mlp.c_fc.bias": {
+  "dtype": "F32",
+  "shape": [
+   4096
+  ]
+ },
+ "tfmr.h.9.mlp.c_fc.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024,
+   4096
+  ]
+ },
+ "tfmr.h.9.mlp.c_proj.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.h.9.mlp.c_proj.weight": {
+  "dtype": "F32",
+  "shape": [
+   4096,
+   1024
+  ]
+ },
+ "tfmr.ln_f.bias": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.ln_f.weight": {
+  "dtype": "F32",
+  "shape": [
+   1024
+  ]
+ },
+ "tfmr.wpe.weight": {
+  "dtype": "F32",
+  "shape": [
+   8196,
+   1024
+  ]
+ },
+ "tfmr.wte.weight": {
+  "dtype": "F32",
+  "shape": [
+   50276,
+   1024
+  ]
+ }
+}
